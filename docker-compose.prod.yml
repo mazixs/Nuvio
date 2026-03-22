@@ -1,0 +1,35 @@
+# Production docker-compose: тянет образы из GHCR по версиям
+# Использование:
+#   TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+#   или без TAG — подтянется latest
+
+services:
+  bot:
+    image: ghcr.io/mazixs/nuvio:${TAG:-latest}
+    container_name: nuvio-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      - bot-data:/app/data
+      - ./logs:/app/logs
+      - ./.secrets:/app/.secrets:ro
+    depends_on:
+      - web
+
+  web:
+    image: ghcr.io/mazixs/nuvio:${TAG:-latest}
+    container_name: nuvio-web
+    restart: unless-stopped
+    command: python -m web.app
+    env_file: .env
+    environment:
+      - DATA_DIR=/app/data
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+    volumes:
+      - bot-data:/app/data
+
+volumes:
+  bot-data:

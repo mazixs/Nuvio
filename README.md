@@ -57,10 +57,43 @@ cp .env.example .secrets/.env
 python main.py
 ```
 
-### Docker
+### Docker (локальная сборка)
 
 ```bash
-docker-compose up --build
+docker compose up --build
+```
+
+### Docker (из GHCR по версии)
+
+```bash
+# Скачать конкретную версию
+docker pull ghcr.io/mazixs/nuvio:1.0.0
+
+# Запуск через production compose
+wget https://raw.githubusercontent.com/mazixs/Nuvio/main/docker-compose.prod.yml
+cp .env.example .env  # настроить переменные
+TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+
+# Или latest
+docker compose -f docker-compose.prod.yml up -d
+```
+
+---
+
+## CI/CD
+
+- **CI** — автоматические тесты и линтинг на каждый push/PR в `main`
+- **Релиз** — при пуше тега `v*` автоматически:
+  - Прогоняются тесты
+  - Генерируется changelog из коммитов
+  - Создаётся GitHub Release с инструкцией по установке
+  - Собирается Docker-образ и пушится в GHCR с тегами версий
+
+Создание нового релиза:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 ---
@@ -130,8 +163,10 @@ Nuvio/
 ├── tests/
 ├── docs/
 ├── .secrets/
+├── .github/workflows/       # CI/CD (тесты, линтинг, релиз, GHCR)
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yml       # для локальной разработки
+├── docker-compose.prod.yml  # production — тянет из GHCR
 └── requirements.txt
 ```
 
