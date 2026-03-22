@@ -6,6 +6,8 @@ import hashlib
 import secrets
 from pathlib import Path
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +23,14 @@ from utils.analytics_db import (
 
 WEB_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="Nuvio Analytics")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Nuvio Analytics", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.add_middleware(
     SessionMiddleware,
@@ -43,11 +52,6 @@ def require_auth(request: Request):
     if not _check_auth(request):
         raise HTTPException(status_code=303, headers={"Location": "/login"})
     return True
-
-
-@app.on_event("startup")
-async def startup():
-    init_db()
 
 
 @app.exception_handler(HTTPException)
