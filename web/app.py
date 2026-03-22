@@ -60,6 +60,24 @@ ADMIN_IDS = [
 _login_attempts: dict[str, list[tuple[float, str]]] = defaultdict(list)
 # Множество IP, по которым уже отправлено уведомление (чтобы не спамить)
 _notified_ips: set[str] = set()
+# Лимит отслеживаемых IP (защита от исчерпания памяти при DDoS)
+_MAX_TRACKED_IPS = 10_000
+
+
+def _cleanup_old_ips() -> None:
+    """Удаляет записи с истёкшими попытками, ограничивает общий размер."""
+    now = time.time()
+    expired = [ip for ip, attempts in _login_attempts.items()
+               if all(now - t >= LOGIN_LOCKOUT for t, _ in attempts)]
+    for ip in expired:
+        del _login_attempts[ip]
+        _notified_ips.discard(ip)
+    # Если всё ещё слишком много — удаляем самые старые
+    if len(_login_attempts) > _MAX_TRACKED_IPS:
+        by_oldest = sorted(_login_attempts, key=lambda ip: _login_attempts[ip][0][0])
+        for ip in by_oldest[:len(_login_attempts) - _MAX_TRACKED_IPS]:
+            del _login_attempts[ip]
+            _notified_ips.discard(ip)
 
 
 def _check_rate_limit(ip: str) -> bool:
@@ -68,6 +86,13 @@ def _check_rate_limit(ip: str) -> bool:
     _login_attempts[ip] = [
         (t, u) for t, u in _login_attempts[ip] if now - t < LOGIN_LOCKOUT
     ]
+    if not _login_attempts[ip]:
+        del _login_attempts[ip]
+        _notified_ips.discard(ip)
+        return False
+    # Периодическая чистка
+    if len(_login_attempts) > _MAX_TRACKED_IPS:
+        _cleanup_old_ips()
     return len(_login_attempts[ip]) >= LOGIN_RATE_LIMIT
 
 
