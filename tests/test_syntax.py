@@ -214,7 +214,7 @@ class TestCodeQuality:
         
         if violations:
             pytest.fail(
-                f"Найдены print() в production коде:\n" + "\n".join(violations) +
+                "Найдены print() в production коде:\n" + "\n".join(violations) +
                 "\n\nИспользуйте logger вместо print()"
             )
         

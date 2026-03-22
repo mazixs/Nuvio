@@ -21,13 +21,13 @@ for _dotenv_path in (
     if _dotenv_path.exists():
         load_dotenv(dotenv_path=_dotenv_path, override=False)
 
-from config import TELEGRAM_TOKEN, LOG_LEVEL, validate_config
-from utils.logger import setup_logger
-from utils.temp_file_manager import cleanup_temp_files
-from utils.cache_commands import stats_command, cleanup_cache_command, search_cache_command
-from utils.video_cache import telegram_cache
-from utils.cookie_manager import admin_command, handle_admin_callback, handle_document_upload
-from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version
+from config import TELEGRAM_TOKEN, LOG_LEVEL, validate_config  # noqa: E402
+from utils.logger import setup_logger  # noqa: E402
+from utils.temp_file_manager import cleanup_temp_files  # noqa: E402
+from utils.cache_commands import stats_command, cleanup_cache_command, search_cache_command  # noqa: E402
+from utils.video_cache import telegram_cache  # noqa: E402
+from utils.cookie_manager import admin_command, handle_admin_callback, handle_document_upload  # noqa: E402
+from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version  # noqa: E402
 
 # Настройка логирования
 logger = setup_logger(__name__, level=LOG_LEVEL)

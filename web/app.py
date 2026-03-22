@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.analytics_db import (
     init_db, dashboard_summary, get_all_users, get_user_detail,
-    popular_videos, downloads_per_day, new_users_per_day,
 )
 
 WEB_DIR = Path(__file__).resolve().parent

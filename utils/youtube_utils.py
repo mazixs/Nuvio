@@ -141,7 +141,7 @@ def get_video_info(url: str) -> dict[str, Any]:
             if duration and duration > MAX_VIDEO_DURATION:
                 logger.warning(f"Видео слишком длинное: {duration} секунд")
                 raise Exception(f"Видео слишком длинное. Максимальная длительность: {MAX_VIDEO_DURATION // 60} минут.")
-            logger.info(f"Информация о видео успешно получена.")
+            logger.info("Информация о видео успешно получена.")
             return info
 
     # Cookies-first стратегия: YouTube в 2025-2026 почти всегда требует cookies

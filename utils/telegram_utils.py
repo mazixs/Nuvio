@@ -1261,7 +1261,7 @@ async def _button_callback_legacy_unsafe(update: Update, context: ContextTypes.D
                         tg_video = None
                         
                         # Логируем доступные форматы для отладки
-                        logger.info(f"Доступные combined форматы для tg_video:")
+                        logger.info("Доступные combined форматы для tg_video:")
                         for i, f in enumerate(combined):
                             logger.info(f"  {i}: {f.get('format_id')} - {f.get('height')}p - {f.get('ext')} - размер: {f.get('filesize')} байт")
                         
@@ -1482,7 +1482,7 @@ async def _button_callback_legacy_unsafe(update: Update, context: ContextTypes.D
                             keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
                             await query.edit_message_text(NO_SUBTITLES_AVAILABLE, reply_markup=InlineKeyboardMarkup(keyboard))
                     case "back":
-                        platform = _get_platform(context)
+                        platform = context.user_data.get('platform', 'youtube')
                         video_info = context.user_data['video_info']
                         text, reply_markup = _build_main_menu(platform, video_info)
                         await safe_edit_message_text(
@@ -1587,17 +1587,17 @@ async def _button_callback_legacy_unsafe(update: Update, context: ContextTypes.D
                     "Попробуйте другую ссылку или повторите попытку.",
                     parse_mode=None  # Отключаем Markdown
                 )
-            except:
+            except Exception:
                 await query.edit_message_text(ERROR_FALLBACK)
         elif classified := _classify_youtube_error(error_msg):
             try:
                 await query.edit_message_text(classified, parse_mode='Markdown')
-            except:
+            except Exception:
                 await query.edit_message_text(ERROR_FALLBACK)
         else:
             try:
                 await query.edit_message_text(f"❌ {ERROR_MESSAGE}")
-            except:
+            except Exception:
                 await query.edit_message_text(ERROR_FALLBACK)
         
         await _cleanup_user_session(user_id, context)

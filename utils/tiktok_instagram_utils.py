@@ -2,7 +2,6 @@
 Модуль для работы с TikTok и Instagram с использованием yt-dlp.
 """
 
-import glob as glob_module
 import re
 import time
 from pathlib import Path
