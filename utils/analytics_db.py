@@ -390,7 +390,7 @@ def engagement_per_day(days: int = 30) -> list[dict]:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
     with _cursor() as cur:
         # MAU для каждого дня = уникальные пользователи за 30 дней до этого дня
-        cur.execute(f"""
+        cur.execute("""
             SELECT DATE(ts) as day, COUNT(DISTINCT user_id) as dau
             FROM events
             WHERE ts >= ?
