@@ -29,9 +29,22 @@ WEB_DIR = Path(__file__).resolve().parent
 # ── Безопасность ──────────────────────────────────────────────
 
 MAX_INPUT_LENGTH = 128  # макс. длина логина/пароля
-LOGIN_RATE_LIMIT = 5    # попыток
-LOGIN_RATE_WINDOW = 300  # за 5 минут
-LOGIN_LOCKOUT = 600      # блокировка на 10 минут
+
+
+def _parse_duration(value: str) -> int:
+    """Парсит строку вида '15m', '1h', '300s', '300' → секунды."""
+    value = value.strip().lower()
+    if value.endswith("m"):
+        return int(value[:-1]) * 60
+    if value.endswith("h"):
+        return int(value[:-1]) * 3600
+    if value.endswith("s"):
+        return int(value[:-1])
+    return int(value)
+
+
+LOGIN_RATE_LIMIT = int(os.environ.get("FAIL2BAN_RETRIES", "5"))
+LOGIN_LOCKOUT = _parse_duration(os.environ.get("FAIL2BAN_TIME", "10m"))
 
 # Хранилище неудачных попыток: {ip: [(timestamp, ...), ...]}
 _login_attempts: dict[str, list[float]] = defaultdict(list)
@@ -40,13 +53,9 @@ _login_attempts: dict[str, list[float]] = defaultdict(list)
 def _check_rate_limit(ip: str) -> bool:
     """Возвращает True если IP заблокирован из-за превышения лимита."""
     now = time.time()
-    attempts = _login_attempts[ip]
-    # Удаляем старые попытки
-    _login_attempts[ip] = [t for t in attempts if now - t < LOGIN_LOCKOUT]
-    attempts = _login_attempts[ip]
-    # Проверяем: если за окно RATE_WINDOW было >= RATE_LIMIT попыток
-    recent = [t for t in attempts if now - t < LOGIN_RATE_WINDOW]
-    return len(recent) >= LOGIN_RATE_LIMIT
+    # Удаляем попытки старше окна блокировки
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < LOGIN_LOCKOUT]
+    return len(_login_attempts[ip]) >= LOGIN_RATE_LIMIT
 
 
 def _record_failed_attempt(ip: str) -> None:

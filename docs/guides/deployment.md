@@ -232,6 +232,8 @@ sudo systemctl enable --now nuvio
 | `WEB_PASSWORD` | `changeme` | Пароль для входа (**обязательно сменить!**) |
 | `WEB_PORT` | `8080` | Порт дашборда |
 | `WEB_SECRET_KEY` | авто | Ключ подписи сессий |
+| `FAIL2BAN_RETRIES` | `5` | Попыток логина до блокировки IP |
+| `FAIL2BAN_TIME` | `10m` | Время блокировки (`15m`, `1h`, `300`) |
 
 ### WEB_SECRET_KEY
 
@@ -251,7 +253,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ### Безопасность дашборда
 
 - **SQL-инъекции** — невозможны, все запросы параметризованы
-- **Brute-force** — rate limiting: 5 попыток за 5 минут → блокировка IP на 10 минут
+- **Brute-force** — fail2ban: настраивается через `FAIL2BAN_RETRIES` (попыток) и `FAIL2BAN_TIME` (блокировка). Формат времени: `15m`, `1h`, `300`
 - **Timing-атаки** — `hmac.compare_digest` для сравнения логина/пароля
 - **XSS** — Jinja2 автоэкранирование
 - **Длина ввода** — макс. 128 символов на логин/пароль

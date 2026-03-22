@@ -105,7 +105,9 @@ git push origin v1.0.0
 | `WEB_USERNAME` | нет | `admin` | Логин для WebUI-дашборда |
 | `WEB_PASSWORD` | нет | `changeme` | Пароль для WebUI-дашборда (**сменить!**) |
 | `WEB_SECRET_KEY` | нет | авто | Ключ подписи сессий (см. ниже) |
-| `WEB_PORT` | нет | -- | Порт WebUI-дашборда |
+| `WEB_PORT` | нет | `8080` | Порт WebUI-дашборда |
+| `FAIL2BAN_RETRIES` | нет | `5` | Неудачных попыток логина до блокировки IP |
+| `FAIL2BAN_TIME` | нет | `10m` | Время блокировки IP (`10m`, `1h`, `300`) |
 | `LOG_LEVEL` | нет | `INFO` | Уровень логирования |
 | `DOWNLOAD_WORKERS` | нет | `8` | Количество потоков в ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (секунды) |
@@ -137,7 +139,7 @@ WEB_SECRET_KEY=a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
 
 - **SQL-инъекции** — все запросы к БД используют параметризацию (`?`), данные никогда не подставляются в SQL напрямую
 - **Логин** — сравнение с env-переменными, без обращений к БД. Timing-safe сравнение (`hmac.compare_digest`) защищает от timing-атак
-- **Brute-force** — rate limiting: 5 попыток за 5 минут с одного IP, после чего блокировка на 10 минут
+- **Brute-force** — fail2ban: `FAIL2BAN_RETRIES` попыток (по умолчанию 5) → блокировка IP на `FAIL2BAN_TIME` (по умолчанию 10 минут). Формат времени: `15m`, `1h`, `300`
 - **Длина ввода** — логин и пароль ограничены 128 символами, обрезаются на входе
 - **Сессии** — подписаны HMAC через `SessionMiddleware`, подделка без `WEB_SECRET_KEY` невозможна
 - **Swagger/ReDoc** — отключены (`docs_url=None, redoc_url=None`), API-схема не раскрывается
