@@ -1,6 +1,13 @@
-# Nuvio
+<p align="center">
+  <img src="web/static/logo.svg" alt="Nuvio" width="64" height="64">
+</p>
 
-Telegram-бот для скачивания видео с YouTube, TikTok и Instagram с поддержкой кэширования, аналитики и автоматического обновления yt-dlp.
+<h1 align="center">Nuvio</h1>
+
+<p align="center">
+  Telegram-бот для скачивания видео с YouTube, TikTok и Instagram<br>
+  с поддержкой кэширования, аналитики и автоматического обновления yt-dlp.
+</p>
 
 ---
 
@@ -16,6 +23,12 @@ Telegram-бот для скачивания видео с YouTube, TikTok и Ins
 - Автообновление yt-dlp (rolling-release, nightly channel)
 - Готовность к headless/systemd-развертыванию (`init_env.sh` в качестве `ExecStartPre`)
 - Поддержка Docker
+
+## Скриншот
+
+<p align="center">
+  <img src="scrn_dashboard.png" alt="Dashboard" width="900">
+</p>
 
 ---
 

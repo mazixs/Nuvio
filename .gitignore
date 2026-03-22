@@ -138,6 +138,7 @@ config_prod.py
 *.jpg
 *.jpeg
 *.png
+!scrn_dashboard.png
 *.gif
 *.webp
 
