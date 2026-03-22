@@ -15,20 +15,12 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/app/data
-      # ── Обязательные (задать в .env) ──────────────────
-      # TELEGRAM_TOKEN=
-      # ADMIN_IDS=
-      #
-      # ── WebUI (общие с сервисом web) ──────────────────
-      # WEB_USERNAME=admin
-      # WEB_PASSWORD=changeme       ← СМЕНИТЬ!
-      # WEB_PORT=8080
-      # WEB_SECRET_KEY=
-      #
-      # ── Опциональные ──────────────────────────────────
+      # ── Переменные бота (задать в .env) ───────────────
+      # TELEGRAM_TOKEN=              ← обязательно
+      # ADMIN_IDS=123456789          ← обязательно
+      # LOG_LEVEL=INFO
       # GOKAPI_BASE_URL=
       # GOKAPI_API_KEY=
-      # LOG_LEVEL=INFO
       # YTDLP_AUTO_UPDATE=true
       # YTDLP_RELEASE_CHANNEL=nightly
     volumes:
@@ -46,6 +38,11 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/app/data
+      # ── Переменные дашборда (задать в .env) ───────────
+      # WEB_USERNAME=admin
+      # WEB_PASSWORD=changeme        ← СМЕНИТЬ!
+      # WEB_PORT=8080
+      # WEB_SECRET_KEY=random_string
     ports:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
     volumes:
