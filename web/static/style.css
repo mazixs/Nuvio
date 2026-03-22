@@ -359,7 +359,7 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    overflow-x: auto;
     transition: all var(--transition);
 }
 
@@ -389,20 +389,20 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
 }
 
 .table th {
-    background: rgba(35, 40, 64, 0.5);
+    background: var(--surface);
     color: var(--text-muted);
     text-transform: uppercase;
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 0.08em;
     border-bottom: 1px solid var(--border);
-    position: sticky;
-    top: 60px;
+    white-space: nowrap;
 }
 
 .table td {
     border-bottom: 1px solid rgba(35, 40, 64, 0.5);
     transition: background var(--transition);
+    white-space: nowrap;
 }
 
 .table tbody tr {
@@ -703,6 +703,125 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
     white-space: nowrap;
 }
 
+/* ── Cohort Table ────────────────────────────────────────── */
+
+.cohort-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.cohort-table th, .cohort-table td {
+    padding: 0.5rem 0.6rem;
+    text-align: center;
+    border-bottom: 1px solid rgba(35, 40, 64, 0.5);
+    white-space: nowrap;
+}
+
+.cohort-table th {
+    background: var(--surface);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+.cohort-table td:first-child {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.cohort-cell {
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+/* ── Metric Mini Cards (3-column) ───────────────────────── */
+
+.cards-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+/* ── Platform Conversion Bar ────────────────────────────── */
+
+.conversion-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.conversion-bar .bar-label {
+    width: 80px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: right;
+}
+
+.conversion-bar .bar-track {
+    flex: 1;
+    height: 24px;
+    background: rgba(35, 40, 64, 0.5);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.conversion-bar .bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding: 0 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #fff;
+    min-width: fit-content;
+    transition: width 0.8s ease-out;
+}
+
+.conversion-bar .bar-stats {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    width: 100px;
+}
+
+/* ── User Detail Stats ──────────────────────────────────── */
+
+.user-stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.user-stat {
+    text-align: center;
+    padding: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.user-stat .stat-value {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--primary-light);
+}
+
+.user-stat .stat-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 0.25rem;
+}
+
 /* ── Responsive ──────────────────────────────────────────── */
 
 @media (max-width: 1024px) {
@@ -714,6 +833,7 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
 @media (max-width: 768px) {
     .container { padding: 1rem; }
     .cards-grid { grid-template-columns: repeat(2, 1fr); }
+    .cards-grid-3 { grid-template-columns: repeat(2, 1fr); }
     .card-value { font-size: 1.5rem; }
     .navbar { padding: 0 1rem; }
     .nav-links { gap: 0.125rem; }

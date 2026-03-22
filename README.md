@@ -24,10 +24,12 @@
 - Готовность к headless/systemd-развертыванию (`init_env.sh` в качестве `ExecStartPre`)
 - Поддержка Docker
 
-## Скриншот
+## Скриншоты
 
 <p align="center">
-  <img src="scrn_dashboard.png" alt="Dashboard" width="900">
+  <img src="docs/screenshots/dashboard-kpi_gh.png" alt="Dashboard KPI" width="900">
+  <br><br>
+  <img src="docs/screenshots/dashboard-charts_gh.png" alt="Dashboard Charts" width="900">
 </p>
 
 ---

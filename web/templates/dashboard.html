@@ -76,6 +76,27 @@
     </div>
 </div>
 
+<!-- Product Metrics -->
+<div class="stats-divider">
+    <span class="label">Продуктовые метрики</span>
+    <div class="line"></div>
+</div>
+
+<div class="cards-grid-3">
+    <div class="card animate-in">
+        <div class="card-label">Среднее скачиваний / юзер</div>
+        <div class="card-value">{{ avg_downloads }}</div>
+    </div>
+    <div class="card accent animate-in">
+        <div class="card-label">Повторные пользователи</div>
+        <div class="card-value">{{ repeat_rate }}%</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Вовлечённость (DAU/MAU)</div>
+        <div class="card-value">{{ engagement }}%</div>
+    </div>
+</div>
+
 <!-- Charts -->
 <div class="stats-divider">
     <span class="label">Аналитика</span>
@@ -93,11 +114,76 @@
     </div>
 </div>
 
-<div class="charts-grid split">
-    <div class="chart-box chart-small animate-in">
-        <h3><span class="dot dot-warn"></span> Трафик по платформам</h3>
-        <canvas id="platformChart"></canvas>
+<div class="charts-grid">
+    <div class="chart-box animate-in">
+        <h3><span class="dot dot-primary"></span> Вовлечённость (DAU/MAU) по дням</h3>
+        <canvas id="engagementChart"></canvas>
     </div>
+    <div class="chart-box animate-in">
+        <h3><span class="dot dot-warn"></span> Использование платформ</h3>
+        <canvas id="platformChart" style="margin-bottom: 1.25rem;"></canvas>
+        {% if platform_conversion %}
+        <div style="border-top: 1px solid var(--border); padding-top: 1.25rem;">
+            <h3 style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">ОХВАТ ПОЛЬЗОВАТЕЛЕЙ</h3>
+            {% for platform, stats in platform_conversion.items() %}
+            <div class="conversion-bar">
+                <div class="bar-label">{{ platform }}</div>
+                <div class="bar-track">
+                    <div class="bar-fill" style="width: {{ stats.pct_users }}%; background: {{ 'var(--youtube)' if platform == 'youtube' else ('var(--tiktok)' if platform == 'tiktok' else ('var(--instagram)' if platform == 'instagram' else 'var(--primary)')) }};">
+                        {{ stats.pct_users }}%
+                    </div>
+                </div>
+                <div class="bar-stats">{{ stats.users }} из {{ total_users }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Cohort Retention -->
+{% if cohorts %}
+<div class="stats-divider">
+    <span class="label">Когортный анализ (удержание по неделям)</span>
+    <div class="line"></div>
+</div>
+
+<div class="table-wrapper animate-in" style="margin-bottom: 2rem;">
+    <div class="table-header">
+        <h3>Когорта &rarr; Неделя возврата</h3>
+    </div>
+    <table class="cohort-table">
+        <thead>
+            <tr>
+                <th>Когорта</th>
+                <th>Размер</th>
+                {% for i in range(9) %}
+                <th>W{{ i }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in cohorts %}
+            <tr>
+                <td>{{ c.cohort_week }}</td>
+                <td>{{ c.cohort_size }}</td>
+                {% for i in range(9) %}
+                {% set val = c.get('w' ~ i, '') %}
+                {% if val != '' %}
+                <td class="cohort-cell" style="background: rgba(16, 185, 129, {{ val / 100 * 0.6 }});">{{ val }}%</td>
+                {% else %}
+                <td class="cohort-cell" style="color: var(--text-muted);">—</td>
+                {% endif %}
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- Popular Videos -->
+<div class="section">
     <div class="table-wrapper animate-in">
         <div class="table-header">
             <h3>Популярные видео (Топ 10)</h3>
@@ -140,6 +226,7 @@ Chart.defaults.font.family = chartDefaults.font.family;
 const dlData = {{ downloads_per_day | tojson }};
 const nuData = {{ new_users_per_day | tojson }};
 const platData = {{ downloads_by_platform | tojson }};
+const engData = {{ engagement_per_day | tojson }};
 
 new Chart(document.getElementById('downloadsChart'), {
     type: 'bar',
@@ -190,6 +277,54 @@ new Chart(document.getElementById('newUsersChart'), {
         scales: {
             x: { grid: { color: '#1a1e2e' }, ticks: { maxRotation: 45, font: { size: 11 } } },
             y: { grid: { color: '#1a1e2e' }, beginAtZero: true }
+        }
+    }
+});
+
+new Chart(document.getElementById('engagementChart'), {
+    type: 'line',
+    data: {
+        labels: engData.map(d => d.day),
+        datasets: [
+            {
+                label: 'DAU',
+                data: engData.map(d => d.dau),
+                borderColor: '#6366f1',
+                backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                fill: true,
+                tension: 0.4,
+                pointRadius: 2,
+                pointHoverRadius: 5,
+                yAxisID: 'y'
+            },
+            {
+                label: 'Stickiness %',
+                data: engData.map(d => d.stickiness),
+                borderColor: '#f59e0b',
+                backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                fill: false,
+                tension: 0.4,
+                pointRadius: 2,
+                pointHoverRadius: 5,
+                borderDash: [5, 3],
+                yAxisID: 'y1'
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        animation: { duration: 1200, easing: 'easeOutQuart' },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+            legend: {
+                position: 'bottom',
+                labels: { padding: 12, usePointStyle: true, pointStyle: 'circle', font: { size: 11 } }
+            }
+        },
+        scales: {
+            x: { grid: { color: '#1a1e2e' }, ticks: { maxRotation: 45, font: { size: 11 } } },
+            y: { grid: { color: '#1a1e2e' }, beginAtZero: true, title: { display: true, text: 'DAU', color: '#6366f1' } },
+            y1: { grid: { display: false }, position: 'right', beginAtZero: true, max: 100, title: { display: true, text: '%', color: '#f59e0b' } }
         }
     }
 });

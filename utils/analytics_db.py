@@ -308,6 +308,134 @@ def get_user_detail(user_id: int) -> dict | None:
         return user
 
 
+def avg_downloads_per_user() -> float:
+    """Среднее количество скачиваний на пользователя."""
+    with _cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        if total == 0:
+            return 0.0
+        cur.execute("SELECT COUNT(*) FROM events WHERE event = 'download'")
+        dl = cur.fetchone()[0]
+        return round(dl / total, 1)
+
+
+def repeat_users_rate() -> float:
+    """% пользователей с более чем 1 скачиванием."""
+    with _cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        if total == 0:
+            return 0.0
+        cur.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT user_id FROM events WHERE event = 'download'
+                GROUP BY user_id HAVING COUNT(*) > 1
+            )
+        """)
+        repeat = cur.fetchone()[0]
+        return round(repeat / total * 100, 1)
+
+
+def engagement_score() -> float:
+    """Индекс вовлечённости: DAU/MAU * 100 (stickiness ratio)."""
+    dau = active_users(1)
+    mau = active_users(30)
+    if mau == 0:
+        return 0.0
+    return round(dau / mau * 100, 1)
+
+
+def cohort_retention(weeks: int = 8) -> list[dict]:
+    """Когортный анализ удержания по неделям регистрации.
+
+    Возвращает список: [{week: "2026-W10", size: 15, w0: 100, w1: 60, w2: 40, ...}, ...]
+    """
+    with _cursor() as cur:
+        # Получаем когорты (неделя регистрации)
+        cur.execute(f"""
+            SELECT strftime('%Y-W%W', first_seen) as cohort_week,
+                   COUNT(*) as cohort_size
+            FROM users
+            WHERE first_seen >= DATE('now', '-{weeks * 7} days')
+            GROUP BY cohort_week
+            ORDER BY cohort_week
+        """)
+        cohorts = [dict(row) for row in cur.fetchall()]
+
+        for cohort in cohorts:
+            week = cohort["cohort_week"]
+            size = cohort["cohort_size"]
+            cohort["w0"] = 100.0  # неделя регистрации — всегда 100%
+
+            for w in range(1, weeks + 1):
+                cur.execute("""
+                    SELECT COUNT(DISTINCT e.user_id)
+                    FROM events e
+                    JOIN users u ON u.user_id = e.user_id
+                    WHERE strftime('%Y-W%%W', u.first_seen) = ?
+                      AND CAST((julianday(e.ts) - julianday(u.first_seen)) / 7 AS INTEGER) = ?
+                """, (week, w))
+                returned = cur.fetchone()[0]
+                cohort[f"w{w}"] = round(returned / size * 100, 1) if size > 0 else 0.0
+
+        return cohorts
+
+
+def engagement_per_day(days: int = 30) -> list[dict]:
+    """DAU/MAU (stickiness) по дням за период.
+
+    Возвращает: [{day: "2026-03-22", dau: 5, stickiness: 25.0}, ...]
+    """
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    with _cursor() as cur:
+        # MAU для каждого дня = уникальные пользователи за 30 дней до этого дня
+        cur.execute(f"""
+            SELECT DATE(ts) as day, COUNT(DISTINCT user_id) as dau
+            FROM events
+            WHERE ts >= ?
+            GROUP BY day
+            ORDER BY day
+        """, (since,))
+        daily = [dict(row) for row in cur.fetchall()]
+
+        # Общий MAU за весь период
+        cur.execute("""
+            SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?
+        """, (since,))
+        mau = cur.fetchone()[0] or 1
+
+        for d in daily:
+            d["stickiness"] = round(d["dau"] / mau * 100, 1)
+
+        return daily
+
+
+def platform_conversion() -> dict[str, dict]:
+    """Конверсия по платформам: сколько уникальных пользователей скачивали с каждой."""
+    with _cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        if total == 0:
+            return {}
+        cur.execute("""
+            SELECT COALESCE(platform, 'unknown') as p,
+                   COUNT(*) as downloads,
+                   COUNT(DISTINCT user_id) as users
+            FROM events WHERE event = 'download'
+            GROUP BY p ORDER BY downloads DESC
+        """)
+        result = {}
+        for row in cur.fetchall():
+            p = row["p"]
+            result[p] = {
+                "downloads": row["downloads"],
+                "users": row["users"],
+                "pct_users": round(row["users"] / total * 100, 1),
+            }
+        return result
+
+
 def dashboard_summary() -> dict:
     """Полная сводка для дашборда."""
     return {
@@ -327,4 +455,11 @@ def dashboard_summary() -> dict:
         "downloads_per_day": downloads_per_day(30),
         "new_users_per_day": new_users_per_day(30),
         "popular_videos": popular_videos(10),
+        # Продуктовые метрики
+        "avg_downloads": avg_downloads_per_user(),
+        "repeat_rate": repeat_users_rate(),
+        "engagement": engagement_score(),
+        "engagement_per_day": engagement_per_day(30),
+        "cohorts": cohort_retention(8),
+        "platform_conversion": platform_conversion(),
     }
