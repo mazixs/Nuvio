@@ -1,0 +1,15 @@
+# Проект протестирован на Python >=3.13
+python-telegram-bot[job-queue]>=22.0
+yt-dlp[default]>=2025.11.12
+httpx>=0.28.0
+python-dotenv>=1.0.1
+
+# WebUI
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+jinja2>=3.1.0
+itsdangerous>=2.2.0
+python-multipart>=0.0.18
+
+# Тестирование
+pytest>=8.0

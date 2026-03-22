@@ -1,0 +1,30 @@
+services:
+  bot:
+    build: .
+    container_name: nuvio-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      - bot-data:/app/data
+      - ./logs:/app/logs
+      - ./.secrets:/app/.secrets:ro
+    depends_on:
+      - web
+
+  web:
+    build: .
+    container_name: nuvio-web
+    restart: unless-stopped
+    command: python -m web.app
+    env_file: .env
+    environment:
+      - DATA_DIR=/app/data
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+    volumes:
+      - bot-data:/app/data
+
+volumes:
+  bot-data:

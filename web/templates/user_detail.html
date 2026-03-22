@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Пользователь {{ user.user_id }}{% endblock %}
+{% block nav_users %}active{% endblock %}
+{% block content %}
+
+<a href="/users" class="btn btn-back">К пользователям</a>
+
+<div class="page-header">
+    <div>
+        <h1>Пользователь {{ user.user_id }}</h1>
+        <p class="subtitle">{{ user.username or 'Без юзернейма' }}</p>
+    </div>
+</div>
+
+<div class="cards-grid">
+    <div class="card animate-in">
+        <div class="card-label">Юзернейм</div>
+        <div class="card-value small">{{ user.username or '—' }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Имя</div>
+        <div class="card-value small">{{ user.first_name or '' }} {{ user.last_name or '' }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Язык</div>
+        <div class="card-value small">{{ user.language_code or '—' }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Первый визит</div>
+        <div class="card-value small">{{ user.first_seen[:10] }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Последний визит</div>
+        <div class="card-value small">{{ user.last_seen[:10] }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Всего скачиваний</div>
+        <div class="card-value">{{ user.total_downloads }}</div>
+    </div>
+</div>
+
+{% if user.downloads_by_platform %}
+<div class="stats-divider">
+    <span class="label">Скачивания по платформам</span>
+    <div class="line"></div>
+</div>
+
+<div class="cards-grid">
+    {% for platform, count in user.downloads_by_platform.items() %}
+    <div class="card animate-in">
+        <div class="card-label">
+            <span class="badge badge-{{ platform }}"><span class="badge-dot"></span>{{ platform }}</span>
+        </div>
+        <div class="card-value">{{ count }}</div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="stats-divider">
+    <span class="label">Последняя активность (50 записей)</span>
+    <div class="line"></div>
+</div>
+
+<div class="table-wrapper animate-in">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Время</th>
+                <th>Событие</th>
+                <th>Платформа</th>
+                <th>URL</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in user.recent_events %}
+            <tr>
+                <td>{{ e.ts[:19] }}</td>
+                <td><span class="badge">{{ e.event }}</span></td>
+                <td>
+                    {% if e.platform %}
+                    <span class="badge badge-{{ e.platform }}"><span class="badge-dot"></span>{{ e.platform }}</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td class="url-cell">
+                    {% if e.url %}
+                    <a href="{{ e.url }}" target="_blank" rel="noopener">{{ e.url[:50] }}{% if e.url|length > 50 %}...{% endif %}</a>
+                    {% else %}—{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not user.recent_events %}
+            <tr><td colspan="4" class="empty">Нет событий</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% endblock %}

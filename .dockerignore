@@ -1,0 +1,17 @@
+.git
+.github
+.pytest_cache
+.pytest_tmp
+.ruff_cache
+__pycache__
+*.pyc
+*.db
+logs/
+temp/
+downloads/
+.env
+.env.local
+.secrets/
+tests/
+docs/
+*.md

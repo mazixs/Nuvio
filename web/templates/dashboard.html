@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}Дашборд{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h1>Дашборд</h1>
+        <p class="subtitle">Обзор</p>
+    </div>
+</div>
+
+<!-- KPI: Users -->
+<div class="stats-divider">
+    <span class="label">Пользователи</span>
+    <div class="line"></div>
+</div>
+
+<div class="cards-grid">
+    <div class="card animate-in">
+        <div class="card-label">Всего</div>
+        <div class="card-value">{{ total_users }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Новые сегодня</div>
+        <div class="card-value">{{ new_users_today }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Новые 7д</div>
+        <div class="card-value">{{ new_users_7d }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Новые 30д</div>
+        <div class="card-value">{{ new_users_30d }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Активные сегодня</div>
+        <div class="card-value">{{ active_today }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Активные 7д</div>
+        <div class="card-value">{{ active_7d }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Активные 30д</div>
+        <div class="card-value">{{ active_30d }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Всего скачиваний</div>
+        <div class="card-value">{{ total_downloads }}</div>
+    </div>
+</div>
+
+<!-- KPI: Retention & Churn -->
+<div class="stats-divider">
+    <span class="label">Удержание и отток</span>
+    <div class="line"></div>
+</div>
+
+<div class="cards-grid">
+    <div class="card accent animate-in">
+        <div class="card-label">Удержание D3</div>
+        <div class="card-value">{{ retention_3 }}%</div>
+    </div>
+    <div class="card accent animate-in">
+        <div class="card-label">Удержание D7</div>
+        <div class="card-value">{{ retention_7 }}%</div>
+    </div>
+    <div class="card accent animate-in">
+        <div class="card-label">Удержание D30</div>
+        <div class="card-value">{{ retention_30 }}%</div>
+    </div>
+    <div class="card danger animate-in">
+        <div class="card-label">Отток 30д</div>
+        <div class="card-value">{{ churn_30 }}%</div>
+    </div>
+</div>
+
+<!-- Charts -->
+<div class="stats-divider">
+    <span class="label">Аналитика</span>
+    <div class="line"></div>
+</div>
+
+<div class="charts-grid">
+    <div class="chart-box animate-in">
+        <h3><span class="dot dot-primary"></span> Скачиваний в день</h3>
+        <canvas id="downloadsChart"></canvas>
+    </div>
+    <div class="chart-box animate-in">
+        <h3><span class="dot dot-accent"></span> Новых пользователей в день</h3>
+        <canvas id="newUsersChart"></canvas>
+    </div>
+</div>
+
+<div class="charts-grid split">
+    <div class="chart-box chart-small animate-in">
+        <h3><span class="dot dot-warn"></span> Трафик по платформам</h3>
+        <canvas id="platformChart"></canvas>
+    </div>
+    <div class="table-wrapper animate-in">
+        <div class="table-header">
+            <h3>Популярные видео (Топ 10)</h3>
+        </div>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>URL</th>
+                    <th>Платформа</th>
+                    <th>Скачивания</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for v in popular_videos %}
+                <tr>
+                    <td class="rank-cell">{{ loop.index }}</td>
+                    <td class="url-cell"><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.url[:60] }}{% if v.url|length > 60 %}...{% endif %}</a></td>
+                    <td><span class="badge badge-{{ v.platform or 'unknown' }}"><span class="badge-dot"></span>{{ v.platform or 'unknown' }}</span></td>
+                    <td>{{ v.cnt }}</td>
+                </tr>
+                {% endfor %}
+                {% if not popular_videos %}
+                <tr><td colspan="4" class="empty">Нет данных</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+const chartDefaults = {
+    color: '#636b85',
+    borderColor: '#232840',
+    font: { family: 'Inter, sans-serif' }
+};
+Chart.defaults.color = chartDefaults.color;
+Chart.defaults.font.family = chartDefaults.font.family;
+
+const dlData = {{ downloads_per_day | tojson }};
+const nuData = {{ new_users_per_day | tojson }};
+const platData = {{ downloads_by_platform | tojson }};
+
+new Chart(document.getElementById('downloadsChart'), {
+    type: 'bar',
+    data: {
+        labels: dlData.map(d => d.day),
+        datasets: [{
+            label: 'Скачивания',
+            data: dlData.map(d => d.cnt),
+            backgroundColor: 'rgba(99, 102, 241, 0.7)',
+            hoverBackgroundColor: 'rgba(99, 102, 241, 0.9)',
+            borderRadius: 6,
+            borderSkipped: false
+        }]
+    },
+    options: {
+        responsive: true,
+        animation: { duration: 1000, easing: 'easeOutQuart' },
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { grid: { color: '#1a1e2e' }, ticks: { maxRotation: 45, font: { size: 11 } } },
+            y: { grid: { color: '#1a1e2e' }, beginAtZero: true }
+        }
+    }
+});
+
+new Chart(document.getElementById('newUsersChart'), {
+    type: 'line',
+    data: {
+        labels: nuData.map(d => d.day),
+        datasets: [{
+            label: 'Новые пользователи',
+            data: nuData.map(d => d.cnt),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.08)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#10b981',
+            pointBorderColor: '#151823',
+            pointBorderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        animation: { duration: 1200, easing: 'easeOutQuart' },
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { grid: { color: '#1a1e2e' }, ticks: { maxRotation: 45, font: { size: 11 } } },
+            y: { grid: { color: '#1a1e2e' }, beginAtZero: true }
+        }
+    }
+});
+
+const platLabels = Object.keys(platData);
+const platValues = Object.values(platData);
+const platColors = { youtube: '#ff4444', tiktok: '#69c9d0', instagram: '#e1306c', unknown: '#636b85' };
+
+new Chart(document.getElementById('platformChart'), {
+    type: 'doughnut',
+    data: {
+        labels: platLabels,
+        datasets: [{
+            data: platValues,
+            backgroundColor: platLabels.map(l => platColors[l] || '#6366f1'),
+            borderColor: '#151823',
+            borderWidth: 3,
+            hoverOffset: 8
+        }]
+    },
+    options: {
+        responsive: true,
+        animation: { duration: 1000, easing: 'easeOutQuart', animateRotate: true },
+        cutout: '65%',
+        plugins: {
+            legend: {
+                position: 'bottom',
+                labels: { padding: 16, usePointStyle: true, pointStyle: 'circle', font: { size: 12 } }
+            }
+        }
+    }
+});
+</script>
+
+{% endblock %}
