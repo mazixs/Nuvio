@@ -1,9 +1,12 @@
 """
 WebUI дашборд аналитики бота.
 """
+import hmac
 import os
 import hashlib
 import secrets
+import time
+from collections import defaultdict
 from pathlib import Path
 
 from contextlib import asynccontextmanager
@@ -23,6 +26,44 @@ from utils.analytics_db import (
 
 WEB_DIR = Path(__file__).resolve().parent
 
+# ── Безопасность ──────────────────────────────────────────────
+
+MAX_INPUT_LENGTH = 128  # макс. длина логина/пароля
+LOGIN_RATE_LIMIT = 5    # попыток
+LOGIN_RATE_WINDOW = 300  # за 5 минут
+LOGIN_LOCKOUT = 600      # блокировка на 10 минут
+
+# Хранилище неудачных попыток: {ip: [(timestamp, ...), ...]}
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Возвращает True если IP заблокирован из-за превышения лимита."""
+    now = time.time()
+    attempts = _login_attempts[ip]
+    # Удаляем старые попытки
+    _login_attempts[ip] = [t for t in attempts if now - t < LOGIN_LOCKOUT]
+    attempts = _login_attempts[ip]
+    # Проверяем: если за окно RATE_WINDOW было >= RATE_LIMIT попыток
+    recent = [t for t in attempts if now - t < LOGIN_RATE_WINDOW]
+    return len(recent) >= LOGIN_RATE_LIMIT
+
+
+def _record_failed_attempt(ip: str) -> None:
+    _login_attempts[ip].append(time.time())
+
+
+def _clear_attempts(ip: str) -> None:
+    _login_attempts.pop(ip, None)
+
+
+def _sanitize_input(value: str) -> str:
+    """Обрезает и ограничивает длину ввода."""
+    return value.strip()[:MAX_INPUT_LENGTH]
+
+
+# ── Приложение ────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,7 +71,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Nuvio Analytics", lifespan=lifespan)
+app = FastAPI(title="Nuvio Analytics", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.add_middleware(
     SessionMiddleware,
@@ -73,11 +114,38 @@ async def login_page(request: Request):
 
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Rate limiting
+    if _check_rate_limit(client_ip):
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "error": "Слишком много попыток. Попробуйте через 10 минут.",
+        })
+
+    # Санитизация ввода
+    username = _sanitize_input(username)
+    password = _sanitize_input(password)
+
+    if not username or not password:
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "Заполните все поля",
+        })
+
+    # Timing-safe сравнение (защита от timing attack)
     password_hash = hashlib.sha256(password.encode()).hexdigest()
-    if username == WEB_USERNAME and password_hash == WEB_PASSWORD_HASH:
+    username_ok = hmac.compare_digest(username, WEB_USERNAME)
+    password_ok = hmac.compare_digest(password_hash, WEB_PASSWORD_HASH)
+
+    if username_ok and password_ok:
+        _clear_attempts(client_ip)
         request.session["authenticated"] = True
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": "Неверный логин или пароль"})
+
+    _record_failed_attempt(client_ip)
+    return templates.TemplateResponse("login.html", {
+        "request": request, "error": "Неверный логин или пароль",
+    })
 
 
 @app.get("/logout")
@@ -97,6 +165,7 @@ async def dashboard(request: Request, _=Depends(require_auth)):
 
 @app.get("/users", response_class=HTMLResponse)
 async def users_list(request: Request, page: int = 1, _=Depends(require_auth)):
+    page = max(1, page)
     per_page = 50
     offset = (page - 1) * per_page
     users = get_all_users(limit=per_page, offset=offset)
