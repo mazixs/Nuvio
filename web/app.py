@@ -2,13 +2,16 @@
 WebUI дашборд аналитики бота.
 """
 import hmac
+import logging
 import os
 import hashlib
 import secrets
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
@@ -16,6 +19,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+
+logger = logging.getLogger("nuvio.web")
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -46,24 +51,71 @@ def _parse_duration(value: str) -> int:
 LOGIN_RATE_LIMIT = int(os.environ.get("FAIL2BAN_RETRIES", "5"))
 LOGIN_LOCKOUT = _parse_duration(os.environ.get("FAIL2BAN_TIME", "10m"))
 
-# Хранилище неудачных попыток: {ip: [(timestamp, ...), ...]}
-_login_attempts: dict[str, list[float]] = defaultdict(list)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+ADMIN_IDS = [
+    uid.strip() for uid in os.environ.get("ADMIN_IDS", "").split(",") if uid.strip()
+]
+
+# Хранилище неудачных попыток: {ip: [(timestamp, username), ...]}
+_login_attempts: dict[str, list[tuple[float, str]]] = defaultdict(list)
+# Множество IP, по которым уже отправлено уведомление (чтобы не спамить)
+_notified_ips: set[str] = set()
 
 
 def _check_rate_limit(ip: str) -> bool:
     """Возвращает True если IP заблокирован из-за превышения лимита."""
     now = time.time()
-    # Удаляем попытки старше окна блокировки
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < LOGIN_LOCKOUT]
+    _login_attempts[ip] = [
+        (t, u) for t, u in _login_attempts[ip] if now - t < LOGIN_LOCKOUT
+    ]
     return len(_login_attempts[ip]) >= LOGIN_RATE_LIMIT
 
 
-def _record_failed_attempt(ip: str) -> None:
-    _login_attempts[ip].append(time.time())
+def _record_failed_attempt(ip: str, username: str) -> None:
+    _login_attempts[ip].append((time.time(), username))
 
 
 def _clear_attempts(ip: str) -> None:
     _login_attempts.pop(ip, None)
+    _notified_ips.discard(ip)
+
+
+async def _notify_admins_brute_force(ip: str) -> None:
+    """Отправляет уведомление админам в Telegram при срабатывании fail2ban."""
+    if ip in _notified_ips:
+        return
+    if not TELEGRAM_TOKEN or not ADMIN_IDS:
+        logger.warning("Fail2ban сработал для %s, но TELEGRAM_TOKEN/ADMIN_IDS не заданы", ip)
+        return
+
+    _notified_ips.add(ip)
+
+    attempts = _login_attempts.get(ip, [])
+    logins_used = list(dict.fromkeys(u for _, u in attempts))  # уникальные, сохраняя порядок
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lockout_min = LOGIN_LOCKOUT // 60
+
+    text = (
+        f"🚨 <b>Fail2ban: IP заблокирован</b>\n\n"
+        f"<b>IP:</b> <code>{ip}</code>\n"
+        f"<b>Время:</b> {now}\n"
+        f"<b>Попыток:</b> {len(attempts)}\n"
+        f"<b>Логины:</b> <code>{'</code>, <code>'.join(logins_used)}</code>\n"
+        f"<b>Блокировка:</b> {lockout_min} мин.\n\n"
+        f"⚠️ Возможен brute-force на WebUI дашборд."
+    )
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    async with httpx.AsyncClient(timeout=10) as client:
+        for admin_id in ADMIN_IDS:
+            try:
+                await client.post(url, json={
+                    "chat_id": admin_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                })
+            except Exception:
+                logger.error("Не удалось отправить fail2ban уведомление админу %s", admin_id)
 
 
 def _sanitize_input(value: str) -> str:
@@ -125,16 +177,18 @@ async def login_page(request: Request):
 async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     client_ip = request.client.host if request.client else "unknown"
 
-    # Rate limiting
-    if _check_rate_limit(client_ip):
-        return templates.TemplateResponse("login.html", {
-            "request": request,
-            "error": "Слишком много попыток. Попробуйте через 10 минут.",
-        })
-
     # Санитизация ввода
     username = _sanitize_input(username)
     password = _sanitize_input(password)
+
+    # Rate limiting
+    if _check_rate_limit(client_ip):
+        await _notify_admins_brute_force(client_ip)
+        lockout_min = LOGIN_LOCKOUT // 60
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "error": f"Слишком много попыток. Попробуйте через {lockout_min} мин.",
+        })
 
     if not username or not password:
         return templates.TemplateResponse("login.html", {
@@ -151,7 +205,12 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         request.session["authenticated"] = True
         return RedirectResponse("/", status_code=303)
 
-    _record_failed_attempt(client_ip)
+    _record_failed_attempt(client_ip, username)
+
+    # Проверяем, не превышен ли лимит после этой попытки
+    if _check_rate_limit(client_ip):
+        await _notify_admins_brute_force(client_ip)
+
     return templates.TemplateResponse("login.html", {
         "request": request, "error": "Неверный логин или пароль",
     })
