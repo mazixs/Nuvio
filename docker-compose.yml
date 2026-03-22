@@ -23,7 +23,7 @@ services:
     volumes:
       - bot-data:/app/data
       - ./logs:/app/logs
-      - ./.secrets:/app/.secrets:ro
+      - ./.secrets:/app/.secrets
     depends_on:
       - web
 
