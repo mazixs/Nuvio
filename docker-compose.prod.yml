@@ -1,7 +1,11 @@
-# Production docker-compose: тянет образы из GHCR по версиям
-# Использование:
-#   TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
-#   или без TAG — подтянется latest
+# Nuvio — продакшен (образы из GHCR)
+# Быстрый старт:
+#   1. cp .env.example .env
+#   2. Заполнить TELEGRAM_TOKEN и ADMIN_IDS в .env
+#   3. Сменить WEB_PASSWORD на надёжный пароль
+#   4. TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+#
+# Без TAG подтянется latest.
 
 services:
   bot:
@@ -11,6 +15,22 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/app/data
+      # ── Обязательные (задать в .env) ──────────────────
+      # TELEGRAM_TOKEN=
+      # ADMIN_IDS=
+      #
+      # ── WebUI (общие с сервисом web) ──────────────────
+      # WEB_USERNAME=admin
+      # WEB_PASSWORD=changeme       ← СМЕНИТЬ!
+      # WEB_PORT=8080
+      # WEB_SECRET_KEY=
+      #
+      # ── Опциональные ──────────────────────────────────
+      # GOKAPI_BASE_URL=
+      # GOKAPI_API_KEY=
+      # LOG_LEVEL=INFO
+      # YTDLP_AUTO_UPDATE=true
+      # YTDLP_RELEASE_CHANNEL=nightly
     volumes:
       - bot-data:/app/data
       - ./logs:/app/logs
