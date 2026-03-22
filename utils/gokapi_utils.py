@@ -14,6 +14,13 @@ class GokapiConfigError(ValueError):
     """Выбрасывается, если конфигурация Gokapi не задана."""
 
 
+def is_gokapi_configured() -> bool:
+    """Проверяет, настроен ли Gokapi (без выполнения запроса)."""
+    base_url = (GOKAPI_BASE_URL or "").strip()
+    api_key = (GOKAPI_API_KEY or "").strip()
+    return bool(base_url and api_key)
+
+
 @lru_cache(maxsize=1)
 def require_gokapi_config() -> tuple[str, str]:
     """Возвращает валидированный (base_url, api_key) или выбрасывает ошибку."""

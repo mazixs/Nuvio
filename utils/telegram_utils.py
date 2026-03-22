@@ -2,6 +2,7 @@
 Модуль для работы с Telegram API.
 """
 import asyncio
+import functools
 import io
 import traceback
 import uuid
@@ -38,6 +39,7 @@ from utils.tiktok_instagram_utils import (
     get_tiktok_info, get_instagram_info, is_instagram_audio_url, handle_instagram_audio_url
 )
 from utils.video_cache import telegram_cache, CachedVideo
+from utils.gokapi_utils import is_gokapi_configured
 from utils.cookie_health import check_cookie_health
 from datetime import datetime
 
@@ -342,9 +344,10 @@ def _build_youtube_more_menu(formats: dict, session_token: str) -> InlineKeyboar
                 )
             ])
 
+    best_label = BEST_QUALITY_LABEL if is_gokapi_configured() else BEST_QUALITY_LABEL + " (может не влезть в ТГ)"
     keyboard.append([
         InlineKeyboardButton(
-            BEST_QUALITY_LABEL,
+            best_label,
             callback_data=_make_callback_data(session_token, "format", "best", "best"),
         )
     ])
@@ -702,12 +705,15 @@ async def _try_send_cached(
         return False
     logger.info("Cache HIT для user %s: %s (key=%s)", user_id, url, cache_format_id)
     try:
-        await update.message.reply_video(
-            video=cached.file_id,
-            caption=None,
-            supports_streaming=True
-        )
-        logger.info("%s видео доставлено из кэша за 0 сек (user %s)", platform, user_id)
+        if "audio" in cache_format_id.lower():
+            await update.message.reply_audio(audio=cached.file_id, caption=None)
+        else:
+            await update.message.reply_video(
+                video=cached.file_id,
+                caption=None,
+                supports_streaming=True,
+            )
+        logger.info("%s файл доставлен из кэша за 0 сек (user %s)", platform, user_id)
         return True
     except telegram.error.BadRequest as e:
         logger.warning("file_id устарел для %s (key=%s): %s", url, cache_format_id, e)
@@ -930,8 +936,6 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
         return
     # Проверка TikTok
     if is_valid_tiktok_url(url):
-        if await _try_send_cached(update, url, user_id, _DIRECT_VIDEO_CACHE_KEY, "TikTok"):
-            return
         processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
         session_id = None
         try:
@@ -990,8 +994,6 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
         return
     # Проверка Instagram
     if is_valid_instagram_url(url):
-        if await _try_send_cached(update, url, user_id, _DIRECT_VIDEO_CACHE_KEY, "Instagram"):
-            return
         processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
         session_id = None
         try:
@@ -1218,11 +1220,11 @@ async def _button_callback_legacy_unsafe(update: Update, context: ContextTypes.D
                         
                         # Fallback: если нет нативных форматов (m4a/mp3/ogg), конвертируем в mp3
                         if not native_audio and audio_only:
-                            logger.warning(f"Нативные форматы не найдены. Доступные: {[f.get('ext') for f in audio_only]}. Конвертируем в MP3.")
+                            logger.warning(f"Нативные форматы не найдены. Доступные: {[f.get('ext') for f in audio_only]}. Конвертируем в m4a.")
                             await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-                            # Используем bestaudio с конвертацией в mp3
+                            # Используем bestaudio с конвертацией в m4a
                             file_path = await run_blocking(
-                                download_audio,
+                                functools.partial(download_audio, preferred_codec='m4a'),
                                 url,
                                 'bestaudio',
                                 session_id,
@@ -1426,8 +1428,9 @@ async def _button_callback_legacy_unsafe(update: Update, context: ContextTypes.D
                                 keyboard.append([
                                     InlineKeyboardButton(mp3_label, callback_data=callback_data)
                                 ])
+                        best_label = BEST_QUALITY_LABEL if is_gokapi_configured() else BEST_QUALITY_LABEL + " (может не влезть в ТГ)"
                         keyboard.append([
-                            InlineKeyboardButton(BEST_QUALITY_LABEL, callback_data="format|best|best")
+                            InlineKeyboardButton(best_label, callback_data="format|best|best")
                         ])
                         keyboard.append([
                             InlineKeyboardButton(BEST_AUDIO_LABEL, callback_data="format|audio_best|bestaudio")
@@ -1623,6 +1626,25 @@ async def _handle_main_callback(
 
     match action:
         case "tiktok_download":
+            # Проверяем кэш перед скачиванием
+            cache_key = _cache_format_id_for_main_action("tiktok", "tiktok_download")
+            if cache_key:
+                cached = telegram_cache.get(url, format_id=cache_key)
+                if cached:
+                    try:
+                        await query.message.reply_video(
+                            video=cached.file_id,
+                            caption=None,
+                            supports_streaming=True,
+                        )
+                        logger.info("TikTok видео доставлено из кэша (key=%s)", cache_key)
+                        await query.edit_message_text(FILE_SENT)
+                        await _cleanup_user_session(user_id, context, session_token)
+                        return
+                    except telegram.error.BadRequest as e:
+                        logger.warning("file_id устарел (key=%s): %s", cache_key, e)
+                        telegram_cache.delete_by_file_id(cached.file_id)
+
             await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
             from utils.tiktok_instagram_utils import download_tiktok_video
 
@@ -1680,7 +1702,7 @@ async def _handle_main_callback(
                     await query.edit_message_text(ERROR_MESSAGE)
                     await _cleanup_user_session(user_id, context, session_token)
                     return
-                await send_file(query, file_path, session_token, session_data, context)
+                await send_file(query, file_path, session_token, session_data, context, cache_format_id="tiktok_audio")
             except Exception as e:
                 error_code = _make_error_code("tiktok", _classify_internal_error_category("tiktok", str(e)))
                 _schedule_platform_failure_log(
@@ -1696,6 +1718,25 @@ async def _handle_main_callback(
             return
 
         case "instagram_download":
+            # Проверяем кэш перед скачиванием
+            cache_key = _cache_format_id_for_main_action("instagram", "instagram_download")
+            if cache_key:
+                cached = telegram_cache.get(url, format_id=cache_key)
+                if cached:
+                    try:
+                        await query.message.reply_video(
+                            video=cached.file_id,
+                            caption=None,
+                            supports_streaming=True,
+                        )
+                        logger.info("Instagram видео доставлено из кэша (key=%s)", cache_key)
+                        await query.edit_message_text(FILE_SENT)
+                        await _cleanup_user_session(user_id, context, session_token)
+                        return
+                    except telegram.error.BadRequest as e:
+                        logger.warning("file_id устарел (key=%s): %s", cache_key, e)
+                        telegram_cache.delete_by_file_id(cached.file_id)
+
             await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
             from utils.tiktok_instagram_utils import download_instagram_video
 
@@ -1747,7 +1788,7 @@ async def _handle_main_callback(
                     await query.edit_message_text(ERROR_MESSAGE)
                     await _cleanup_user_session(user_id, context, session_token)
                     return
-                await send_file(query, file_path, session_token, session_data, context)
+                await send_file(query, file_path, session_token, session_data, context, cache_format_id="instagram_audio")
             except Exception as e:
                 error_code = _make_error_code("instagram", _classify_internal_error_category("instagram", str(e)))
                 _schedule_platform_failure_log(
@@ -1773,12 +1814,12 @@ async def _handle_main_callback(
 
             if not native_audio and audio_only:
                 logger.warning(
-                    "Нативные форматы не найдены. Доступные: %s. Конвертируем в MP3.",
+                    "Нативные форматы не найдены. Доступные: %s. Конвертируем в m4a.",
                     [f.get('ext') for f in audio_only],
                 )
                 await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
                 file_path = await run_blocking(
-                    download_audio,
+                    functools.partial(download_audio, preferred_codec='m4a'),
                     url,
                     'bestaudio',
                     session_id,
@@ -1803,7 +1844,7 @@ async def _handle_main_callback(
                 await _cleanup_user_session(user_id, context, session_token)
                 return
 
-            await send_file(query, file_path, session_token, session_data, context)
+            await send_file(query, file_path, session_token, session_data, context, cache_format_id="audio_m4a")
             return
 
         case "tg_video":
@@ -2340,41 +2381,60 @@ async def _send_single_file_legacy_unsafe(
                     )
             elif file_ext in ['.mp3', '.m4a', '.wav', '.ogg']:
                 with open(file_path, 'rb') as audio_file:
-                    await query.message.reply_audio(
+                    message = await query.message.reply_audio(
                         audio=audio_file,
                         caption=None
                     )
             else:
                 with open(file_path, 'rb') as document_file:
-                    await query.message.reply_document(
+                    message = await query.message.reply_document(
                         document=document_file,
                         caption=None
                     )
-            
+
             # === СОХРАНЕНИЕ В КЭШ после успешной отправки ===
-            if context and message and message.video:
+            if context and message:
                 url = context.user_data.get('url')
                 video_info = context.user_data.get('video_info')
                 platform = context.user_data.get('platform', 'youtube')
-                
-                if url and video_info:
+                file_id = None
+                file_unique_id = None
+                file_size = None
+                duration = None
+
+                if message.video:
+                    file_id = message.video.file_id
+                    file_unique_id = message.video.file_unique_id
+                    file_size = message.video.file_size
+                    duration = message.video.duration
+                elif message.audio:
+                    file_id = message.audio.file_id
+                    file_unique_id = message.audio.file_unique_id
+                    file_size = message.audio.file_size
+                    duration = message.audio.duration
+                elif message.document:
+                    file_id = message.document.file_id
+                    file_unique_id = message.document.file_unique_id
+                    file_size = message.document.file_size
+
+                if url and file_id:
                     try:
                         cached = CachedVideo(
                             url=url,
-                            file_id=message.video.file_id,
-                            file_unique_id=message.video.file_unique_id,
+                            file_id=file_id,
+                            file_unique_id=file_unique_id,
                             platform=platform,
                             format_id='best',
                             cached_at=datetime.now(),
-                            file_size=message.video.file_size,
-                            duration=message.video.duration,
-                            title=video_info.get('title')
+                            file_size=file_size,
+                            duration=duration,
+                            title=video_info.get('title') if video_info else None,
                         )
                         telegram_cache.set(cached)
-                        logger.info(f"💾 Видео сохранено в кэш: {url} -> {message.video.file_id}")
+                        logger.info("💾 Файл сохранён в кэш: %s -> %s", url, file_id)
                     except Exception as e:
-                        logger.error(f"Ошибка сохранения в кэш: {e}")
-            
+                        logger.error("Ошибка сохранения в кэш: %s", e)
+
             # Успешная отправка - выходим из цикла
             return True
                 
@@ -2580,32 +2640,51 @@ async def send_single_file(
                     )
             elif file_ext in ['.mp3', '.m4a', '.wav', '.ogg']:
                 with open(file_path, 'rb') as audio_file:
-                    await query.message.reply_audio(audio=audio_file, caption=None)
+                    message = await query.message.reply_audio(audio=audio_file, caption=None)
             else:
                 with open(file_path, 'rb') as document_file:
-                    await query.message.reply_document(document=document_file, caption=None)
+                    message = await query.message.reply_document(document=document_file, caption=None)
 
-            if message and message.video:
-                url = session_data.get('url')
+            # Кэширование file_id для видео, аудио и документов
+            if message and url and cache_format_id:
                 video_info = session_data.get('video_info')
-                platform = session_data.get('platform', 'youtube')
-                if url and video_info and cache_format_id:
+                file_id = None
+                file_unique_id = None
+                file_size = None
+                duration = None
+
+                if message.video:
+                    file_id = message.video.file_id
+                    file_unique_id = message.video.file_unique_id
+                    file_size = message.video.file_size
+                    duration = message.video.duration
+                elif message.audio:
+                    file_id = message.audio.file_id
+                    file_unique_id = message.audio.file_unique_id
+                    file_size = message.audio.file_size
+                    duration = message.audio.duration
+                elif message.document:
+                    file_id = message.document.file_id
+                    file_unique_id = message.document.file_unique_id
+                    file_size = message.document.file_size
+
+                if file_id:
                     try:
                         cached = CachedVideo(
                             url=url,
-                            file_id=message.video.file_id,
-                            file_unique_id=message.video.file_unique_id,
+                            file_id=file_id,
+                            file_unique_id=file_unique_id,
                             platform=platform,
                             format_id=cache_format_id,
                             cached_at=datetime.now(),
-                            file_size=message.video.file_size,
-                            duration=message.video.duration,
-                            title=video_info.get('title'),
+                            file_size=file_size,
+                            duration=duration,
+                            title=video_info.get('title') if video_info else None,
                         )
                         telegram_cache.set(cached)
-                        logger.info("💾 Видео сохранено в кэш: %s -> %s (key=%s)", url, message.video.file_id, cache_format_id)
+                        logger.info("💾 Файл сохранён в кэш: %s -> %s (key=%s)", url, file_id, cache_format_id)
                     except Exception as e:
-                        logger.error(f"Ошибка сохранения в кэш: {e}")
+                        logger.error("Ошибка сохранения в кэш: %s", e)
 
             return True
         except (telegram.error.NetworkError, telegram.error.TimedOut) as e:

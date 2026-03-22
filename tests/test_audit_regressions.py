@@ -257,7 +257,7 @@ def test_resolve_secret_path_prefers_canonical_location(monkeypatch, tmp_path, c
 def test_classify_large_file_delivery_error():
     assert (
         telegram_utils._classify_large_file_delivery_error(
-            "Ошибка Gokapi: Сервер загрузки больших файлов не настроен"
+            "Сервер загрузки недоступен: Сервер загрузки больших файлов не настроен"
         )
         == telegram_utils.LARGE_FILE_DELIVERY_UNAVAILABLE
     )
@@ -550,18 +550,19 @@ def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
     assert "Stub title" in processing_messages[-1].edits[-1][0]
 
 
-def test_process_url_tiktok_uses_direct_video_cache_key(monkeypatch):
+def test_process_url_tiktok_shows_menu_not_cache(monkeypatch):
+    """TikTok URL должен показывать меню, а не отправлять из кэша напрямую."""
     message = _DummyMessage("https://www.tiktok.com/@user/video/1")
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=7),
         message=message,
     )
     context = SimpleNamespace(user_data={}, args=[])
-    seen: dict[str, str] = {}
+    cache_called = False
 
     async def fake_try_send_cached(update, url, user_id, cache_format_id, platform="video"):
-        seen["cache_format_id"] = cache_format_id
-        seen["platform"] = platform
+        nonlocal cache_called
+        cache_called = True
         return True
 
     monkeypatch.setattr(telegram_utils, "_try_send_cached", fake_try_send_cached)
@@ -570,12 +571,25 @@ def test_process_url_tiktok_uses_direct_video_cache_key(monkeypatch):
     monkeypatch.setattr(telegram_utils, "is_instagram_audio_url", lambda url: False)
     monkeypatch.setattr(telegram_utils, "is_valid_instagram_url", lambda url: False)
 
+    # process_url больше не вызывает _try_send_cached для TikTok (кэш перенесён в callback)
+    # Поэтому нужно мокнуть reply_text (показ меню) и get_tiktok_info
+    async def fake_reply_text(text, **kwargs):
+        return SimpleNamespace(edit_text=fake_edit_text)
+
+    async def fake_edit_text(text, **kwargs):
+        pass
+
+    message.reply_text = fake_reply_text
+
+    async def fake_get_tiktok_info(url):
+        return {"title": "Test", "uploader": "User", "duration": 10}
+
+    monkeypatch.setattr(telegram_utils, "get_tiktok_info", fake_get_tiktok_info)
+    monkeypatch.setattr(telegram_utils, "run_blocking", lambda func, *a, **kw: func(*a))
+
     asyncio.run(telegram_utils.process_url(update, context, message.text))
 
-    assert seen == {
-        "cache_format_id": "direct_video",
-        "platform": "TikTok",
-    }
+    assert not cache_called, "process_url не должен проверять кэш для TikTok — это делает callback handler"
 
 
 def test_send_single_file_persists_explicit_cache_key(monkeypatch, tmp_path):

@@ -660,17 +660,18 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
         raise final_error
     raise RuntimeError("Не удалось скачать нативное аудио: неизвестная ошибка")
 
-def download_audio(url: str, format_id: str, session_id: str, force_local: bool = False, output_dir: Path | None = None) -> Path | str:
+def download_audio(url: str, format_id: str, session_id: str, force_local: bool = False, output_dir: Path | None = None, preferred_codec: str = 'mp3') -> Path | str:
     """
-    Скачивает только аудио и конвертирует в MP3 через FFmpegExtractAudio.
+    Скачивает только аудио и конвертирует через FFmpegExtractAudio.
     Оптимизировано: использует yt-dlp postprocessor для прямого извлечения аудио.
-    
+
     Args:
         url: URL YouTube видео
         format_id: ID формата аудио (обычно 'bestaudio' или конкретный ID)
         session_id: ID сессии
         force_local: Принудительное локальное сохранение
         output_dir: Директория для сохранения
+        preferred_codec: Выходной аудио-кодек (по умолчанию 'mp3')
     
     Returns:
         Path к MP3 файлу или ссылка на Gokapi
@@ -696,7 +697,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
             'no_warnings': True,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
+                'preferredcodec': preferred_codec,
                 'preferredquality': '192',
             }],
             'progress_hooks': [lambda d: logger.debug(f"Скачивание аудио: {d['status']} - {d.get('_percent_str', '0%')}")],
@@ -715,10 +716,10 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             base_filename = Path(ydl.prepare_filename(info))
-            downloaded_file = base_filename.with_suffix('.mp3')
+            downloaded_file = base_filename.with_suffix(f'.{preferred_codec}')
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан после postprocessing.")
-            logger.info("Аудио успешно извлечено и конвертировано в MP3: %s", downloaded_file)
+            logger.info("Аудио успешно извлечено и конвертировано в %s: %s", preferred_codec, downloaded_file)
             return _maybe_upload_large_file(downloaded_file, force_local)
 
     def _try_audio(use_cookies: bool) -> Path | str:
@@ -751,7 +752,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
             logger.error("Ошибка при скачивании аудио даже с cookies: %s", e, exc_info=True)
 
     if YTDLP_CLI_FALLBACK and _classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
-        logger.warning("Переключаемся на CLI fallback для MP3-аудио")
+        logger.warning("Переключаемся на CLI fallback для %s-аудио", preferred_codec)
         for use_cookies, override_format in ((False, None), (True, None), (False, "bestaudio"), (True, "bestaudio")):
             if use_cookies and not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
                 continue
@@ -763,10 +764,10 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
                     use_cookies=use_cookies,
                     output_dir=output_dir,
                     force_local=force_local,
-                    extract_audio_codec='mp3',
+                    extract_audio_codec=preferred_codec,
                 )
             except Exception as cli_error:
-                logger.warning("CLI fallback MP3-аудио не удался: %s", cli_error)
+                logger.warning("CLI fallback %s-аудио не удался: %s", preferred_codec, cli_error)
 
     if final_error:
         raise final_error

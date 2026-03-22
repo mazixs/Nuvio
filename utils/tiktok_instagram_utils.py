@@ -10,7 +10,7 @@ from typing import Any
 import yt_dlp
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
-from utils.gokapi_utils import upload_to_gokapi
+from utils.gokapi_utils import upload_to_gokapi, is_gokapi_configured
 from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
 
 logger = setup_logger(__name__)
@@ -332,7 +332,16 @@ def download_tiktok_video(
         Path к файлу или ссылка на Gokapi
     """
     logger.info(f"Скачивание TikTok видео: {url}")
-    
+
+    # Предварительная проверка: если размер файла известен и превышает лимит, а Gokapi не настроен — отказ
+    if cached_info and not force_local:
+        filesize = cached_info.get('filesize') or cached_info.get('filesize_approx', 0)
+        if filesize and filesize > MAX_FILE_SIZE and not is_gokapi_configured():
+            raise Exception(
+                "Файл превышает лимит Telegram (50 МБ). "
+                "Выберите формат с меньшим размером."
+            )
+
     if output_dir is None:
         output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")
     else:
@@ -371,7 +380,7 @@ def download_tiktok_video(
                         logger.error(f"Ошибка удаления локального файла: {e}")
                     return link_or_error
                 else:
-                    raise Exception(f"Ошибка Gokapi: {link_or_error}")
+                    raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
             
             return downloaded_file
     
@@ -673,7 +682,7 @@ def download_tiktok_audio(
                         logger.error(f"Ошибка удаления: {e}")
                     return link_or_error
                 else:
-                    raise Exception(f"Ошибка Gokapi: {link_or_error}")
+                    raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
             
             return downloaded_file
     
