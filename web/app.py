@@ -20,14 +20,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-logger = logging.getLogger("nuvio.web")
-
-import sys
+import sys  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from utils.analytics_db import (
+from utils.analytics_db import (  # noqa: E402
     init_db, dashboard_summary, get_all_users, get_user_detail,
 )
+
+logger = logging.getLogger("nuvio.web")
 
 WEB_DIR = Path(__file__).resolve().parent
 
