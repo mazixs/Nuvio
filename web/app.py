@@ -195,7 +195,7 @@ async def redirect_exception_handler(request: Request, exc: HTTPException):
 async def login_page(request: Request):
     if _check_auth(request):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -210,15 +210,18 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     if _check_rate_limit(client_ip):
         await _notify_admins_brute_force(client_ip)
         lockout_min = LOGIN_LOCKOUT // 60
-        return templates.TemplateResponse("login.html", {
-            "request": request,
-            "error": f"Слишком много попыток. Попробуйте через {lockout_min} мин.",
-        })
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": f"Слишком много попыток. Попробуйте через {lockout_min} мин."},
+        )
 
     if not username or not password:
-        return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Заполните все поля",
-        })
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Заполните все поля"},
+        )
 
     # Timing-safe сравнение (защита от timing attack)
     password_hash = hashlib.sha256(password.encode()).hexdigest()
@@ -236,9 +239,11 @@ async def login_submit(request: Request, username: str = Form(...), password: st
     if _check_rate_limit(client_ip):
         await _notify_admins_brute_force(client_ip)
 
-    return templates.TemplateResponse("login.html", {
-        "request": request, "error": "Неверный логин или пароль",
-    })
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"error": "Неверный логин или пароль"},
+    )
 
 
 @app.get("/logout")
@@ -253,7 +258,7 @@ async def logout(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_auth)):
     data = dashboard_summary()
-    return templates.TemplateResponse("dashboard.html", {"request": request, **data})
+    return templates.TemplateResponse(request, "dashboard.html", data)
 
 
 @app.get("/users", response_class=HTMLResponse)
@@ -262,12 +267,15 @@ async def users_list(request: Request, page: int = 1, _=Depends(require_auth)):
     per_page = 50
     offset = (page - 1) * per_page
     users = get_all_users(limit=per_page, offset=offset)
-    return templates.TemplateResponse("users.html", {
-        "request": request,
-        "users": users,
-        "page": page,
-        "has_next": len(users) == per_page,
-    })
+    return templates.TemplateResponse(
+        request,
+        "users.html",
+        {
+            "users": users,
+            "page": page,
+            "has_next": len(users) == per_page,
+        },
+    )
 
 
 @app.get("/users/{user_id}", response_class=HTMLResponse)
@@ -275,7 +283,7 @@ async def user_detail(request: Request, user_id: int, _=Depends(require_auth)):
     user = get_user_detail(user_id)
     if not user:
         return HTMLResponse("Пользователь не найден", status_code=404)
-    return templates.TemplateResponse("user_detail.html", {"request": request, "user": user})
+    return templates.TemplateResponse(request, "user_detail.html", {"user": user})
 
 
 # ── API (JSON) ──────────────────────────────────────────────────
