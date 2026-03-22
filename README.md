@@ -57,26 +57,22 @@ cp .env.example .secrets/.env
 python main.py
 ```
 
-### Docker (локальная сборка)
+### Docker
 
 ```bash
+cp .env.example .env
+# Отредактируйте .env — укажите TELEGRAM_TOKEN, ADMIN_IDS, WEB_PASSWORD и WEB_PORT
+
+# Локальная сборка
 docker compose up --build
-```
 
-### Docker (из GHCR по версии)
-
-```bash
-# Скачать конкретную версию
-docker pull ghcr.io/mazixs/nuvio:1.0.0
-
-# Запуск через production compose
-wget https://raw.githubusercontent.com/mazixs/Nuvio/main/docker-compose.prod.yml
-cp .env.example .env  # настроить переменные
+# Или из GHCR по версии (продакшен)
 TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
-
-# Или latest
-docker compose -f docker-compose.prod.yml up -d
 ```
+
+Дашборд будет доступен на `http://localhost:<WEB_PORT>` (по умолчанию 8080).
+
+Подробная настройка Docker (порты, пароли, volumes, cookies) — в [`docs/guides/deployment.md`](docs/guides/deployment.md#docker).
 
 ---
 
