@@ -7,12 +7,22 @@ import logging
 import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from config import ADMIN_IDS, SECRETS_DIR
 from utils.cookie_health import CookieHealthResult, check_all_cookie_health
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_edit(query, text, **kwargs):
+    """edit_message_text с подавлением ошибки 'Message is not modified'."""
+    try:
+        await query.edit_message_text(text, **kwargs)
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise
 
 ADMIN_UPLOAD_TARGET_KEY = "admin_expected_cookie_file"
 MAX_COOKIE_FILE_SIZE = 1 * 1024 * 1024  # 1 MiB
@@ -193,7 +203,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data in {"admin|cookies|panel", "admin|cookies|refresh"}:
         expected_file_name = context.user_data.get(ADMIN_UPLOAD_TARGET_KEY)
-        await query.edit_message_text(
+        await _safe_edit(query,
             _build_admin_panel_text(expected_file_name),
             reply_markup=_build_admin_panel_markup(expected_file_name),
         )
@@ -201,9 +211,9 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "admin|cookies|check":
         expected_file_name = context.user_data.get(ADMIN_UPLOAD_TARGET_KEY)
-        await query.edit_message_text("Checking cookie health...", reply_markup=_build_admin_panel_markup(expected_file_name))
+        await _safe_edit(query,"Checking cookie health...", reply_markup=_build_admin_panel_markup(expected_file_name))
         results = await asyncio.to_thread(check_all_cookie_health)
-        await query.edit_message_text(
+        await _safe_edit(query,
             _build_cookie_health_text(results, expected_file_name),
             reply_markup=_build_admin_panel_markup(expected_file_name),
         )
@@ -211,7 +221,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "admin|cookies|cancel":
         context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
-        await query.edit_message_text(
+        await _safe_edit(query,
             _build_admin_panel_text(),
             reply_markup=_build_admin_panel_markup(),
         )
@@ -222,20 +232,20 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         platform = parts[3]
         file_name = COOKIE_TARGETS.get(platform)
         if not file_name:
-            await query.edit_message_text(
+            await _safe_edit(query,
                 _build_admin_panel_text(),
                 reply_markup=_build_admin_panel_markup(),
             )
             return
 
         context.user_data[ADMIN_UPLOAD_TARGET_KEY] = file_name
-        await query.edit_message_text(
+        await _safe_edit(query,
             _build_upload_instruction(file_name),
             reply_markup=_build_admin_panel_markup(file_name),
         )
         return
 
-    await query.edit_message_text(
+    await _safe_edit(query,
         _build_admin_panel_text(),
         reply_markup=_build_admin_panel_markup(),
     )
