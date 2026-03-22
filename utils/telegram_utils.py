@@ -30,7 +30,7 @@ from messages import (
     DOWNLOAD_FORMAT_PROMPT,
     BEST_QUALITY_LABEL, BEST_AUDIO_LABEL, CHOOSE_ANOTHER_FORMAT, NO_SUBTITLES_AVAILABLE,
     NO_TG_VIDEO, NO_FILESIZE, BTN_AUDIO_M4A, BTN_TG_VIDEO, BTN_MORE, TG_SEND_ERROR, BTN_BACK,
-    BTN_DOWNLOAD_VIDEO, BTN_AUDIO_ONLY, BTN_SUBTITLES, ERROR_FALLBACK, ERROR_NETWORK, ERROR_FILE_TOO_LARGE_TELEGRAM,
+    BTN_DOWNLOAD_VIDEO, BTN_DOWNLOAD_POST, BTN_AUDIO_ONLY, BTN_SUBTITLES, ERROR_FALLBACK, ERROR_NETWORK, ERROR_FILE_TOO_LARGE_TELEGRAM,
     SUBTITLE_CAPTION, MP3_MIN_LABEL, SPAM_WARNING, LARGE_FILE_DELIVERY_UNAVAILABLE,
     USER_ERROR_WITH_CODE, USER_NETWORK_ERROR_WITH_CODE, USER_FILE_ERROR_WITH_CODE, USER_TELEGRAM_ERROR_WITH_CODE,
 )
@@ -256,12 +256,17 @@ def _build_main_menu(
     duration = format_duration(int(video_info.get('duration') or 0))
 
     if platform == 'tiktok':
+        is_photo_post = bool(video_info.get("_nuvio_tiktok_photo_post"))
         keyboard = [
-            [InlineKeyboardButton(BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "tiktok_download"))],
+            [InlineKeyboardButton(BTN_DOWNLOAD_POST if is_photo_post else BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "tiktok_download"))],
             [InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "tiktok_audio"))],
             [InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))],
         ]
-        text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
+        if is_photo_post:
+            images_count = len(video_info.get("_nuvio_tiktok_images") or [])
+            text = f"*{title}*\nАвтор: {uploader}\nКадров: {images_count}\nЗвук: {'есть' if video_info.get('_nuvio_tiktok_audio_url') else 'нет'}\nДлительность: {duration}"
+        else:
+            text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
         return text, InlineKeyboardMarkup(keyboard)
 
     if platform == 'instagram':
@@ -1626,8 +1631,13 @@ async def _handle_main_callback(
 
     match action:
         case "tiktok_download":
+            is_photo_post = bool(session_data.get("video_info", {}).get("_nuvio_tiktok_photo_post"))
+            if is_photo_post:
+                await _send_photo_post_assets(query, session_token, session_data, context)
+                return
+
             # Проверяем кэш перед скачиванием
-            cache_key = _cache_format_id_for_main_action("tiktok", "tiktok_download")
+            cache_key = None if is_photo_post else _cache_format_id_for_main_action("tiktok", "tiktok_download")
             if cache_key:
                 cached = telegram_cache.get(url, format_id=cache_key)
                 if cached:
@@ -2608,6 +2618,100 @@ async def send_file(
             USER_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
+
+
+async def _send_photo_post_assets(
+    query: telegram.CallbackQuery,
+    session_token: str,
+    session_data: dict,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Отправляет TikTok фото-пост по одной картинке и затем отдельным аудио."""
+    user_id = query.from_user.id
+    url = session_data["url"]
+    session_id = session_data["session_id"]
+    back_markup = _build_back_markup(session_token)
+
+    from utils.tiktok_instagram_utils import download_tiktok_photo_post_assets
+
+    try:
+        await safe_edit_message_text(query, "⏳ Скачиваю фотографии...")
+        assets = await run_blocking(
+            download_tiktok_photo_post_assets,
+            url,
+            session_id,
+            session_data.get("video_info"),
+            description="download_tiktok_photo_post_assets",
+        )
+        image_paths = list(assets.get("images") or [])
+        audio_path = assets.get("audio")
+
+        if not image_paths:
+            raise Exception("Не удалось получить изображения для TikTok фото-поста.")
+
+        for image_path in image_paths:
+            with open(image_path, "rb") as image_file:
+                try:
+                    await query.message.reply_photo(photo=image_file, caption=None)
+                except telegram.error.BadRequest:
+                    image_file.seek(0)
+                    await query.message.reply_document(document=image_file, caption=None)
+
+        if audio_path:
+            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            with open(audio_path, "rb") as audio_file:
+                await query.message.reply_audio(audio=audio_file, caption=None)
+
+        await query.edit_message_text(FILE_SENT)
+        await _cleanup_user_session(user_id, context, session_token)
+    except (FileNotFoundError, PermissionError) as e:
+        error_code = _make_error_code("file", "ACCESS")
+        _schedule_platform_failure_log(
+            platform="tiktok",
+            stage="send_photo_post_access",
+            url=url,
+            error_code=error_code,
+            exc=e,
+            session_id=session_id,
+        )
+        await query.edit_message_text(USER_FILE_ERROR_WITH_CODE.format(error_code=error_code), reply_markup=back_markup)
+        await _cleanup_user_session(user_id, context, session_token)
+    except telegram.error.NetworkError as e:
+        error_code = _make_error_code("telegram", "NETWORK")
+        _schedule_platform_failure_log(
+            platform="tiktok",
+            stage="send_photo_post_network",
+            url=url,
+            error_code=error_code,
+            exc=e,
+            session_id=session_id,
+        )
+        await query.edit_message_text(USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code), reply_markup=back_markup)
+        await _cleanup_user_session(user_id, context, session_token)
+    except telegram.error.TelegramError as e:
+        error_code = _make_error_code("telegram", "API")
+        _schedule_platform_failure_log(
+            platform="tiktok",
+            stage="send_photo_post_telegram",
+            url=url,
+            error_code=error_code,
+            exc=e,
+            session_id=session_id,
+        )
+        await query.edit_message_text(USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code), reply_markup=back_markup)
+        await _cleanup_user_session(user_id, context, session_token)
+    except Exception as e:
+        error_code = _make_error_code("tiktok", _classify_internal_error_category("tiktok", str(e)))
+        _schedule_platform_failure_log(
+            platform="tiktok",
+            stage="send_photo_post_unexpected",
+            url=url,
+            error_code=error_code,
+            exc=e,
+            session_id=session_id,
+        )
+        await query.edit_message_text(_build_public_error_message("tiktok", error_code, str(e)), reply_markup=back_markup)
+        await _cleanup_user_session(user_id, context, session_token)
 
 
 async def send_single_file(

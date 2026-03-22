@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import config
+import pytest
 from utils import cache_commands
 from utils import cookie_health
 from utils import cookie_manager
@@ -287,6 +288,131 @@ def test_tiktok_info_requests_full_metadata(monkeypatch):
     assert info["title"] == "stub"
     assert _CapturingYDL.captured_options
     assert "extract_flat" not in _CapturingYDL.captured_options[0]
+
+
+def test_tiktok_photo_info_uses_fallback_when_yt_dlp_cannot_parse(monkeypatch):
+    class _UnsupportedPhotoYDL(_CapturingYDL):
+        def extract_info(self, url, download=False):
+            raise tiktok_instagram_utils.yt_dlp.utils.DownloadError(f"ERROR: Unsupported URL: {url}")
+
+    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _UnsupportedPhotoYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_smart_retry",
+        lambda func, max_attempts=0, context="": func(),
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_get_tiktok_base_configs",
+        lambda: [{"quiet": True, "no_warnings": True}],
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda url: "https://www.tiktok.com/@user/photo/1",
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_tiktok_photo_post_data",
+        lambda url: {
+            "id": "1",
+            "title": "Фото-пост",
+            "cover": "https://cdn.example/cover.jpg",
+            "music": "https://cdn.example/audio.mp3",
+            "images": ["https://cdn.example/1.jpg", "https://cdn.example/2.jpg"],
+            "author": {"unique_id": "tester"},
+            "music_info": {"duration": 12},
+        },
+    )
+
+    info = tiktok_instagram_utils.get_tiktok_info("https://vt.tiktok.com/example/")
+
+    assert info["_nuvio_tiktok_photo_post"] is True
+    assert info["uploader"] == "tester"
+    assert len(info["_nuvio_tiktok_images"]) == 2
+    assert info["duration"] == 12
+
+
+def test_tiktok_photo_video_download_is_rejected():
+    with pytest.raises(Exception, match="набор изображений"):
+        tiktok_instagram_utils.download_tiktok_video(
+            "https://www.tiktok.com/@user/photo/1",
+            "session-1",
+            None,
+            False,
+            {"_nuvio_tiktok_photo_post": True},
+        )
+
+
+def test_tiktok_photo_audio_short_circuits_to_photo_handler(monkeypatch):
+    called: list[tuple] = []
+    cached_info = {"_nuvio_tiktok_photo_post": True}
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "download_tiktok_photo_audio",
+        lambda *args: called.append(args) or Path("photo.m4a"),
+    )
+
+    result = tiktok_instagram_utils.download_tiktok_audio(
+        "https://www.tiktok.com/@user/photo/1",
+        "session-1",
+        None,
+        False,
+        cached_info,
+    )
+
+    assert result == Path("photo.m4a")
+    assert called
+
+
+def test_handle_main_callback_routes_tiktok_photo_to_asset_sender(monkeypatch):
+    called: list[tuple] = []
+    context = SimpleNamespace(user_data={})
+    session_token = telegram_utils._store_session(
+        context,
+        url="https://www.tiktok.com/@user/photo/1",
+        video_info={"_nuvio_tiktok_photo_post": True, "title": "Фото-пост"},
+        session_id="session-1",
+        platform="tiktok",
+        formats={},
+    )
+    query = _DummyQuery()
+
+    async def fake_send_photo_post_assets(*args):
+        called.append(args)
+
+    monkeypatch.setattr(telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets)
+
+    asyncio.run(
+        telegram_utils._handle_main_callback(
+            query,
+            context,
+            7,
+            session_token,
+            "tiktok_download",
+        )
+    )
+
+    assert called
+
+
+def test_build_main_menu_marks_tiktok_photo_post():
+    text, menu = telegram_utils._build_main_menu(
+        "tiktok",
+        {
+            "title": "Фото-пост",
+            "uploader": "tester",
+            "duration": 15,
+            "_nuvio_tiktok_photo_post": True,
+            "_nuvio_tiktok_images": ["1", "2", "3"],
+            "_nuvio_tiktok_audio_url": "https://cdn.example/audio.mp3",
+        },
+        "sessphoto",
+    )
+
+    assert "Кадров: 3" in text
+    assert menu.inline_keyboard[0][0].text == telegram_utils.BTN_DOWNLOAD_POST
 
 
 def test_instagram_info_requests_full_metadata(monkeypatch):

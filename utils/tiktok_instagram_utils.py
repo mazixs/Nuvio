@@ -2,11 +2,15 @@
 Модуль для работы с TikTok и Instagram с использованием yt-dlp.
 """
 
+import mimetypes
 import re
 import time
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 import yt_dlp
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
@@ -27,10 +31,17 @@ TIKTOK_COOKIES_FILE = TIKTOK_COOKIES_PATH
 # Константы для retry механизма
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY_BASE = 1  # секунды
+HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
+TIKWM_API_URL = "https://www.tikwm.com/api/"
 
 
 def is_valid_tiktok_url(url: str) -> bool:
     return bool(re.match(TIKTOK_URL_PATTERN, url))
+
+
+def is_tiktok_photo_url(url: str) -> bool:
+    """Проверяет, указывает ли ссылка на TikTok-фото-пост."""
+    return "/photo/" in (url or "").lower()
 
 def is_valid_instagram_url(url: str) -> bool:
     """Проверяет, является ли URL валидной ссылкой Instagram (исключая аудио ссылки)."""
@@ -128,6 +139,169 @@ def _get_tiktok_base_configs() -> list[dict]:
     ]
 
 
+def _resolve_tiktok_url(url: str) -> str:
+    """Разворачивает короткие TikTok-ссылки до конечного адреса."""
+    try:
+        response = httpx.get(
+            url,
+            headers={"User-Agent": HTTP_USER_AGENT},
+            follow_redirects=True,
+            timeout=15,
+        )
+        return str(response.url)
+    except Exception as e:
+        logger.warning("Не удалось развернуть TikTok URL %s: %s", url, e)
+        return url
+
+
+def _is_tiktok_photo_post_info(info: dict[str, Any] | None) -> bool:
+    return bool(info and info.get("_nuvio_tiktok_photo_post"))
+
+
+def _normalize_filename_component(value: str, fallback: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", (value or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned[:80] or fallback
+
+
+def _guess_extension(url: str, default_ext: str) -> str:
+    suffix = Path(urlparse(url).path).suffix.lower()
+    if suffix and len(suffix) <= 5:
+        return suffix
+    guessed = mimetypes.guess_extension(mimetypes.guess_type(url)[0] or "")
+    if guessed:
+        return guessed
+    return default_ext
+
+
+def _download_remote_file(url: str, destination: Path) -> Path:
+    with httpx.stream(
+        "GET",
+        url,
+        headers={"User-Agent": HTTP_USER_AGENT, "Referer": "https://www.tiktok.com/"},
+        follow_redirects=True,
+        timeout=60,
+    ) as response:
+        response.raise_for_status()
+        with destination.open("wb") as file:
+            for chunk in response.iter_bytes():
+                if chunk:
+                    file.write(chunk)
+    return destination
+
+
+def _fetch_tiktok_photo_post_data(url: str) -> dict[str, Any]:
+    resolved_url = _resolve_tiktok_url(url)
+
+    def _request() -> dict[str, Any]:
+        response = httpx.get(
+            TIKWM_API_URL,
+            params={"url": resolved_url},
+            headers={"User-Agent": HTTP_USER_AGENT},
+            follow_redirects=True,
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") != 0:
+            raise Exception(f"TikTok фото-пост недоступен: {payload.get('msg') or 'неизвестная ошибка'}")
+        data = payload.get("data") or {}
+        if not data.get("images"):
+            raise Exception("Сервис не вернул изображения для TikTok фото-поста.")
+        return data
+
+    return _smart_retry(_request, max_attempts=3, context="TikTok photo fallback")
+
+
+def _build_tiktok_photo_info(url: str, data: dict[str, Any]) -> dict[str, Any]:
+    author = data.get("author") or {}
+    music_info = data.get("music_info") or {}
+    duration = music_info.get("duration") or 0
+    title = (data.get("title") or "").strip() or f"TikTok фото-пост {data.get('id', '')}".strip()
+    return {
+        "id": data.get("id"),
+        "title": title,
+        "uploader": author.get("unique_id") or author.get("nickname") or "TikTok",
+        "duration": int(duration or 0),
+        "thumbnail": data.get("cover") or data.get("origin_cover"),
+        "webpage_url": _resolve_tiktok_url(url),
+        "extractor": "nuvio_tiktok_photo",
+        "_nuvio_tiktok_photo_post": True,
+        "_nuvio_tiktok_photo_data": data,
+        "_nuvio_tiktok_audio_url": data.get("music") or music_info.get("play"),
+        "_nuvio_tiktok_images": list(data.get("images") or []),
+        "formats": [],
+    }
+
+
+def _collect_tiktok_photo_assets(
+    url: str,
+    session_id: str,
+    cached_info: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[Path], Path | None]:
+    info = cached_info if _is_tiktok_photo_post_info(cached_info) else None
+    if info is None:
+        info = _build_tiktok_photo_info(url, _fetch_tiktok_photo_post_data(url))
+
+    title_seed = _normalize_filename_component(str(info.get("title") or "tiktok_photo_post"), "tiktok_photo_post")
+    image_paths: list[Path] = []
+    for index, image_url in enumerate(info.get("_nuvio_tiktok_images") or [], start=1):
+        image_path = get_temp_file_path(session_id, f"{title_seed}_{index:02d}{_guess_extension(image_url, '.jpg')}")
+        image_paths.append(_download_remote_file(image_url, image_path))
+
+    audio_url = info.get("_nuvio_tiktok_audio_url")
+    audio_path: Path | None = None
+    if audio_url:
+        audio_path = get_temp_file_path(session_id, f"{title_seed}_audio{_guess_extension(str(audio_url), '.mp3')}")
+        audio_path = _download_remote_file(str(audio_url), audio_path)
+
+    return info, image_paths, audio_path
+
+
+def _finalize_downloaded_file(file_path: Path, force_local: bool) -> Path | str:
+    file_size = file_path.stat().st_size
+    if not force_local and file_size > MAX_FILE_SIZE:
+        success, link_or_error = upload_to_gokapi(file_path)
+        if success:
+            try:
+                file_path.unlink()
+            except Exception as e:
+                logger.warning("Не удалось удалить локальный файл %s после загрузки: %s", file_path, e)
+            return link_or_error
+        raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
+    return file_path
+
+
+def download_tiktok_photo_post_assets(
+    url: str,
+    session_id: str,
+    cached_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Скачивает изображения и звук TikTok-фото-поста для поэтапной отправки."""
+    info, image_paths, audio_path = _collect_tiktok_photo_assets(url, session_id, cached_info)
+    return {
+        "info": info,
+        "images": image_paths,
+        "audio": audio_path,
+    }
+
+
+def download_tiktok_photo_audio(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+    cached_info: dict[str, Any] | None = None,
+) -> Path | str:
+    """Скачивает аудиодорожку TikTok-фото-поста."""
+    info, _image_paths, audio_path = _collect_tiktok_photo_assets(url, session_id, cached_info)
+    if output_dir is not None:
+        logger.debug("output_dir=%s передан для аудио фото-поста, используется временная директория сессии", output_dir)
+    if audio_path is None:
+        raise Exception(f"У TikTok фото-поста «{info.get('title') or 'без названия'}» нет отдельной аудиодорожки.")
+    return _finalize_downloaded_file(audio_path, force_local)
+
+
 def get_tiktok_info(url: str) -> dict[str, Any]:
     """
     Получает информацию о TikTok видео с умным retry механизмом.
@@ -139,6 +313,11 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
         Dict с метаданными видео
     """
     logger.info(f"Получение информации о TikTok видео: {url}")
+
+    resolved_url = _resolve_tiktok_url(url)
+    if is_tiktok_photo_url(resolved_url):
+        logger.info("Определён TikTok фото-пост: %s", resolved_url)
+        return _build_tiktok_photo_info(resolved_url, _fetch_tiktok_photo_post_data(resolved_url))
     
     def _try_get_info(use_cookies: bool, config: dict) -> dict[str, Any]:
         """Внутренняя функция для получения информации"""
@@ -183,6 +362,10 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
         except Exception as e:
             error_msg = str(e).lower()
             logger.warning(f"Конфигурация {attempt} неудачна: {e}")
+
+            if "unsupported url" in error_msg and is_tiktok_photo_url(resolved_url):
+                logger.info("yt-dlp не поддержал TikTok фото-пост, используем запасной путь")
+                return _build_tiktok_photo_info(resolved_url, _fetch_tiktok_photo_post_data(resolved_url))
             
             # Если это последняя конфигурация, выдаем детальную ошибку
             if attempt == len(configurations):
@@ -332,6 +515,9 @@ def download_tiktok_video(
         Path к файлу или ссылка на Gokapi
     """
     logger.info(f"Скачивание TikTok видео: {url}")
+
+    if _is_tiktok_photo_post_info(cached_info) or is_tiktok_photo_url(_resolve_tiktok_url(url)):
+        raise Exception("TikTok фото-пост нужно отправлять как набор изображений и отдельное аудио.")
 
     # Предварительная проверка: если размер файла известен и превышает лимит, а Gokapi не настроен — отказ
     if cached_info and not force_local:
@@ -566,6 +752,13 @@ def get_available_formats_tiktok(video_info: dict) -> dict:
     Returns:
         dict: Словарь с группами форматов (video_only, audio_only, combined).
     """
+    if _is_tiktok_photo_post_info(video_info):
+        return {
+            'video_only': [],
+            'audio_only': [],
+            'combined': [],
+        }
+
     formats = video_info.get('formats', [])
     video_formats = []
     audio_formats = []
@@ -634,6 +827,10 @@ def download_tiktok_audio(
         Path к M4A файлу или ссылка на Gokapi
     """
     logger.info(f"Скачивание нативного аудио (M4A) из TikTok: {url}")
+
+    if _is_tiktok_photo_post_info(cached_info) or is_tiktok_photo_url(_resolve_tiktok_url(url)):
+        logger.info("Определён TikTok фото-пост, скачиваем только аудио")
+        return download_tiktok_photo_audio(url, session_id, output_dir, force_local, cached_info)
     
     if output_dir is None:
         output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")

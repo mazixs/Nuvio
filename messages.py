@@ -95,6 +95,7 @@ BTN_AUDIO_M4A = "🎵 Скачать только звук"
 BTN_MORE = "➕ Дополнительно"
 BTN_BACK = "⬅️ Назад"
 BTN_DOWNLOAD_VIDEO = "Скачать видео"
+BTN_DOWNLOAD_POST = "Скачать пост"
 BTN_AUDIO_ONLY = "Только аудио (MP3)"
 BTN_SUBTITLES = "📝 Скачать субтитры (SRT)"
 
