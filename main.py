@@ -32,6 +32,58 @@ from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_versi
 # Настройка логирования
 logger = setup_logger(__name__, level=LOG_LEVEL)
 
+
+def _classify_polling_error(exc: telegram.error.TelegramError) -> tuple[str, str]:
+    """Классифицирует типичные сбои polling по шаблону ошибки."""
+    message = str(exc)
+    msg_lower = message.lower()
+
+    if isinstance(exc, telegram.error.Conflict):
+        return (
+            "POLLING_CONFLICT",
+            "Параллельный polling другим экземпляром или сервером с тем же токеном.",
+        )
+
+    if "server disconnected without sending a response" in msg_lower or "remoteprotocolerror" in msg_lower:
+        return (
+            "REMOTE_DISCONNECT",
+            "Bot API закрыл long polling без ответа. Частый сценарий: другой сервер перехватил polling или произошёл обрыв на переключении маршрута.",
+        )
+
+    if "connection refused" in msg_lower or "connecterror" in msg_lower:
+        return (
+            "CONNECT_REFUSED",
+            "Удалённая сторона отказала в подключении или маршрут до Bot API недоступен.",
+        )
+
+    if "timed out" in msg_lower:
+        return (
+            "TIMEOUT",
+            "Превышен таймаут ожидания ответа Bot API.",
+        )
+
+    if isinstance(exc, telegram.error.NetworkError):
+        return (
+            "NETWORK",
+            "Сетевой сбой при long polling Bot API.",
+        )
+
+    return (
+        "UNKNOWN",
+        "Неожиданная ошибка при long polling Bot API.",
+    )
+
+
+def _polling_error_callback(exc: telegram.error.TelegramError) -> None:
+    """Пишет в лог интерпретацию типовых ошибок polling-цикла."""
+    category, summary = _classify_polling_error(exc)
+    logger.warning(
+        "Ошибка polling [%s]: %s | исходное сообщение: %s",
+        category,
+        summary,
+        exc,
+    )
+
 async def scheduled_cache_cleanup(context: ContextTypes.DEFAULT_TYPE):
     """Периодическая очистка кеша (запускается раз в сутки)."""
     try:
@@ -73,6 +125,12 @@ def _build_application() -> Application:
         .connect_timeout(10.0)
         .read_timeout(120.0)
         .write_timeout(120.0)
+        .get_updates_connect_timeout(10.0)
+        .get_updates_read_timeout(120.0)
+        .get_updates_write_timeout(30.0)
+        .get_updates_pool_timeout(5.0)
+        .http_version("1.1")
+        .get_updates_http_version("1.1")
         .build()
     )
 
@@ -152,7 +210,11 @@ async def run_bot() -> None:
         if not application.updater:
             raise RuntimeError("Updater не инициализирован")
         # Явно запрашиваем все типы апдейтов, чтобы колбэки кнопок гарантированно приходили
-        await application.updater.start_polling(allowed_updates=telegram.Update.ALL_TYPES)
+        await application.updater.start_polling(
+            allowed_updates=telegram.Update.ALL_TYPES,
+            bootstrap_retries=3,
+            error_callback=_polling_error_callback,
+        )
 
         cache_stats = telegram_cache.get_stats()
         logger.info(f"💾 В кэше {cache_stats['total_videos']} видео")

@@ -32,6 +32,10 @@
   <img src="docs/screenshots/dashboard-charts_gh.png" alt="Dashboard Charts" width="900">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/phone.png" alt="Telegram Bot" height="520">
+</p>
+
 ---
 
 ## Быстрый старт
