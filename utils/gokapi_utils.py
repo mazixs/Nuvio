@@ -124,34 +124,3 @@ def upload_to_gokapi(file_path: Path) -> tuple[bool, str]:
         logger.error(f"Неожиданная ошибка при загрузке файла на Gokapi: {str(e)}", exc_info=True)
         return False, f"Неожиданная ошибка при загрузке файла: {str(e)}"
 
-
-def test_gokapi_connection() -> tuple[bool, str]:
-    """
-    Тестирует соединение с Gokapi (GET /files/list).
-    Returns:
-        tuple[bool, str]: (успех, сообщение)
-    """
-    base_url, api_key = require_gokapi_config()
-    url = base_url + "files/list"
-    headers = {"apikey": api_key}
-
-    try:
-        logger.info(f"Тестовое соединение с Gokapi: {url}")
-        response = httpx.get(url, headers=headers, timeout=30.0)
-        logger.info(f"Ответ Gokapi (test): статус={response.status_code}, тело={response.text}")
-        if response.status_code == 200:
-            return True, "Соединение с Gokapi успешно."
-        else:
-            return False, f"Ошибка соединения с Gokapi: HTTP {response.status_code}, тело: {response.text}"
-    except httpx.ConnectError as e:
-        logger.error(f"Ошибка соединения с Gokapi: {str(e)}")
-        return False, f"Ошибка соединения с Gokapi: {str(e)}"
-    except httpx.TimeoutException as e:
-        logger.error(f"Таймаут при тесте соединения с Gokapi: {str(e)}")
-        return False, f"Таймаут при тесте соединения: {str(e)}"
-    except httpx.HTTPError as e:
-        logger.error(f"Ошибка HTTP запроса к Gokapi: {str(e)}")
-        return False, f"Ошибка HTTP запроса: {str(e)}"
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при тесте соединения с Gokapi: {str(e)}", exc_info=True)
-        return False, f"Неожиданная ошибка при тесте соединения: {str(e)}"

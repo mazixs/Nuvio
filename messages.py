@@ -49,6 +49,7 @@ PROCESSING_MESSAGE = "⏳ Обрабатываю ссылку..."
 DOWNLOADING_MESSAGE = "⏳ Скачиваю видео..."
 DOWNLOADING_AUDIO_MESSAGE = "⏳ Скачиваю аудио..."
 DOWNLOADING_SUBTITLES_MESSAGE = "⏳ Скачиваю субтитры..."
+PHOTO_POST_AUDIO_UNAVAILABLE = "У этого фото-поста нет отдельной аудиодорожки."
 NO_URL_AFTER_COMMAND = "Пожалуйста, укажите URL видео после команды. Например: /download https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 SESSION_EXPIRED = "Сессия истекла или не была начата. Пожалуйста, отправьте ссылку на видео снова."
 DOWNLOAD_FORMAT_PROMPT = (

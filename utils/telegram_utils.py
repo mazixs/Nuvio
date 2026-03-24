@@ -25,6 +25,7 @@ from utils.temp_file_manager import create_temp_dir, cleanup_temp_files
 import yt_dlp
 from messages import (
     WELCOME_MESSAGE, HELP_MESSAGE, PROCESSING_MESSAGE, DOWNLOADING_MESSAGE, DOWNLOADING_AUDIO_MESSAGE, DOWNLOADING_SUBTITLES_MESSAGE,
+    PHOTO_POST_AUDIO_UNAVAILABLE,
     INVALID_URL_MESSAGE, ERROR_MESSAGE, TOO_LONG_VIDEO_MESSAGE,
     NO_URL_AFTER_COMMAND, SESSION_EXPIRED, FILE_TOO_LARGE_LINK, FILE_PREPARING, FILE_SENT,
     DOWNLOAD_FORMAT_PROMPT,
@@ -36,7 +37,8 @@ from messages import (
 )
 from utils.tiktok_instagram_utils import (
     is_valid_tiktok_url, is_valid_instagram_url, is_instagram_story_url,
-    get_tiktok_info, get_instagram_info, is_instagram_audio_url, handle_instagram_audio_url
+    get_tiktok_info, get_instagram_info, is_instagram_audio_url, handle_instagram_audio_url,
+    PhotoPostAudioMissingError,
 )
 from utils.video_cache import telegram_cache, CachedVideo
 from utils.gokapi_utils import is_gokapi_configured
@@ -257,11 +259,10 @@ def _build_main_menu(
 
     if platform == 'tiktok':
         is_photo_post = bool(video_info.get("_nuvio_tiktok_photo_post"))
-        keyboard = [
-            [InlineKeyboardButton(BTN_DOWNLOAD_POST if is_photo_post else BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "tiktok_download"))],
-            [InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "tiktok_audio"))],
-            [InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))],
-        ]
+        keyboard = [[InlineKeyboardButton(BTN_DOWNLOAD_POST if is_photo_post else BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "tiktok_download"))]]
+        if not (is_photo_post and not video_info.get("_nuvio_tiktok_audio_url")):
+            keyboard.append([InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "tiktok_audio"))])
+        keyboard.append([InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))])
         if is_photo_post:
             images_count = len(video_info.get("_nuvio_tiktok_images") or [])
             text = f"*{title}*\nАвтор: {uploader}\nКадров: {images_count}\nЗвук: {'есть' if video_info.get('_nuvio_tiktok_audio_url') else 'нет'}\nДлительность: {duration}"
@@ -270,12 +271,16 @@ def _build_main_menu(
         return text, InlineKeyboardMarkup(keyboard)
 
     if platform == 'instagram':
-        keyboard = [
-            [InlineKeyboardButton(BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "instagram_download"))],
-            [InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "instagram_audio"))],
-            [InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))],
-        ]
-        text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
+        is_photo_post = bool(video_info.get("_nuvio_instagram_photo_post"))
+        keyboard = [[InlineKeyboardButton(BTN_DOWNLOAD_POST if is_photo_post else BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "instagram_download"))]]
+        if not (is_photo_post and not video_info.get("_nuvio_instagram_audio_url")):
+            keyboard.append([InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "instagram_audio"))])
+        keyboard.append([InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))])
+        if is_photo_post:
+            images_count = len(video_info.get("_nuvio_instagram_images") or [])
+            text = f"*{title}*\nАвтор: {uploader}\nКадров: {images_count}\nЗвук: {'есть' if video_info.get('_nuvio_instagram_audio_url') else 'нет'}\nДлительность: {duration}"
+        else:
+            text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
         return text, InlineKeyboardMarkup(keyboard)
 
     keyboard = [
@@ -403,46 +408,6 @@ async def safe_edit_message_text(query: telegram.CallbackQuery, text: str, **kwa
             logger.debug("edit_message_text пропущен: текст и разметка без изменений")
             return False
         raise
-
-def _classify_platform_error(error_msg: str, platform: str) -> str | None:
-    """Классифицирует ошибку платформы и возвращает user-friendly сообщение или None."""
-    msg_lower = error_msg.lower()
-    if platform == "tiktok":
-        if "ip address is blocked" in msg_lower or "unable to extract webpage video data" in msg_lower:
-            return (
-                "🚫 **TikTok недоступен**\n\n"
-                "К сожалению, TikTok ограничил доступ к своему контенту из вашего региона.\n\n"
-                "**Это происходит из-за:**\n"
-                "• Региональных ограничений TikTok\n"
-                "• Блокировки IP-адресов\n"
-                "• Изменений в API TikTok\n\n"
-                "**Альтернативы:**\n"
-                "• Попробуйте YouTube или Instagram видео\n"
-                "• Используйте VPN для смены региона\n"
-                "• Скачайте видео вручную и отправьте боту файлом"
-            )
-    if platform == "instagram":
-        if any(kw in msg_lower for kw in ['rate-limit', 'login required', 'not available', 'sign in', 'ограничил доступ']):
-            return (
-                "🚫 **Instagram ограничения**\n\n"
-                "Instagram ограничил доступ к этому контенту.\n\n"
-                "**Возможные причины:**\n"
-                "• Превышен лимит запросов\n"
-                "• Контент требует авторизации\n"
-                "• Региональные ограничения\n"
-                "• Приватный аккаунт\n\n"
-                "**Что можно попробовать:**\n"
-                "• Подождать 10-15 минут\n"
-                "• Использовать другую ссылку\n"
-                "• Проверить, что контент публичный"
-            )
-    if "private video" in msg_lower or "private" in msg_lower:
-        return (
-            "🔒 **Приватное видео**\n\n"
-            "Это видео недоступно для скачивания, так как оно приватное или удалено."
-        )
-    return None
-
 
 def _classify_large_file_delivery_error(error_msg: str) -> str | None:
     """Возвращает понятное сообщение, если недоступна выдача больших файлов."""
@@ -1038,578 +1003,6 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
     # Если не подходит ни один из вариантов
     await update.message.reply_text(INVALID_URL_MESSAGE)
 
-async def _button_callback_legacy_unsafe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    user_id = update.effective_user.id
-    now = asyncio.get_running_loop().time()
-    if _check_spam(user_id, context, now):
-        # Отвечаем на колбэк и предупреждаем
-        await query.answer(text=SPAM_WARNING, show_alert=False)
-        return
-    logger.info(f"Получен колбэк от пользователя {user_id}: {query.data}")
-    if not all(key in context.user_data for key in ('url', 'session_id', 'video_info')):
-        await query.edit_message_text(SESSION_EXPIRED)
-        return
-    try:
-        data = query.data.split('|')
-        match data:
-            case ["main", action]:
-                formats = context.user_data.get('formats', {})
-                url = context.user_data['url']
-                session_id = context.user_data['session_id']
-                platform = context.user_data.get('platform')
-                # Проверяем наличие необходимых данных сессии
-                if not url or not session_id:
-                    await query.edit_message_text(SESSION_EXPIRED)
-                    await _cleanup_user_session(user_id, context)
-                    return
-                
-                match action:
-                    case "tiktok_download":
-                        await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
-                        from utils.tiktok_instagram_utils import download_tiktok_video
-                        try:
-                            cached_info = context.user_data.get('video_info')
-                            file_path = await run_blocking(
-                                download_tiktok_video,
-                                url,
-                                session_id,
-                                None,
-                                False,
-                                cached_info,
-                                description="download_tiktok_video",
-                            )
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        except Exception as e:
-                            logger.error(f"Ошибка при скачивании TikTok видео: {e}")
-                            error_code = _make_error_code("tiktok", _classify_internal_error_category("tiktok", str(e)))
-                            _schedule_platform_failure_log(
-                                platform="tiktok",
-                                stage="legacy_download_video",
-                                url=url,
-                                error_code=error_code,
-                                exc=e,
-                                session_id=session_id,
-                            )
-                            await query.edit_message_text(_build_public_error_message("tiktok", error_code, str(e)))
-                            await _cleanup_user_session(user_id, context)
-                        return
-
-                    case "tiktok_audio":
-                        await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-                        from utils.tiktok_instagram_utils import download_tiktok_audio
-                        try:
-                            cached_info = context.user_data.get('video_info')
-                            file_path = await run_blocking(
-                                download_tiktok_audio,
-                                url,
-                                session_id,
-                                None,
-                                False,
-                                cached_info,
-                                description="download_tiktok_audio",
-                            )
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        except Exception as e:
-                            logger.error(f"Ошибка при скачивании TikTok аудио: {e}")
-                            error_code = _make_error_code("tiktok", _classify_internal_error_category("tiktok", str(e)))
-                            _schedule_platform_failure_log(
-                                platform="tiktok",
-                                stage="legacy_download_audio",
-                                url=url,
-                                error_code=error_code,
-                                exc=e,
-                                session_id=session_id,
-                            )
-                            await query.edit_message_text(_build_public_error_message("tiktok", error_code, str(e)))
-                            await _cleanup_user_session(user_id, context)
-                        return
-                    case "instagram_download":
-                        await query.edit_message_text(DOWNLOADING_MESSAGE)
-                        from utils.tiktok_instagram_utils import download_instagram_video
-                        try:
-                            file_path = await run_blocking(
-                                download_instagram_video,
-                                url,
-                                session_id,
-                                description="download_instagram_video",
-                            )
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        except Exception as e:
-                            logger.error(f"Ошибка при скачивании Instagram видео: {e}")
-                            error_code = _make_error_code("instagram", _classify_internal_error_category("instagram", str(e)))
-                            _schedule_platform_failure_log(
-                                platform="instagram",
-                                stage="legacy_download_video",
-                                url=url,
-                                error_code=error_code,
-                                exc=e,
-                                session_id=session_id,
-                            )
-                            await query.edit_message_text(_build_public_error_message("instagram", error_code, str(e)))
-                            await _cleanup_user_session(user_id, context)
-                        return
-                    case "instagram_audio":
-                        await query.edit_message_text(DOWNLOADING_AUDIO_MESSAGE)
-                        from utils.tiktok_instagram_utils import download_instagram_audio
-                        try:
-                            file_path = await run_blocking(
-                                download_instagram_audio,
-                                url,
-                                session_id,
-                                description="download_instagram_audio",
-                            )
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        except Exception as e:
-                            logger.error(f"Ошибка при скачивании Instagram аудио: {e}")
-                            error_code = _make_error_code("instagram", _classify_internal_error_category("instagram", str(e)))
-                            _schedule_platform_failure_log(
-                                platform="instagram",
-                                stage="legacy_download_audio",
-                                url=url,
-                                error_code=error_code,
-                                exc=e,
-                                session_id=session_id,
-                            )
-                            await query.edit_message_text(_build_public_error_message("instagram", error_code, str(e)))
-                            await _cleanup_user_session(user_id, context)
-                        return
-                    case "best":
-                        await query.edit_message_text(DOWNLOADING_MESSAGE)
-                        file_path = await download_content(url, "bestvideo+bestaudio", session_id, "best")
-                        if file_path:
-                            if isinstance(file_path, str) and file_path.startswith("http"):
-                                await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                return
-                            await send_file(query, file_path, session_id, context)
-                        else:
-                            await query.edit_message_text(ERROR_MESSAGE)
-                            await _cleanup_user_session(user_id, context)
-                    case "audio_m4a":
-                        audio_only = formats.get('audio_only', [])
-                        # Приоритет нативных форматов для Telegram sendAudio: m4a > mp3 > ogg
-                        native_audio = None
-                        for ext in ['m4a', 'mp3', 'ogg']:
-                            native_audio = next((f for f in audio_only if f.get('ext') == ext), None)
-                            if native_audio:
-                                logger.info(f"Найден нативный аудио формат: {ext}")
-                                break
-                        
-                        # Fallback: если нет нативных форматов (m4a/mp3/ogg), конвертируем в mp3
-                        if not native_audio and audio_only:
-                            logger.warning(f"Нативные форматы не найдены. Доступные: {[f.get('ext') for f in audio_only]}. Конвертируем в m4a.")
-                            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-                            # Используем bestaudio с конвертацией в m4a
-                            file_path = await run_blocking(
-                                functools.partial(download_audio, preferred_codec='m4a'),
-                                url,
-                                'bestaudio',
-                                session_id,
-                                description="download_audio_bestaudio",
-                            )
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        elif native_audio:
-                            await query.edit_message_text(DOWNLOADING_AUDIO_MESSAGE)
-                            file_path = await run_blocking(
-                                download_audio_native,
-                                url,
-                                native_audio['format_id'],
-                                session_id,
-                                description="download_audio_native",
-                            )
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        else:
-                            await query.edit_message_text(ERROR_MESSAGE)
-                            await _cleanup_user_session(user_id, context)
-                    case "tg_video":
-                        combined = formats.get('combined', [])
-                        tg_video = None
-                        
-                        # Логируем доступные форматы для отладки
-                        logger.info("Доступные combined форматы для tg_video:")
-                        for i, f in enumerate(combined):
-                            logger.info(f"  {i}: {f.get('format_id')} - {f.get('height')}p - {f.get('ext')} - размер: {f.get('filesize')} байт")
-                        
-                        # НОВАЯ ЛОГИКА: Сначала пробуем комбинированный подход для лучшего качества
-                        video_only = formats.get('video_only', [])
-                        audio_only = formats.get('audio_only', [])
-                        
-                        # Ищем подходящие video_only форматы
-                        suitable_video = []
-                        for v in video_only:
-                            size = v.get('filesize')
-                            if size is not None and size <= 35 * 1024 * 1024:  # Оставляем место для аудио
-                                suitable_video.append(v)
-                        
-                        # Ищем подходящий аудио формат
-                        suitable_audio = None
-                        for a in audio_only:
-                            size = a.get('filesize')
-                            if size is not None and size <= 15 * 1024 * 1024:  # Аудио обычно меньше
-                                suitable_audio = a
-                                break
-                        
-                        # Если можем собрать комбинированный формат лучшего качества
-                        if suitable_video and suitable_audio:
-                            # Выбираем лучшее видео качество
-                            best_video = max(suitable_video, key=lambda x: x.get('height', 0))
-                            video_size = best_video.get('filesize') / (1024 * 1024)
-                            audio_size = suitable_audio.get('filesize') / (1024 * 1024)
-                            total_size = video_size + audio_size
-                            
-                            logger.info(f"Комбинированный подход: видео {best_video['format_id']} ({best_video.get('height')}p, {video_size:.1f} МБ) + аудио {suitable_audio['format_id']} ({audio_size:.1f} МБ) = {total_size:.1f} МБ")
-                            
-                            # Используем специальный формат для объединения
-                            tg_video = {
-                                'format_id': f"{best_video['format_id']}+{suitable_audio['format_id']}",
-                                'height': best_video.get('height'),
-                                'ext': best_video.get('ext', 'mp4'),
-                                'type': 'combined_manual'
-                            }
-                            logger.info(f"Выбран комбинированный формат: {tg_video.get('format_id')} - {tg_video.get('height')}p")
-                            
-                            # Пробуем скачать комбинированный формат
-                            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
-                            try:
-                                file_path = await download_content(url, tg_video['format_id'], session_id, "combined")
-                            except Exception as e:
-                                error_code = _youtube_error_code(str(e))
-                                logger.warning(
-                                    "YT_DL_STAGE_FAIL code=%s stage=tg_video_manual_combined format_id=%s url=%s error=%s",
-                                    error_code,
-                                    tg_video['format_id'],
-                                    url,
-                                    e,
-                                    exc_info=True,
-                                )
-                                file_path = None
-                            
-                            # Если комбинированный формат не сработал, переключаемся на готовые форматы
-                            if not file_path:
-                                tg_video = None  # Сбрасываем для fallback логики
-                            else:
-                                # Успешно скачали комбинированный формат
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                                return
-                        
-                        # Fallback логика: используем готовые combined форматы
-                        if not tg_video:
-                            suitable_formats = []
-                            formats_without_size = []
-                            
-                            for f in combined:
-                                size = f.get('filesize')
-                                if size is not None and size <= 50 * 1024 * 1024:
-                                    suitable_formats.append(f)
-                                    logger.info(f"Подходящий combined формат: {f.get('format_id')} - {f.get('height')}p - {size/1024/1024:.1f} МБ")
-                                elif size is None:
-                                    formats_without_size.append(f)
-                            
-                            if suitable_formats:
-                                # Выбираем формат с наибольшим разрешением среди подходящих
-                                tg_video = max(suitable_formats, key=lambda x: x.get('height', 0))
-                                logger.info(f"Выбран готовый combined формат: {tg_video.get('format_id')} - {tg_video.get('height')}p")
-                            elif formats_without_size:
-                                # Если нет combined форматов с известным размером, берем формат среднего качества из combined
-                                formats_without_size.sort(key=lambda x: x.get('height', 0))
-                                middle_index = len(formats_without_size) // 3
-                                tg_video = formats_without_size[middle_index] if formats_without_size else None
-                                if tg_video:
-                                    logger.info(f"Выбран резервный формат (размер неизвестен): {tg_video.get('format_id')} - {tg_video.get('height')}p")
-                        
-                        if tg_video:
-                            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
-                            file_path = await download_content(url, tg_video['format_id'], session_id, "combined")
-                            if file_path:
-                                if isinstance(file_path, str) and file_path.startswith("http"):
-                                    await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                                    return
-                                await send_file(query, file_path, session_id, context)
-                            else:
-                                await query.edit_message_text(ERROR_MESSAGE)
-                                await _cleanup_user_session(user_id, context)
-                        else:
-                            if any(f.get('filesize') is None for f in combined):
-                                keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-                                await safe_edit_message_text(query, NO_FILESIZE, reply_markup=InlineKeyboardMarkup(keyboard))
-                            else:
-                                keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-                                await safe_edit_message_text(query, NO_TG_VIDEO, reply_markup=InlineKeyboardMarkup(keyboard))
-                    case "more":
-                        # Сформировать расширенную клавиатуру (старый вариант)
-                        keyboard = []
-                        added_button_labels = set()
-                        combined_count = 0
-                        for fmt in formats.get('combined', []):
-                            label = f"📹+🔊 {fmt.get('height', 'N/A')}p - {fmt.get('ext', 'mp4').upper()}"
-                            if label not in added_button_labels:
-                                if combined_count < 3:
-                                    callback_data = f"format|combined|{fmt['format_id']}"
-                                    keyboard.append([
-                                        InlineKeyboardButton(label, callback_data=callback_data)
-                                    ])
-                                    added_button_labels.add(label)
-                                    combined_count += 1
-                                else:
-                                    break
-                        video_only_count = 0
-                        for fmt in formats.get('video_only', []):
-                            label = f"📹 {fmt.get('height', 'N/A')}p - {fmt.get('ext', 'mp4').upper()} (без звука)"
-                            if label not in added_button_labels:
-                                if video_only_count < 3:
-                                    callback_data = f"format|video_only|{fmt['format_id']}"
-                                    keyboard.append([
-                                        InlineKeyboardButton(label, callback_data=callback_data)
-                                    ])
-                                    added_button_labels.add(label)
-                                    video_only_count += 1
-                                else:
-                                    break
-                        audio_only = formats.get('audio_only', [])
-                        audio_only_count = 0
-                        for fmt in audio_only:
-                            label = f"🔊 Только аудио - {fmt.get('ext', 'm4a').upper()}"
-                            if label not in added_button_labels:
-                                if audio_only_count < 2:
-                                    callback_data = f"format|audio_only|{fmt['format_id']}"
-                                    keyboard.append([
-                                        InlineKeyboardButton(label, callback_data=callback_data)
-                                    ])
-                                    added_button_labels.add(label)
-                                    audio_only_count += 1
-                                else:
-                                    break
-                        # Добавляю кнопку для mp3 (минимальный размер)
-                        if audio_only:
-                            min_m4a = min([f for f in audio_only if f.get('ext') == 'm4a'], key=lambda x: x.get('filesize', float('inf')), default=None)
-                            if min_m4a:
-                                mp3_label = MP3_MIN_LABEL
-                                callback_data = f"format|mp3_min|{min_m4a['format_id']}"
-                                keyboard.append([
-                                    InlineKeyboardButton(mp3_label, callback_data=callback_data)
-                                ])
-                        best_label = BEST_QUALITY_LABEL if is_gokapi_configured() else BEST_QUALITY_LABEL + " (может не влезть в ТГ)"
-                        keyboard.append([
-                            InlineKeyboardButton(best_label, callback_data="format|best|best")
-                        ])
-                        keyboard.append([
-                            InlineKeyboardButton(BEST_AUDIO_LABEL, callback_data="format|audio_best|bestaudio")
-                        ])
-                        # Добавляю кнопку скачивания субтитров
-                        keyboard.append([
-                            InlineKeyboardButton("📝 Скачать субтитры (SRT)", callback_data="main|subtitles")
-                        ])
-                        # Добавляю кнопку назад
-                        keyboard.append([
-                            InlineKeyboardButton(BTN_BACK, callback_data="main|back")
-                        ])
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        video_info = context.user_data['video_info']
-                        await query.edit_message_text(
-                            DOWNLOAD_FORMAT_PROMPT.format(
-                                title=video_info.get('title', 'Video'),
-                                duration=format_duration(video_info.get('duration', 0))
-                            ),
-                            reply_markup=reply_markup,
-                            parse_mode='Markdown'
-                        )
-                    case "subtitles":
-                        await query.edit_message_text(DOWNLOADING_SUBTITLES_MESSAGE)
-                        try:
-                            subtitle_file = await run_blocking(
-                                download_subtitles,
-                                url,
-                                session_id,
-                                description="download_subtitles",
-                            )
-                            if subtitle_file and subtitle_file.exists():
-                                await query.edit_message_text(FILE_PREPARING)
-                                # Отправляем субтитры как документ
-                                with open(subtitle_file, 'rb') as srt_file:
-                                    await query.message.reply_document(
-                                        document=srt_file,
-                                        caption=SUBTITLE_CAPTION
-                                    )
-                                await query.edit_message_text(FILE_SENT)
-                                # Удаляем файл после отправки
-                                try:
-                                    subtitle_file.unlink()
-                                except Exception as e:
-                                    logger.error(f"Ошибка удаления файла субтитров: {e}")
-                                await _cleanup_user_session(user_id, context)
-                            else:
-                                keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-                                await query.edit_message_text(NO_SUBTITLES_AVAILABLE, reply_markup=InlineKeyboardMarkup(keyboard))
-                        except Exception as e:
-                            logger.error(f"Ошибка скачивания субтитров: {e}", exc_info=True)
-                            keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-                            await query.edit_message_text(NO_SUBTITLES_AVAILABLE, reply_markup=InlineKeyboardMarkup(keyboard))
-                    case "back":
-                        platform = context.user_data.get('platform', 'youtube')
-                        video_info = context.user_data['video_info']
-                        text, reply_markup = _build_main_menu(platform, video_info)
-                        await safe_edit_message_text(
-                            query,
-                            text,
-                            reply_markup=reply_markup,
-                            parse_mode='Markdown',
-                        )
-                        return
-                    case _:
-                        await query.edit_message_text(ERROR_MESSAGE)
-                        await _cleanup_user_session(user_id, context)
-            case ["format", content_type, format_id]:
-                if content_type == "mp3_min":
-                    await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-                    url = context.user_data['url']
-                    session_id = context.user_data['session_id']
-                    formats = context.user_data.get('formats', {})
-                    audio_only = formats.get('audio_only', [])
-                    min_m4a = next((f for f in audio_only if f.get('format_id') == format_id and f.get('ext') == 'm4a'), None)
-                    if min_m4a:
-                        # Скачиваем m4a локально, не загружаем на Gokapi
-                        m4a_path = await run_blocking(
-                            download_audio,
-                            url,
-                            min_m4a['format_id'],
-                            session_id,
-                            True,
-                            description="download_audio_min",
-                        )
-                        # Конвертируем и сжимаем в mp3 (50%)
-                        mp3_path = await run_blocking(
-                            convert_to_mp3_with_compression,
-                            m4a_path,
-                            session_id,
-                            description="convert_to_mp3_with_compression",
-                        )
-                        # Удаляем исходный m4a после конвертации
-                        try:
-                            m4a_path.unlink()
-                        except Exception:
-                            pass
-                        await send_file(query, mp3_path, session_id, context)
-                    else:
-                        await query.edit_message_text(ERROR_MESSAGE)
-                        await _cleanup_user_session(user_id, context)
-                    return
-                else:
-                    if content_type in ("audio_only", "audio_best"):
-                        await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-                    else:
-                        await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
-                try:
-                    url = context.user_data['url']
-                    session_id = context.user_data['session_id']
-                    file_path = None
-                    match content_type:
-                        case "combined":
-                            file_path = await download_content(url, format_id, session_id, "combined")
-                        case "video_only":
-                            file_path = await download_content(url, format_id, session_id, "video_only")
-                        case "audio_only":
-                            file_path = await download_content(url, format_id, session_id, "audio_only")
-                        case "best":
-                            file_path = await download_content(url, "bestvideo+bestaudio", session_id, "best")
-                        case "audio_best":
-                            file_path = await download_content(url, "bestaudio", session_id, "audio_best")
-                    if file_path:
-                        if isinstance(file_path, str) and file_path.startswith("http"):
-                            await query.edit_message_text(FILE_TOO_LARGE_LINK.format(file_path=file_path))
-                            return
-                        await send_file(query, file_path, session_id, context)
-                    else:
-                        await query.edit_message_text(ERROR_MESSAGE)
-                        await _cleanup_user_session(user_id, context)
-                except Exception as e:
-                    e.add_note(f"user_id={user_id}, url={url}, session_id={session_id}")
-                    logger.error(f"Ошибка при скачивании: {e}", exc_info=True)
-                    error_code = _make_error_code("youtube", _classify_internal_error_category("youtube", str(e)))
-                    _schedule_platform_failure_log(
-                        platform="youtube",
-                        stage="legacy_download",
-                        url=url,
-                        error_code=error_code,
-                        exc=e,
-                        session_id=session_id,
-                    )
-                    await query.edit_message_text(_build_public_error_message("youtube", error_code, str(e)))
-                    await _cleanup_user_session(user_id, context)
-            case _:
-                await query.edit_message_text(ERROR_MESSAGE)
-                await _cleanup_user_session(user_id, context)
-    except Exception as e:
-        logger.error(f"Ошибка в button_callback: {e}", exc_info=True)
-        error_msg = str(e)
-        
-        # Специальная обработка для ошибок парсинга Markdown
-        if "Can't parse entities" in error_msg:
-            try:
-                await query.edit_message_text(
-                    "❌ Ошибка отображения информации о видео.\n"
-                    "Попробуйте другую ссылку или повторите попытку.",
-                    parse_mode=None  # Отключаем Markdown
-                )
-            except Exception:
-                await query.edit_message_text(ERROR_FALLBACK)
-        elif classified := _classify_youtube_error(error_msg):
-            try:
-                await query.edit_message_text(classified, parse_mode='Markdown')
-            except Exception:
-                await query.edit_message_text(ERROR_FALLBACK)
-        else:
-            try:
-                await query.edit_message_text(f"❌ {ERROR_MESSAGE}")
-            except Exception:
-                await query.edit_message_text(ERROR_FALLBACK)
-        
-        await _cleanup_user_session(user_id, context)
-
 async def _handle_main_callback(
     query: telegram.CallbackQuery,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1713,6 +1106,9 @@ async def _handle_main_callback(
                     await _cleanup_user_session(user_id, context, session_token)
                     return
                 await send_file(query, file_path, session_token, session_data, context, cache_format_id="tiktok_audio")
+            except PhotoPostAudioMissingError:
+                await query.edit_message_text(PHOTO_POST_AUDIO_UNAVAILABLE, reply_markup=back_markup)
+                await _cleanup_user_session(user_id, context, session_token)
             except Exception as e:
                 error_code = _make_error_code("tiktok", _classify_internal_error_category("tiktok", str(e)))
                 _schedule_platform_failure_log(
@@ -1728,8 +1124,13 @@ async def _handle_main_callback(
             return
 
         case "instagram_download":
+            is_photo_post = bool(session_data.get("video_info", {}).get("_nuvio_instagram_photo_post"))
+            if is_photo_post:
+                await _send_photo_post_assets(query, session_token, session_data, context)
+                return
+
             # Проверяем кэш перед скачиванием
-            cache_key = _cache_format_id_for_main_action("instagram", "instagram_download")
+            cache_key = None if is_photo_post else _cache_format_id_for_main_action("instagram", "instagram_download")
             if cache_key:
                 cached = telegram_cache.get(url, format_id=cache_key)
                 if cached:
@@ -1755,6 +1156,9 @@ async def _handle_main_callback(
                     download_instagram_video,
                     url,
                     session_id,
+                    None,
+                    False,
+                    session_data.get('video_info'),
                     description="download_instagram_video",
                 )
                 if not file_path:
@@ -1770,6 +1174,9 @@ async def _handle_main_callback(
                     cache_format_id=_cache_format_id_for_main_action("instagram", "instagram_download"),
                 )
             except Exception as e:
+                if "фото-пост нужно отправлять" in str(e).lower():
+                    await _send_photo_post_assets(query, session_token, session_data, context)
+                    return
                 error_code = _make_error_code("instagram", _classify_internal_error_category("instagram", str(e)))
                 _schedule_platform_failure_log(
                     platform="instagram",
@@ -1792,6 +1199,9 @@ async def _handle_main_callback(
                     download_instagram_audio,
                     url,
                     session_id,
+                    None,
+                    False,
+                    session_data.get('video_info'),
                     description="download_instagram_audio",
                 )
                 if not file_path:
@@ -1799,6 +1209,9 @@ async def _handle_main_callback(
                     await _cleanup_user_session(user_id, context, session_token)
                     return
                 await send_file(query, file_path, session_token, session_data, context, cache_format_id="instagram_audio")
+            except PhotoPostAudioMissingError:
+                await query.edit_message_text(PHOTO_POST_AUDIO_UNAVAILABLE, reply_markup=back_markup)
+                await _cleanup_user_session(user_id, context, session_token)
             except Exception as e:
                 error_code = _make_error_code("instagram", _classify_internal_error_category("instagram", str(e)))
                 _schedule_platform_failure_log(
@@ -2296,239 +1709,6 @@ async def download_content(
         )
         raise
 
-async def _send_file_legacy_unsafe(
-    query: telegram.CallbackQuery, 
-    file_path: Path | str,
-    session_id: str,
-    context: ContextTypes.DEFAULT_TYPE # Добавил context для очистки сессии
-) -> None:
-    """
-    Отправляет файл пользователю.
-    
-    Args:
-        query (telegram.CallbackQuery): Объект колбэк-запроса.
-        file_path (Path | str): Путь к файлу или ссылка.
-        session_id (str): Идентификатор сессии.
-    """
-    user_id = query.from_user.id
-    try:
-        # Если файл был загружен на Gokapi (возвращается ссылка)
-        if isinstance(file_path, str) and file_path.startswith("http"):
-            await query.edit_message_text(
-                FILE_TOO_LARGE_LINK.format(file_path=file_path)
-            )
-            return
-        
-        # Отправка одного файла (Path)
-        if isinstance(file_path, Path):
-            await query.edit_message_text(FILE_PREPARING)
-            await asyncio.sleep(1)
-            success = await send_single_file(query, file_path, context=context)
-            if success:
-                await query.edit_message_text(FILE_SENT)
-                await _cleanup_user_session(user_id, context)
-            else:
-                await _cleanup_user_session(user_id, context)
-        else:
-            # Случай, если file_path не строка-ссылка и не Path, что маловероятно тут
-            logger.error(f"Неожиданный тип file_path в send_file: {type(file_path)}")
-            await query.edit_message_text(ERROR_MESSAGE)
-            await _cleanup_user_session(user_id, context)
-            
-    except (FileNotFoundError, PermissionError) as e:
-        error_code = _make_error_code("file", "ACCESS")
-        _schedule_platform_failure_log("file", error_code, "legacy_send_file", e, session_id=session_id)
-        await query.edit_message_text(USER_FILE_ERROR_WITH_CODE.format(error_code=error_code))
-        await _cleanup_user_session(user_id, context)
-    except telegram.error.NetworkError as e:
-        error_code = _make_error_code("telegram", "NETWORK")
-        _schedule_platform_failure_log("telegram", error_code, "legacy_send_file", e, session_id=session_id)
-        await query.edit_message_text(USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code))
-        await _cleanup_user_session(user_id, context)
-    except telegram.error.TelegramError as e:
-        error_code = _make_error_code("telegram", "API")
-        _schedule_platform_failure_log("telegram", error_code, "legacy_send_file", e, session_id=session_id)
-        await query.edit_message_text(USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code))
-        await _cleanup_user_session(user_id, context)
-    except Exception as e:
-        error_code = _make_error_code("bot", "SEND")
-        _schedule_platform_failure_log("bot", error_code, "legacy_send_file", e, session_id=session_id)
-        await query.edit_message_text(USER_ERROR_WITH_CODE.format(error_code=error_code))
-        await _cleanup_user_session(user_id, context)
-
-async def _send_single_file_legacy_unsafe(
-    query: telegram.CallbackQuery, 
-    file_path: Path,
-    caption_prefix: str = "",
-    context: ContextTypes.DEFAULT_TYPE = None,
-    max_retries: int = 3
-) -> bool:
-    """
-    Отправляет один файл пользователю с retry логикой.
-    
-    Args:
-        query (telegram.CallbackQuery): Объект колбэк-запроса.
-        file_path (Path): Путь к файлу.
-        caption_prefix (str, optional): Префикс для подписи к файлу. По умолчанию "".
-        context (ContextTypes.DEFAULT_TYPE, optional): Контекст для сохранения в кэш.
-        max_retries (int): Максимальное количество попыток отправки.
-    """
-    last_error: Exception | None = None
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            file_ext = file_path.suffix.lower()
-            message = None
-            
-            if file_ext in ['.mp4', '.webm', '.mkv', '.avi', '.mov']:
-                with open(file_path, 'rb') as video_file:
-                    message = await query.message.reply_video(
-                        video=video_file,
-                        caption=None,
-                        supports_streaming=True,
-                        write_timeout=300,
-                        read_timeout=300
-                    )
-            elif file_ext in ['.mp3', '.m4a', '.wav', '.ogg']:
-                with open(file_path, 'rb') as audio_file:
-                    message = await query.message.reply_audio(
-                        audio=audio_file,
-                        caption=None
-                    )
-            else:
-                with open(file_path, 'rb') as document_file:
-                    message = await query.message.reply_document(
-                        document=document_file,
-                        caption=None
-                    )
-
-            # === СОХРАНЕНИЕ В КЭШ после успешной отправки ===
-            if context and message:
-                url = context.user_data.get('url')
-                video_info = context.user_data.get('video_info')
-                platform = context.user_data.get('platform', 'youtube')
-                file_id = None
-                file_unique_id = None
-                file_size = None
-                duration = None
-
-                if message.video:
-                    file_id = message.video.file_id
-                    file_unique_id = message.video.file_unique_id
-                    file_size = message.video.file_size
-                    duration = message.video.duration
-                elif message.audio:
-                    file_id = message.audio.file_id
-                    file_unique_id = message.audio.file_unique_id
-                    file_size = message.audio.file_size
-                    duration = message.audio.duration
-                elif message.document:
-                    file_id = message.document.file_id
-                    file_unique_id = message.document.file_unique_id
-                    file_size = message.document.file_size
-
-                if url and file_id:
-                    try:
-                        cached = CachedVideo(
-                            url=url,
-                            file_id=file_id,
-                            file_unique_id=file_unique_id,
-                            platform=platform,
-                            format_id='best',
-                            cached_at=datetime.now(),
-                            file_size=file_size,
-                            duration=duration,
-                            title=video_info.get('title') if video_info else None,
-                        )
-                        telegram_cache.set(cached)
-                        logger.info("💾 Файл сохранён в кэш: %s -> %s", url, file_id)
-                    except Exception as e:
-                        logger.error("Ошибка сохранения в кэш: %s", e)
-
-            # Успешная отправка - выходим из цикла
-            return True
-                
-        except (telegram.error.NetworkError, telegram.error.TimedOut) as e:
-            last_error = e
-            logger.warning(f"Попытка {attempt}/{max_retries} неудачна: {e}")
-            if attempt < max_retries:
-                await asyncio.sleep(2 ** attempt)
-            continue
-        except (FileNotFoundError, PermissionError) as e:
-            error_code = _make_error_code("file", "ACCESS")
-            _schedule_platform_failure_log(
-                "file",
-                error_code,
-                "legacy_send_single_file",
-                e,
-                url=context.user_data.get('url') if context else None,
-                session_id=context.user_data.get('session_token') if context else None,
-            )
-            keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-            await query.edit_message_text(
-                USER_FILE_ERROR_WITH_CODE.format(error_code=error_code),
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-            return False
-        except telegram.error.BadRequest as e:
-            logger.error(f"Неверный запрос при отправке файла {file_path}: {e}", exc_info=True)
-            keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-            if "file too large" in str(e).lower():
-                await query.edit_message_text(ERROR_FILE_TOO_LARGE_TELEGRAM, reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                await query.edit_message_text(TG_SEND_ERROR, reply_markup=InlineKeyboardMarkup(keyboard))
-            return False
-        except telegram.error.TelegramError as e:
-            error_code = _make_error_code("telegram", "API")
-            _schedule_platform_failure_log(
-                "telegram",
-                error_code,
-                "legacy_send_single_file",
-                e,
-                url=context.user_data.get('url') if context else None,
-                session_id=context.user_data.get('session_token') if context else None,
-            )
-            keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-            await query.edit_message_text(
-                USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code),
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-            return False
-        except Exception as e:
-            error_code = _make_error_code("bot", "SEND")
-            _schedule_platform_failure_log(
-                "bot",
-                error_code,
-                "legacy_send_single_file",
-                e,
-                url=context.user_data.get('url') if context else None,
-                session_id=context.user_data.get('session_token') if context else None,
-            )
-            keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-            await query.edit_message_text(
-                USER_ERROR_WITH_CODE.format(error_code=error_code),
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-            return False
-    
-    # Все попытки исчерпаны
-    if last_error:
-        error_code = _make_error_code("telegram", "NETWORK")
-        _schedule_platform_failure_log(
-            "telegram",
-            error_code,
-            "legacy_send_single_file_retry",
-            last_error,
-            url=context.user_data.get('url') if context else None,
-            session_id=context.user_data.get('session_token') if context else None,
-        )
-        keyboard = [[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]]
-        await query.edit_message_text(
-            USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code),
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-    return False
-
 async def send_file(
     query: telegram.CallbackQuery,
     file_path: Path | str,
@@ -2622,32 +1802,46 @@ async def send_file(
 
 async def _send_photo_post_assets(
     query: telegram.CallbackQuery,
-    session_token: str,
+    session_token: str | None,
     session_data: dict,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    """Отправляет TikTok фото-пост по одной картинке и затем отдельным аудио."""
+    """Отправляет фото-пост по одной картинке и затем отдельным аудио."""
     user_id = query.from_user.id
     url = session_data["url"]
     session_id = session_data["session_id"]
-    back_markup = _build_back_markup(session_token)
+    platform = session_data.get("platform", "tiktok")
+    back_markup = (
+        _build_back_markup(session_token)
+        if session_token
+        else InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK, callback_data="main|back")]])
+    )
 
-    from utils.tiktok_instagram_utils import download_tiktok_photo_post_assets
+    if platform == "instagram":
+        from utils.tiktok_instagram_utils import download_instagram_photo_post_assets as download_photo_post_assets
+        downloading_photos_message = "⏳ Скачиваю фотографии..."
+        empty_images_message = "Не удалось получить изображения для Instagram фото-поста."
+        platform_for_errors = "instagram"
+    else:
+        from utils.tiktok_instagram_utils import download_tiktok_photo_post_assets as download_photo_post_assets
+        downloading_photos_message = "⏳ Скачиваю фотографии..."
+        empty_images_message = "Не удалось получить изображения для TikTok фото-поста."
+        platform_for_errors = "tiktok"
 
     try:
-        await safe_edit_message_text(query, "⏳ Скачиваю фотографии...")
+        await safe_edit_message_text(query, downloading_photos_message)
         assets = await run_blocking(
-            download_tiktok_photo_post_assets,
+            download_photo_post_assets,
             url,
             session_id,
             session_data.get("video_info"),
-            description="download_tiktok_photo_post_assets",
+            description=f"download_{platform}_photo_post_assets",
         )
         image_paths = list(assets.get("images") or [])
         audio_path = assets.get("audio")
 
         if not image_paths:
-            raise Exception("Не удалось получить изображения для TikTok фото-поста.")
+            raise Exception(empty_images_message)
 
         for image_path in image_paths:
             with open(image_path, "rb") as image_file:
@@ -2667,7 +1861,7 @@ async def _send_photo_post_assets(
     except (FileNotFoundError, PermissionError) as e:
         error_code = _make_error_code("file", "ACCESS")
         _schedule_platform_failure_log(
-            platform="tiktok",
+            platform=platform_for_errors,
             stage="send_photo_post_access",
             url=url,
             error_code=error_code,
@@ -2679,7 +1873,7 @@ async def _send_photo_post_assets(
     except telegram.error.NetworkError as e:
         error_code = _make_error_code("telegram", "NETWORK")
         _schedule_platform_failure_log(
-            platform="tiktok",
+            platform=platform_for_errors,
             stage="send_photo_post_network",
             url=url,
             error_code=error_code,
@@ -2691,7 +1885,7 @@ async def _send_photo_post_assets(
     except telegram.error.TelegramError as e:
         error_code = _make_error_code("telegram", "API")
         _schedule_platform_failure_log(
-            platform="tiktok",
+            platform=platform_for_errors,
             stage="send_photo_post_telegram",
             url=url,
             error_code=error_code,
@@ -2701,16 +1895,16 @@ async def _send_photo_post_assets(
         await query.edit_message_text(USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code), reply_markup=back_markup)
         await _cleanup_user_session(user_id, context, session_token)
     except Exception as e:
-        error_code = _make_error_code("tiktok", _classify_internal_error_category("tiktok", str(e)))
+        error_code = _make_error_code(platform_for_errors, _classify_internal_error_category(platform_for_errors, str(e)))
         _schedule_platform_failure_log(
-            platform="tiktok",
+            platform=platform_for_errors,
             stage="send_photo_post_unexpected",
             url=url,
             error_code=error_code,
             exc=e,
             session_id=session_id,
         )
-        await query.edit_message_text(_build_public_error_message("tiktok", error_code, str(e)), reply_markup=back_markup)
+        await query.edit_message_text(_build_public_error_message(platform_for_errors, error_code, str(e)), reply_markup=back_markup)
         await _cleanup_user_session(user_id, context, session_token)
 
 
@@ -2901,3 +2095,4 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     
     return text
+

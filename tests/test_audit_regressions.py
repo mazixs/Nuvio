@@ -366,6 +366,295 @@ def test_tiktok_photo_audio_short_circuits_to_photo_handler(monkeypatch):
     assert called
 
 
+def test_instagram_info_falls_back_to_photo_post(monkeypatch):
+    class _NoVideoInstagramYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise Exception("ERROR: [Instagram] DWLd9IYDVeD: There is no video in this post")
+
+    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _NoVideoInstagramYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_instagram_photo_post_media",
+        lambda url: {
+            "id": "ig-photo-1",
+            "shortcode": "DWLd9IYDVeD",
+            "owner": {"username": "tester"},
+            "display_resources": [
+                {"src": "https://cdn.example/1-small.jpg", "config_width": 640},
+                {"src": "https://cdn.example/1-large.jpg", "config_width": 1080},
+            ],
+            "edge_media_to_caption": {"edges": [{"node": {"text": "Фото-пост Instagram"}}]},
+            "clips_metadata": {
+                "music_info": {
+                    "music_asset_info": {
+                        "progressive_download_url": "https://cdn.example/audio.m4a",
+                    }
+                }
+            },
+        },
+    )
+
+    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/p/DWLd9IYDVeD/")
+
+    assert info["_nuvio_instagram_photo_post"] is True
+    assert info["uploader"] == "tester"
+    assert info["_nuvio_instagram_images"] == ["https://cdn.example/1-large.jpg"]
+    assert info["_nuvio_instagram_audio_url"] == "https://cdn.example/audio.m4a"
+
+
+def test_instagram_info_rate_limit_falls_back_to_photo_post(monkeypatch):
+    class _RateLimitedInstagramYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise Exception(
+                "ERROR: [Instagram] DWLd9IYDVeD: Requested content is not available, "
+                "rate-limit reached or login required."
+            )
+
+    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _RateLimitedInstagramYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "INSTAGRAM_COOKIES_FILE",
+        Path(r"C:\definitely-missing-instagram-cookies.txt"),
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_instagram_photo_post_media",
+        lambda url: {
+            "id": "ig-photo-2",
+            "shortcode": "DWLd9IYDVeD",
+            "owner": {"username": "tester"},
+            "display_url": "https://cdn.example/cover.jpg",
+            "caption": "Фото-пост без звука",
+        },
+    )
+
+    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/p/DWLd9IYDVeD/")
+
+    assert info["_nuvio_instagram_photo_post"] is True
+    assert info["_nuvio_instagram_images"] == ["https://cdn.example/cover.jpg"]
+    assert info["_nuvio_instagram_audio_url"] is None
+
+
+def test_instagram_info_empty_playlist_falls_back_to_photo_post(monkeypatch):
+    class _EmptyPlaylistInstagramYDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {
+                "_type": "playlist",
+                "entries": [],
+                "title": "Post by hamiboom.world",
+            }
+
+    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _EmptyPlaylistInstagramYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_instagram_photo_post_media",
+        lambda url: {
+            "id": "ig-photo-3",
+            "shortcode": "DTgni55AKmO",
+            "owner": {"username": "tester"},
+            "carousel_media": [
+                {"image_versions2": {"candidates": [{"url": "https://cdn.example/1.jpg", "width": 1080}]}}
+            ],
+        },
+    )
+
+    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/p/DTgni55AKmO")
+
+    assert info["_nuvio_instagram_photo_post"] is True
+    assert info["_nuvio_instagram_images"] == ["https://cdn.example/1.jpg"]
+
+
+def test_fetch_instagram_photo_post_media_falls_back_to_webpage_meta(monkeypatch):
+    class _FakeResponse:
+        text = (
+            '<meta property="og:image" content="https://cdn.example/post.jpg" />'
+            '<meta property="og:description" content="12 likes - tester on March 20, 2026: &quot;Подпись&quot;." />'
+            '<meta property="og:title" content="Тестовый пост on Instagram: &quot;Подпись&quot;" />'
+            '<meta property="al:ios:url" content="instagram://media?id=1234567890" />'
+        )
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "INSTAGRAM_COOKIES_FILE",
+        Path(r"C:\definitely-missing-instagram-cookies.txt"),
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_public_instagram_graphql_media",
+        lambda canonical_url, shortcode: (_ for _ in ()).throw(Exception("401 Unauthorized")),
+    )
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", lambda *args, **kwargs: _FakeResponse())
+
+    media = tiktok_instagram_utils._fetch_instagram_photo_post_media("https://www.instagram.com/p/ABC123/")
+
+    assert media["display_url"] == "https://cdn.example/post.jpg"
+    assert media["owner"] == {"username": "tester"}
+    assert media["id"] == "1234567890"
+
+
+def test_fetch_public_instagram_graphql_media_returns_first_item(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "xdt_api__v1__media__shortcode__web_info": {
+                        "items": [
+                            {
+                                "id": "123",
+                                "carousel_media": [
+                                    {"image_versions2": {"candidates": [{"url": "https://cdn.example/1.jpg", "width": 1080}]}}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, params=None):
+            assert url == tiktok_instagram_utils.INSTAGRAM_GRAPHQL_URL
+            assert params["doc_id"] == tiktok_instagram_utils.INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID
+            return _FakeResponse()
+
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "Client", _FakeClient)
+
+    media = tiktok_instagram_utils._fetch_public_instagram_graphql_media(
+        "https://www.instagram.com/p/ABC123/",
+        "ABC123",
+    )
+
+    assert media["id"] == "123"
+    assert media["carousel_media"][0]["image_versions2"]["candidates"][0]["url"] == "https://cdn.example/1.jpg"
+
+
+def test_instagram_photo_audio_short_circuits_to_photo_handler(monkeypatch):
+    called: list[tuple] = []
+    cached_info = {"_nuvio_instagram_photo_post": True}
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "download_instagram_photo_audio",
+        lambda *args: called.append(args) or Path("instagram-photo.m4a"),
+    )
+
+    result = tiktok_instagram_utils.download_instagram_audio(
+        "https://www.instagram.com/p/DWLd9IYDVeD/",
+        "session-ig",
+        None,
+        False,
+        cached_info,
+    )
+
+    assert result == Path("instagram-photo.m4a")
+    assert called
+
+
+def test_build_instagram_photo_info_collects_sidecar_images():
+    info = tiktok_instagram_utils._build_instagram_photo_info(
+        "https://www.instagram.com/p/ABC123/",
+        {
+            "shortcode": "ABC123",
+            "owner": {"username": "tester"},
+            "edge_sidecar_to_children": {
+                "edges": [
+                    {
+                        "node": {
+                            "display_resources": [
+                                {"src": "https://cdn.example/1-small.jpg", "config_width": 640},
+                                {"src": "https://cdn.example/1-large.jpg", "config_width": 1080},
+                            ],
+                            "is_video": False,
+                        }
+                    },
+                    {
+                        "node": {
+                            "display_url": "https://cdn.example/2.jpg",
+                            "is_video": False,
+                        }
+                    },
+                    {
+                        "node": {
+                            "display_url": "https://cdn.example/video-thumb.jpg",
+                            "video_url": "https://cdn.example/video.mp4",
+                            "is_video": True,
+                        }
+                    },
+                ]
+            },
+        },
+    )
+
+    assert info["_nuvio_instagram_photo_post"] is True
+    assert info["_nuvio_instagram_images"] == [
+        "https://cdn.example/1-large.jpg",
+        "https://cdn.example/2.jpg",
+    ]
+
+
+def test_build_instagram_photo_info_deduplicates_signed_image_variants():
+    info = tiktok_instagram_utils._build_instagram_photo_info(
+        "https://www.instagram.com/p/ABC123/",
+        {
+            "shortcode": "ABC123",
+            "owner": {"username": "tester"},
+            "edge_sidecar_to_children": {
+                "edges": [
+                    {"node": {"display_url": "https://cdn.example/photo.jpg?sig=1", "is_video": False}},
+                    {"node": {"display_url": "https://cdn.example/photo.jpg?sig=2", "is_video": False}},
+                    {"node": {"display_url": "https://cdn.example/photo-2.jpg?sig=3", "is_video": False}},
+                ]
+            },
+        },
+    )
+
+    assert info["_nuvio_instagram_images"] == [
+        "https://cdn.example/photo.jpg?sig=1",
+        "https://cdn.example/photo-2.jpg?sig=3",
+    ]
+
+
 def test_handle_main_callback_routes_tiktok_photo_to_asset_sender(monkeypatch):
     called: list[tuple] = []
     context = SimpleNamespace(user_data={})
@@ -397,6 +686,73 @@ def test_handle_main_callback_routes_tiktok_photo_to_asset_sender(monkeypatch):
     assert called
 
 
+def test_handle_main_callback_routes_instagram_photo_to_asset_sender(monkeypatch):
+    called: list[tuple] = []
+    context = SimpleNamespace(user_data={})
+    session_token = telegram_utils._store_session(
+        context,
+        url="https://www.instagram.com/p/DWLd9IYDVeD/",
+        video_info={"_nuvio_instagram_photo_post": True, "title": "Фото-пост"},
+        session_id="session-ig",
+        platform="instagram",
+        formats={},
+    )
+    query = _DummyQuery()
+
+    async def fake_send_photo_post_assets(*args):
+        called.append(args)
+
+    monkeypatch.setattr(telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets)
+
+    asyncio.run(
+        telegram_utils._handle_main_callback(
+            query,
+            context,
+            7,
+            session_token,
+            "instagram_download",
+        )
+    )
+
+    assert called
+
+
+def test_handle_main_callback_reroutes_instagram_photo_exception_to_asset_sender(monkeypatch):
+    called: list[tuple] = []
+    context = SimpleNamespace(user_data={})
+    session_token = telegram_utils._store_session(
+        context,
+        url="https://www.instagram.com/p/DTgni55AKmO",
+        video_info={"title": "Пост"},
+        session_id="session-ig-empty-playlist",
+        platform="instagram",
+        formats={},
+    )
+    query = _DummyQuery()
+
+    async def fake_send_photo_post_assets(*args):
+        called.append(args)
+
+    def fake_download_instagram_video(*args, **kwargs):
+        raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.")
+
+    monkeypatch.setattr(telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets)
+    monkeypatch.setattr(telegram_utils.telegram_cache, "get", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tiktok_instagram_utils, "download_instagram_video", fake_download_instagram_video)
+
+    asyncio.run(
+        telegram_utils._handle_main_callback(
+            query,
+            context,
+            7,
+            session_token,
+            "instagram_download",
+        )
+    )
+
+    assert called
+
+
 def test_build_main_menu_marks_tiktok_photo_post():
     text, menu = telegram_utils._build_main_menu(
         "tiktok",
@@ -413,6 +769,97 @@ def test_build_main_menu_marks_tiktok_photo_post():
 
     assert "Кадров: 3" in text
     assert menu.inline_keyboard[0][0].text == telegram_utils.BTN_DOWNLOAD_POST
+
+
+def test_build_main_menu_hides_tiktok_audio_button_without_audio():
+    _text, menu = telegram_utils._build_main_menu(
+        "tiktok",
+        {
+            "title": "Фото-пост",
+            "uploader": "tester",
+            "duration": 15,
+            "_nuvio_tiktok_photo_post": True,
+            "_nuvio_tiktok_images": ["1", "2", "3"],
+            "_nuvio_tiktok_audio_url": None,
+        },
+        "sessphoto",
+    )
+
+    buttons = [button.text for row in menu.inline_keyboard for button in row]
+    assert telegram_utils.BTN_AUDIO_ONLY not in buttons
+
+
+def test_build_main_menu_marks_instagram_photo_post():
+    text, menu = telegram_utils._build_main_menu(
+        "instagram",
+        {
+            "title": "Фото-пост",
+            "uploader": "tester",
+            "duration": 15,
+            "_nuvio_instagram_photo_post": True,
+            "_nuvio_instagram_images": ["1", "2"],
+            "_nuvio_instagram_audio_url": "https://cdn.example/audio.m4a",
+        },
+        "sessigphoto",
+    )
+
+    assert "Кадров: 2" in text
+    assert menu.inline_keyboard[0][0].text == telegram_utils.BTN_DOWNLOAD_POST
+
+
+def test_build_main_menu_hides_instagram_audio_button_without_audio():
+    _text, menu = telegram_utils._build_main_menu(
+        "instagram",
+        {
+            "title": "Фото-пост",
+            "uploader": "tester",
+            "duration": 15,
+            "_nuvio_instagram_photo_post": True,
+            "_nuvio_instagram_images": ["1", "2"],
+            "_nuvio_instagram_audio_url": None,
+        },
+        "sessigphoto",
+    )
+
+    buttons = [button.text for row in menu.inline_keyboard for button in row]
+    assert telegram_utils.BTN_AUDIO_ONLY not in buttons
+
+
+def test_handle_main_callback_reports_missing_instagram_photo_audio_without_failure_log(monkeypatch):
+    logged: list[tuple] = []
+    context = SimpleNamespace(user_data={})
+    session_token = telegram_utils._store_session(
+        context,
+        url="https://www.instagram.com/p/DWLd9IYDVeD/",
+        video_info={
+            "_nuvio_instagram_photo_post": True,
+            "_nuvio_instagram_audio_url": None,
+            "title": "Фото-пост",
+        },
+        session_id="session-ig-audio",
+        platform="instagram",
+        formats={},
+    )
+    query = _DummyQuery()
+
+    def fake_download_instagram_audio(*args, **kwargs):
+        raise tiktok_instagram_utils.PhotoPostAudioMissingError()
+
+    monkeypatch.setattr(tiktok_instagram_utils, "download_instagram_audio", fake_download_instagram_audio)
+    monkeypatch.setattr(telegram_utils, "_schedule_platform_failure_log", lambda *args, **kwargs: logged.append((args, kwargs)))
+
+    asyncio.run(
+        telegram_utils._handle_main_callback(
+            query,
+            context,
+            7,
+            session_token,
+            "instagram_audio",
+        )
+    )
+
+    assert not logged
+    assert query.edits[-1][0] == telegram_utils.PHOTO_POST_AUDIO_UNAVAILABLE
 
 
 def test_instagram_info_requests_full_metadata(monkeypatch):

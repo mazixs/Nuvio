@@ -2,9 +2,11 @@
 Модуль для работы с TikTok и Instagram с использованием yt-dlp.
 """
 
+import json
 import mimetypes
 import re
 import time
+from html import unescape
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
@@ -12,6 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 import yt_dlp
+from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.gokapi_utils import upload_to_gokapi, is_gokapi_configured
@@ -32,7 +35,14 @@ TIKTOK_COOKIES_FILE = TIKTOK_COOKIES_PATH
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY_BASE = 1  # секунды
 HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
+INSTAGRAM_PUBLIC_PAGE_USER_AGENT = HTTP_USER_AGENT
 TIKWM_API_URL = "https://www.tikwm.com/api/"
+INSTAGRAM_GRAPHQL_URL = "https://www.instagram.com/graphql/query/"
+INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID = "26072308439129654"
+
+
+class PhotoPostAudioMissingError(Exception):
+    """У фото-поста нет отдельной аудиодорожки."""
 
 
 def is_valid_tiktok_url(url: str) -> bool:
@@ -158,6 +168,23 @@ def _is_tiktok_photo_post_info(info: dict[str, Any] | None) -> bool:
     return bool(info and info.get("_nuvio_tiktok_photo_post"))
 
 
+def _is_instagram_photo_post_info(info: dict[str, Any] | None) -> bool:
+    return bool(info and info.get("_nuvio_instagram_photo_post"))
+
+
+def _is_instagram_empty_playlist_result(info: dict[str, Any] | None) -> bool:
+    if not info:
+        return False
+    if info.get("_type") != "playlist" and "entries" not in info:
+        return False
+
+    entries = [entry for entry in (info.get("entries") or []) if entry]
+    if entries:
+        return False
+
+    return not bool(info.get("formats"))
+
+
 def _normalize_filename_component(value: str, fallback: str) -> str:
     cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", (value or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
@@ -174,11 +201,11 @@ def _guess_extension(url: str, default_ext: str) -> str:
     return default_ext
 
 
-def _download_remote_file(url: str, destination: Path) -> Path:
+def _download_remote_file(url: str, destination: Path, referer: str | None = None) -> Path:
     with httpx.stream(
         "GET",
         url,
-        headers={"User-Agent": HTTP_USER_AGENT, "Referer": "https://www.tiktok.com/"},
+        headers={"User-Agent": HTTP_USER_AGENT, "Referer": referer or "https://www.tiktok.com/"},
         follow_redirects=True,
         timeout=60,
     ) as response:
@@ -258,6 +285,394 @@ def _collect_tiktok_photo_assets(
     return info, image_paths, audio_path
 
 
+def _extract_instagram_shortcode(url: str) -> str | None:
+    match = re.search(r"instagram\.com/(?:[^/?#]+/)?(?:p|tv|reels?)/([^/?#&]+)", url, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _search_html_meta(webpage: str, *, attribute: str, name: str) -> str | None:
+    patterns = (
+        rf'<meta[^>]+{attribute}="{re.escape(name)}"[^>]+content="([^"]+)"',
+        rf'<meta[^>]+content="([^"]+)"[^>]+{attribute}="{re.escape(name)}"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, webpage, re.IGNORECASE)
+        if match:
+            return unescape(match.group(1))
+    return None
+
+
+def _extract_instagram_username_from_meta(*values: str | None) -> str | None:
+    for value in values:
+        if not value:
+            continue
+        match = re.search(r"-\s*([A-Za-z0-9._]+)\s+on\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}:", value)
+        if match:
+            return match.group(1)
+        match = re.search(r"\(@([A-Za-z0-9._]+)\)", value)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _extract_instagram_media_id_from_meta(webpage: str) -> str | None:
+    app_url = _search_html_meta(webpage, attribute="property", name="al:ios:url")
+    if not app_url:
+        return None
+    match = re.search(r"instagram://media\?id=(\d+)", app_url)
+    return match.group(1) if match else None
+
+
+def _fetch_instagram_photo_page_media(canonical_url: str, shortcode: str) -> dict[str, Any]:
+    response = httpx.get(
+        canonical_url,
+        headers={"User-Agent": INSTAGRAM_PUBLIC_PAGE_USER_AGENT, "Referer": "https://www.instagram.com/"},
+        follow_redirects=True,
+        timeout=20,
+    )
+    response.raise_for_status()
+    webpage = response.text
+
+    image_url = (
+        _search_html_meta(webpage, attribute="property", name="og:image")
+        or _search_html_meta(webpage, attribute="name", name="twitter:image")
+    )
+    if not image_url:
+        raise Exception("Instagram не вернул изображение фото-поста.")
+
+    description = (
+        _search_html_meta(webpage, attribute="property", name="og:description")
+        or _search_html_meta(webpage, attribute="name", name="description")
+        or _search_html_meta(webpage, attribute="property", name="og:title")
+    )
+    title = (
+        _search_html_meta(webpage, attribute="property", name="og:title")
+        or _search_html_meta(webpage, attribute="name", name="twitter:title")
+    )
+    username = _extract_instagram_username_from_meta(description, title)
+    media_id = _extract_instagram_media_id_from_meta(webpage)
+
+    media: dict[str, Any] = {
+        "shortcode": shortcode,
+        "display_url": image_url,
+        "owner": {"username": username} if username else {},
+        "caption": description,
+    }
+    if title:
+        media["title"] = title
+    if media_id:
+        media["id"] = media_id
+    return media
+
+
+def _is_instagram_no_video_error(error_msg: str) -> bool:
+    msg = (error_msg or "").lower()
+    return any(signature in msg for signature in (
+        "there is no video in this post",
+        "no video formats found",
+        "фото-пост нужно отправлять",
+    ))
+
+
+def _extract_instagram_description(media: dict[str, Any]) -> str | None:
+    caption = media.get("caption")
+    if isinstance(caption, dict):
+        text = caption.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    elif isinstance(caption, str) and caption.strip():
+        return caption.strip()
+
+    edges = ((media.get("edge_media_to_caption") or {}).get("edges") or [])
+    for edge in edges:
+        node = edge.get("node") or {}
+        text = node.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
+def _build_instagram_photo_title(media: dict[str, Any], shortcode: str | None) -> str:
+    title = media.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+
+    description = _extract_instagram_description(media)
+    if description:
+        first_line = next((line.strip() for line in description.splitlines() if line.strip()), "")
+        if first_line:
+            return first_line[:120]
+
+    return f"Instagram пост {shortcode or 'photo'}".strip()
+
+
+def _choose_best_instagram_image_url(media: dict[str, Any]) -> str | None:
+    candidates = list(((media.get("image_versions2") or {}).get("candidates") or []))
+    if not candidates:
+        candidates = list(media.get("display_resources") or [])
+
+    if candidates:
+        best = max(
+            candidates,
+            key=lambda item: item.get("width") or item.get("config_width") or 0,
+        )
+        return best.get("url") or best.get("src")
+
+    for key in ("display_url", "thumbnail_src", "thumbnail"):
+        value = media.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _instagram_image_identity(image_url: str) -> str:
+    parsed = urlparse(image_url)
+    return f"{parsed.netloc}{parsed.path}".lower()
+
+
+def _iter_instagram_photo_nodes(media: dict[str, Any]) -> list[dict[str, Any]]:
+    carousel_media = media.get("carousel_media")
+    if isinstance(carousel_media, list) and carousel_media:
+        return [
+            node for node in carousel_media
+            if isinstance(node, dict)
+            and not node.get("is_video")
+            and not node.get("video_versions")
+            and not node.get("video_url")
+        ]
+
+    edges = ((media.get("edge_sidecar_to_children") or {}).get("edges") or [])
+    if edges:
+        return [
+            node for edge in edges
+            if isinstance(edge, dict)
+            for node in [edge.get("node") or {}]
+            if isinstance(node, dict)
+            and not node.get("is_video")
+            and not node.get("video_url")
+        ]
+
+    return [media]
+
+
+def _extract_instagram_photo_images(media: dict[str, Any]) -> list[str]:
+    image_urls: list[str] = []
+    seen_urls: set[str] = set()
+
+    for node in _iter_instagram_photo_nodes(media):
+        image_url = _choose_best_instagram_image_url(node)
+        identity = _instagram_image_identity(image_url) if image_url else None
+        if image_url and identity and identity not in seen_urls:
+            seen_urls.add(identity)
+            image_urls.append(image_url)
+
+    return image_urls
+
+
+def _iter_nested_leaves(value: Any, path: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], Any]]:
+    if isinstance(value, dict):
+        items: list[tuple[tuple[str, ...], Any]] = []
+        for key, nested_value in value.items():
+            items.extend(_iter_nested_leaves(nested_value, (*path, str(key))))
+        return items
+    if isinstance(value, list):
+        items = []
+        for index, nested_value in enumerate(value):
+            items.extend(_iter_nested_leaves(nested_value, (*path, str(index))))
+        return items
+    return [(path, value)]
+
+
+def _extract_instagram_audio_url(media: dict[str, Any]) -> str | None:
+    direct_paths = (
+        ("clips_metadata", "music_info", "music_asset_info", "progressive_download_url"),
+        ("clips_metadata", "music_info", "music_asset_info", "url"),
+        ("clips_metadata", "original_sound_info", "progressive_download_url"),
+        ("clips_metadata", "original_sound_info", "url"),
+        ("music_info", "music_asset_info", "progressive_download_url"),
+        ("music_info", "music_asset_info", "url"),
+        ("music_metadata", "music_info", "music_asset_info", "progressive_download_url"),
+        ("audio_asset_info", "progressive_download_url"),
+        ("audio_asset_info", "url"),
+        ("audio_url",),
+    )
+
+    for path in direct_paths:
+        current: Any = media
+        for key in path:
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(key)
+        if isinstance(current, str) and current.startswith("http"):
+            return current
+
+    for path, value in _iter_nested_leaves(media):
+        if not isinstance(value, str) or not value.startswith("http"):
+            continue
+        normalized_path = ".".join(path).lower()
+        if "progressive_download_url" in normalized_path:
+            return value
+        if any(token in normalized_path for token in ("audio", "music", "sound", "song", "track")) and not any(
+            token in normalized_path for token in ("display", "image", "thumbnail", "profile_pic")
+        ):
+            return value
+
+    return None
+
+
+def _fetch_public_instagram_graphql_media(canonical_url: str, shortcode: str) -> dict[str, Any]:
+    with httpx.Client(
+        headers={
+            "User-Agent": INSTAGRAM_PUBLIC_PAGE_USER_AGENT,
+            "X-IG-App-ID": "936619743392459",
+            "X-ASBD-ID": "359341",
+            "Accept": "*/*",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": canonical_url,
+        },
+        follow_redirects=True,
+        timeout=20,
+    ) as client:
+        response = client.get(
+            INSTAGRAM_GRAPHQL_URL,
+            params={
+                "doc_id": INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID,
+                "variables": json.dumps({"shortcode": shortcode}, separators=(",", ":")),
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    web_info = ((payload.get("data") or {}).get("xdt_api__v1__media__shortcode__web_info") or {})
+    items = web_info.get("items") or []
+    if not items:
+        raise Exception("Instagram не вернул данные фото-поста.")
+    return items[0]
+
+
+def _fetch_instagram_photo_post_media(url: str) -> dict[str, Any]:
+    shortcode = _extract_instagram_shortcode(url)
+    if not shortcode:
+        raise Exception("Не удалось определить shortcode Instagram поста.")
+    canonical_url = f"https://www.instagram.com/p/{shortcode}/"
+
+    product_media = None
+    if INSTAGRAM_COOKIES_FILE.exists():
+        try:
+            with yt_dlp.YoutubeDL({
+                "quiet": True,
+                "no_warnings": True,
+                "cookiefile": str(INSTAGRAM_COOKIES_FILE),
+            }) as ydl:
+                ie = ydl.get_info_extractor("Instagram")
+                if ie._get_cookies(canonical_url).get("sessionid"):
+                    payload = ie._download_json(
+                        f"{ie._API_BASE_URL}/media/{_instagram_shortcode_to_pk(shortcode)}/info/",
+                        shortcode,
+                        fatal=False,
+                        errnote=False,
+                        note="Downloading Instagram photo post info",
+                        headers=ie._api_headers,
+                    ) or {}
+                    items = payload.get("items") or []
+                    if items:
+                        product_media = items[0]
+        except Exception as e:
+            logger.debug("Не удалось получить Instagram media/info для фото-поста %s: %s", url, e)
+
+    if product_media and _extract_instagram_photo_images(product_media):
+        return product_media
+
+    try:
+        media = _smart_retry(
+            lambda: _fetch_public_instagram_graphql_media(canonical_url, shortcode),
+            max_attempts=3,
+            context="Instagram photo metadata",
+        )
+        if _extract_instagram_photo_images(media):
+            return media
+    except Exception as graph_error:
+        logger.warning("Instagram GraphQL недоступен для %s: %s", url, graph_error)
+
+    media = _smart_retry(
+        lambda: _fetch_instagram_photo_page_media(canonical_url, shortcode),
+        max_attempts=2,
+        context="Instagram photo page",
+    )
+    if _extract_instagram_photo_images(media):
+        return media
+    raise Exception("Instagram не вернул изображение фото-поста.")
+
+
+def _build_instagram_photo_info(url: str, media: dict[str, Any]) -> dict[str, Any]:
+    shortcode = _extract_instagram_shortcode(url) or str(media.get("shortcode") or media.get("code") or "")
+    owner = media.get("owner") or media.get("user") or {}
+    description = _extract_instagram_description(media)
+    images = _extract_instagram_photo_images(media)
+    if not images:
+        raise Exception("Не удалось получить изображения для Instagram фото-поста.")
+
+    duration = media.get("video_duration") or media.get("music_metadata", {}).get("music_duration_in_ms") or 0
+    duration = int(float(duration or 0) / 1000) if isinstance(duration, (int, float)) and duration > 1000 else int(float(duration or 0))
+
+    return {
+        "id": media.get("id") or shortcode,
+        "title": _build_instagram_photo_title(media, shortcode),
+        "uploader": owner.get("username") or owner.get("full_name") or "Instagram",
+        "duration": duration,
+        "thumbnail": images[0],
+        "webpage_url": url,
+        "description": description,
+        "extractor": "nuvio_instagram_photo",
+        "_nuvio_instagram_photo_post": True,
+        "_nuvio_instagram_photo_data": media,
+        "_nuvio_instagram_images": images,
+        "_nuvio_instagram_audio_url": _extract_instagram_audio_url(media),
+        "formats": [],
+    }
+
+
+def _try_get_instagram_photo_info(url: str) -> dict[str, Any] | None:
+    try:
+        media = _fetch_instagram_photo_post_media(url)
+    except Exception as e:
+        logger.debug("Не удалось собрать запасные данные Instagram фото-поста %s: %s", url, e)
+        return None
+
+    if media.get("video_url") or media.get("video_versions") or media.get("video_dash_manifest"):
+        return None
+    if media.get("is_video") is True and not media.get("edge_sidecar_to_children") and not media.get("carousel_media"):
+        return None
+    if not _extract_instagram_photo_images(media):
+        return None
+    return _build_instagram_photo_info(url, media)
+
+
+def _collect_instagram_photo_assets(
+    url: str,
+    session_id: str,
+    cached_info: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[Path], Path | None]:
+    info = cached_info if _is_instagram_photo_post_info(cached_info) else None
+    if info is None:
+        info = _build_instagram_photo_info(url, _fetch_instagram_photo_post_media(url))
+
+    title_seed = _normalize_filename_component(str(info.get("title") or "instagram_photo_post"), "instagram_photo_post")
+    image_paths: list[Path] = []
+    for index, image_url in enumerate(info.get("_nuvio_instagram_images") or [], start=1):
+        image_path = get_temp_file_path(session_id, f"{title_seed}_{index:02d}{_guess_extension(image_url, '.jpg')}")
+        image_paths.append(_download_remote_file(image_url, image_path, referer="https://www.instagram.com/"))
+
+    audio_url = info.get("_nuvio_instagram_audio_url")
+    audio_path: Path | None = None
+    if audio_url:
+        audio_path = get_temp_file_path(session_id, f"{title_seed}_audio{_guess_extension(str(audio_url), '.m4a')}")
+        audio_path = _download_remote_file(str(audio_url), audio_path, referer="https://www.instagram.com/")
+
+    return info, image_paths, audio_path
+
+
 def _finalize_downloaded_file(file_path: Path, force_local: bool) -> Path | str:
     file_size = file_path.stat().st_size
     if not force_local and file_size > MAX_FILE_SIZE:
@@ -298,7 +713,37 @@ def download_tiktok_photo_audio(
     if output_dir is not None:
         logger.debug("output_dir=%s передан для аудио фото-поста, используется временная директория сессии", output_dir)
     if audio_path is None:
-        raise Exception(f"У TikTok фото-поста «{info.get('title') or 'без названия'}» нет отдельной аудиодорожки.")
+        raise PhotoPostAudioMissingError(f"У TikTok фото-поста «{info.get('title') or 'без названия'}» нет отдельной аудиодорожки.")
+    return _finalize_downloaded_file(audio_path, force_local)
+
+
+def download_instagram_photo_post_assets(
+    url: str,
+    session_id: str,
+    cached_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Скачивает изображения и звук Instagram фото-поста для поэтапной отправки."""
+    info, image_paths, audio_path = _collect_instagram_photo_assets(url, session_id, cached_info)
+    return {
+        "info": info,
+        "images": image_paths,
+        "audio": audio_path,
+    }
+
+
+def download_instagram_photo_audio(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+    cached_info: dict[str, Any] | None = None,
+) -> Path | str:
+    """Скачивает аудиодорожку Instagram фото-поста."""
+    info, _image_paths, audio_path = _collect_instagram_photo_assets(url, session_id, cached_info)
+    if output_dir is not None:
+        logger.debug("output_dir=%s передан для аудио фото-поста Instagram, используется временная директория сессии", output_dir)
+    if audio_path is None:
+        raise PhotoPostAudioMissingError(f"У Instagram фото-поста «{info.get('title') or 'без названия'}» нет отдельной аудиодорожки.")
     return _finalize_downloaded_file(audio_path, force_local)
 
 
@@ -435,11 +880,20 @@ def get_instagram_info(url: str) -> dict[str, Any]:
     try:
         logger.info("Пробуем получить информацию об Instagram видео без cookies.")
         info = _get_info(False)
+        if _is_instagram_photo_post_info(info):
+            return info
+        if _is_instagram_empty_playlist_result(info):
+            if photo_info := _try_get_instagram_photo_info(url):
+                logger.info("Instagram вернул пустой плейлист, переключаемся на фото-пост: %s", url)
+                return photo_info
         logger.info("Информация об Instagram видео успешно получена.")
         return info
     except Exception as e:
         error_msg = str(e).lower()
         logger.warning(f"Ошибка получения информации без cookies: {e}")
+        if photo_info := _try_get_instagram_photo_info(url):
+            logger.info("Определён Instagram фото-пост, используем запасной путь: %s", url)
+            return photo_info
         
         # Проверяем на специфичные ошибки Instagram, требующие авторизации
         if any(keyword in error_msg for keyword in ['rate-limit', 'login required', 'not available', 'sign in', 'private']):
@@ -448,9 +902,18 @@ def get_instagram_info(url: str) -> dict[str, Any]:
                 try:
                     logger.info("Пробуем с cookies файлом...")
                     info = _get_info(True)
+                    if _is_instagram_photo_post_info(info):
+                        return info
+                    if _is_instagram_empty_playlist_result(info):
+                        if photo_info := _try_get_instagram_photo_info(url):
+                            logger.info("Instagram вернул пустой плейлист после попытки с cookies, переключаемся на фото-пост: %s", url)
+                            return photo_info
                     logger.info("Информация об Instagram видео успешно получена с cookies.")
                     return info
                 except Exception as e_cookie:
+                    if photo_info := _try_get_instagram_photo_info(url):
+                        logger.info("Определён Instagram фото-пост после попытки с cookies: %s", url)
+                        return photo_info
                     logger.error(f"Ошибка даже с cookies: {e_cookie}")
                     raise Exception(
                         "Instagram ограничил доступ к этому контенту даже с авторизацией. "
@@ -485,9 +948,18 @@ def get_instagram_info(url: str) -> dict[str, Any]:
                 try:
                     logger.info("Пробуем с cookies файлом для других ошибок...")
                     info = _get_info(True)
+                    if _is_instagram_photo_post_info(info):
+                        return info
+                    if _is_instagram_empty_playlist_result(info):
+                        if photo_info := _try_get_instagram_photo_info(url):
+                            logger.info("Instagram вернул пустой плейлист после запасной попытки с cookies, переключаемся на фото-пост: %s", url)
+                            return photo_info
                     logger.info("Информация об Instagram видео успешно получена с cookies.")
                     return info
                 except Exception as e_cookie:
+                    if photo_info := _try_get_instagram_photo_info(url):
+                        logger.info("Определён Instagram фото-пост после запасной попытки с cookies: %s", url)
+                        return photo_info
                     logger.error(f"Ошибка даже с cookies: {e_cookie}")
                     raise
             else:
@@ -606,8 +1078,18 @@ def download_tiktok_video(
     raise Exception("Не удалось скачать TikTok видео")
 
 
-def download_instagram_video(url: str, session_id: str, output_dir: Path | None = None, force_local: bool = False) -> Path | str:
+def download_instagram_video(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+    cached_info: dict[str, Any] | None = None,
+) -> Path | str:
     logger.info(f"Скачивание Instagram видео: {url}")
+
+    if _is_instagram_photo_post_info(cached_info) or _is_instagram_empty_playlist_result(cached_info):
+        raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.")
+
     if output_dir is None:
         output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")
     else:
@@ -643,6 +1125,8 @@ def download_instagram_video(url: str, session_id: str, output_dir: Path | None 
             info = ydl.extract_info(url, download=True)
 
             # Для stories и плейлистов yt-dlp может вернуть entries
+            if _is_instagram_empty_playlist_result(info):
+                raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.")
             actual_info = info
             if info.get('_type') == 'playlist' or 'entries' in info:
                 entries = list(info.get('entries', []))
@@ -702,6 +1186,8 @@ def download_instagram_video(url: str, session_id: str, output_dir: Path | None 
     except Exception as e:
         error_msg = str(e).lower()
         logger.warning(f"Ошибка скачивания без cookies: {e}")
+        if _is_instagram_no_video_error(error_msg):
+            raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.") from e
         
         # Проверяем на специфичные ошибки Instagram, требующие авторизации
         if any(keyword in error_msg for keyword in ['rate-limit', 'login required', 'not available', 'sign in', 'private']):
@@ -711,6 +1197,8 @@ def download_instagram_video(url: str, session_id: str, output_dir: Path | None 
                     logger.info("Пробуем скачать с cookies файлом...")
                     return _download(True)
                 except Exception as e_cookie:
+                    if _is_instagram_no_video_error(str(e_cookie)):
+                        raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.") from e_cookie
                     logger.error(f"Ошибка скачивания даже с cookies: {e_cookie}")
                     raise Exception(
                         "Instagram ограничил доступ к этому контенту даже с авторизацией. "
@@ -738,6 +1226,8 @@ def download_instagram_video(url: str, session_id: str, output_dir: Path | None 
                     logger.info("Пробуем скачать с cookies файлом для других ошибок...")
                     return _download(True)
                 except Exception as e_cookie:
+                    if _is_instagram_no_video_error(str(e_cookie)):
+                        raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.") from e_cookie
                     logger.error(f"Ошибка скачивания даже с cookies: {e_cookie}")
                     raise
             else:
@@ -918,7 +1408,13 @@ def download_tiktok_audio(
     raise Exception("Не удалось скачать TikTok аудио")
 
 
-def download_instagram_audio(url: str, session_id: str, output_dir: Path | None = None, force_local: bool = False) -> Path | str:
+def download_instagram_audio(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+    cached_info: dict[str, Any] | None = None,
+) -> Path | str:
     """
     Скачивает только аудио из Instagram видео в нативном формате M4A (AAC).
     Приоритет: M4A с copy (без перекодирования) > MP3 (fallback).
@@ -935,9 +1431,13 @@ def download_instagram_audio(url: str, session_id: str, output_dir: Path | None 
     import subprocess
     
     logger.info(f"Скачивание нативного аудио (M4A) из Instagram: {url}")
+
+    if _is_instagram_photo_post_info(cached_info) or _is_instagram_empty_playlist_result(cached_info):
+        logger.info("Определён Instagram фото-пост, скачиваем только аудио")
+        return download_instagram_photo_audio(url, session_id, output_dir, force_local, cached_info)
     
     # Сначала скачиваем видео
-    video_file = download_instagram_video(url, session_id, output_dir, force_local=True)
+    video_file = download_instagram_video(url, session_id, output_dir, force_local=True, cached_info=cached_info)
     
     # Если получили ссылку вместо файла, возвращаем её
     if isinstance(video_file, str) and video_file.startswith("http"):

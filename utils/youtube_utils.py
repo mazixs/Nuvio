@@ -99,21 +99,6 @@ def is_valid_youtube_url(url: str) -> bool:
     """
     return bool(re.match(YOUTUBE_URL_PATTERN, url))
 
-def extract_video_id(url: str) -> str | None:
-    """
-    Извлекает идентификатор видео из YouTube URL.
-    
-    Args:
-        url (str): YouTube URL.
-        
-    Returns:
-        str | None: ID видео или None, если URL некорректен.
-    """
-    match = re.search(YOUTUBE_URL_PATTERN, url)
-    if match:
-        return match.group(1)
-    return None
-
 def get_video_info(url: str) -> dict[str, Any]:
     """
     Получает информацию о видео.
