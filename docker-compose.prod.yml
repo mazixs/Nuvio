@@ -27,8 +27,11 @@ services:
       - bot-data:/app/data
       - ./logs:/app/logs
       - ./.secrets:/app/.secrets
-    depends_on:
-      - web
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   web:
     image: ghcr.io/mazixs/nuvio:${TAG:-latest}
@@ -46,9 +49,20 @@ services:
       # FAIL2BAN_RETRIES=5           ← попыток до блокировки
       # FAIL2BAN_TIME=10m            ← время блокировки (10m, 1h, 300)
     ports:
-      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+      - "${WEB_PORT:-8080}:8080"
     volumes:
       - bot-data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   bot-data:

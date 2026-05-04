@@ -188,6 +188,14 @@ async def redirect_exception_handler(request: Request, exc: HTTPException):
     return HTMLResponse(content=str(exc.detail), status_code=exc.status_code)
 
 
+# ── Healthcheck ─────────────────────────────────────────────────
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # ── Auth ────────────────────────────────────────────────────────
 
 

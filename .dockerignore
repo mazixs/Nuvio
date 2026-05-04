@@ -11,7 +11,14 @@ temp/
 downloads/
 .env
 .env.local
+.env.example
 .secrets/
+.venv/
 tests/
 docs/
 *.md
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+.gitignore
+.gitattributes
