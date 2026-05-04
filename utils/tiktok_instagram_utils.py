@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import httpx
 import yt_dlp
 from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
+from yt_dlp.networking.impersonate import ImpersonateTarget
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.gokapi_utils import upload_to_gokapi, is_gokapi_configured
@@ -113,20 +114,17 @@ def _smart_retry(func: Callable, max_attempts: int = MAX_RETRY_ATTEMPTS, context
 def _get_tiktok_base_configs() -> list[dict]:
     """
     Возвращает оптимизированный список конфигураций для TikTok.
-    Только самые эффективные настройки.
+    yt-dlp >=2026.03 использует impersonation для обхода защиты TikTok.
+    Старые api_hostname больше неактуальны и могут конфликтовать.
     """
     return [
-        # Конфигурация 1: Новый API hostname (самая эффективная)
+        # Конфигурация 1: impersonation через curl_cffi (предпочтительная)
         {
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {
-                'tiktok': {
-                    'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'
-                }
-            }
+            'impersonate': ImpersonateTarget.from_str('chrome'),
         },
-        # Конфигурация 2: С расширенными заголовками (резервная)
+        # Конфигурация 2: Без impersonation, с актуальным User-Agent
         {
             'quiet': True,
             'no_warnings': True,
@@ -135,11 +133,6 @@ def _get_tiktok_base_configs() -> list[dict]:
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
             },
-            'extractor_args': {
-                'tiktok': {
-                    'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'
-                }
-            }
         },
         # Конфигурация 3: Базовая (последний fallback)
         {
