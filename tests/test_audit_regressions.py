@@ -127,9 +127,13 @@ class _DownloadableDummyDocument(_DummyDocument):
 class _DummyBot:
     def __init__(self):
         self.sent_messages: list[tuple[int, str]] = []
+        self.sent_documents: list[dict] = []
 
     async def send_message(self, chat_id, text):
         self.sent_messages.append((chat_id, text))
+
+    async def send_document(self, **kwargs):
+        self.sent_documents.append(kwargs)
 
 
 def test_check_spam_sets_real_timeout():
@@ -304,6 +308,45 @@ def test_classify_tiktok_russian_access_error():
     assert telegram_utils._classify_internal_error_category("tiktok", error) == "RATE_LIMIT"
 
 
+def test_tiktok_rate_limit_failure_notifies_admins(monkeypatch):
+    bot = _DummyBot()
+    exc = Exception(
+        "TikTok ограничил доступ даже с авторизацией.\n\n"
+        "Возможные причины:\n"
+        "• Превышен лимит запросов"
+    )
+
+    monkeypatch.setattr(telegram_utils, "_bot_instance", bot)
+    monkeypatch.setattr(telegram_utils, "ADMIN_IDS", [1])
+    monkeypatch.setattr(
+        telegram_utils,
+        "check_cookie_health",
+        lambda platform: cookie_health.CookieHealthResult(platform, "valid", "auth cookies are active", 0.0, 2, 2),
+    )
+
+    asyncio.run(
+        telegram_utils._log_platform_failure(
+            platform="tiktok",
+            stage="process_url",
+            url="https://vt.tiktok.com/example/",
+            error_code="TT-RATE_LIM-ABC123",
+            exc=exc,
+        )
+    )
+
+    assert len(bot.sent_documents) == 1
+    assert bot.sent_documents[0]["filename"] == "crash_TT-RATE_LIM-ABC123.txt"
+
+
+def test_exception_traceback_format_does_not_use_none_type_placeholder():
+    exc = Exception("plain failure")
+
+    formatted = telegram_utils._format_exception_traceback(exc)
+
+    assert "NoneType: None" not in formatted
+    assert "Traceback unavailable" in formatted
+
+
 def test_tiktok_info_requests_full_metadata(monkeypatch):
     _CapturingYDL.captured_options.clear()
     _CapturingYDL.captured_urls.clear()
@@ -359,6 +402,46 @@ def test_tiktok_info_uses_resolved_url(monkeypatch):
     tiktok_instagram_utils.get_tiktok_info("https://vt.tiktok.com/example/")
 
     assert _CapturingYDL.captured_urls == ["https://www.tiktok.com/@user/video/1"]
+
+
+def test_tiktok_download_uses_resolved_url(monkeypatch, tmp_path):
+    captured_urls = []
+
+    class _FailingDownloadYDL(_CapturingYDL):
+        def extract_info(self, url, download=False):
+            captured_urls.append(url)
+            raise RuntimeError("stop after capture")
+
+    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _FailingDownloadYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_smart_retry",
+        lambda func, max_attempts=0, context="": func(),
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_get_tiktok_base_configs",
+        lambda: [{"quiet": True, "no_warnings": True}],
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda url: "https://www.tiktok.com/@user/video/1",
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "TIKTOK_COOKIES_FILE",
+        Path(r"C:\definitely-missing-tiktok-cookies.txt"),
+    )
+
+    with pytest.raises(Exception, match="stop after capture"):
+        tiktok_instagram_utils.download_tiktok_video(
+            "https://vt.tiktok.com/example/",
+            "session-1",
+            tmp_path,
+        )
+
+    assert captured_urls == ["https://www.tiktok.com/@user/video/1"]
 
 
 def test_tiktok_photo_info_uses_fallback_when_yt_dlp_cannot_parse(monkeypatch):

@@ -981,7 +981,8 @@ def download_tiktok_video(
     """
     logger.info(f"Скачивание TikTok видео: {url}")
 
-    if _is_tiktok_photo_post_info(cached_info) or is_tiktok_photo_url(_resolve_tiktok_url(url)):
+    resolved_url = _resolve_tiktok_url(url)
+    if _is_tiktok_photo_post_info(cached_info) or is_tiktok_photo_url(resolved_url):
         raise Exception("TikTok фото-пост нужно отправлять как набор изображений и отдельное аудио.")
 
     # Предварительная проверка: если размер файла известен и превышает лимит, а Gokapi не настроен — отказ
@@ -1010,7 +1011,7 @@ def download_tiktok_video(
             logger.info(f"Использование cookies для скачивания: {TIKTOK_COOKIES_FILE}")
         
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(resolved_url, download=True)
             downloaded_file = Path(ydl.prepare_filename(info))
             
             if not downloaded_file.exists():
@@ -1311,7 +1312,8 @@ def download_tiktok_audio(
     """
     logger.info(f"Скачивание нативного аудио (M4A) из TikTok: {url}")
 
-    if _is_tiktok_photo_post_info(cached_info) or is_tiktok_photo_url(_resolve_tiktok_url(url)):
+    resolved_url = _resolve_tiktok_url(url)
+    if _is_tiktok_photo_post_info(cached_info) or is_tiktok_photo_url(resolved_url):
         logger.info("Определён TikTok фото-пост, скачиваем только аудио")
         return download_tiktok_photo_audio(url, session_id, output_dir, force_local, cached_info)
     
@@ -1339,7 +1341,7 @@ def download_tiktok_audio(
             logger.info(f"Использование cookies для аудио: {TIKTOK_COOKIES_FILE}")
         
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(resolved_url, download=True)
             # После postprocessor файл будет иметь расширение .m4a
             base_filename = Path(ydl.prepare_filename(info))
             downloaded_file = base_filename.with_suffix('.m4a')

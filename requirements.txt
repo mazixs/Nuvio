@@ -1,7 +1,7 @@
 # Проект протестирован на Python >=3.13
 python-telegram-bot[job-queue]>=22.7
 yt-dlp[default]>=2026.03.17
-curl_cffi>=0.15,<0.16
+curl_cffi>=0.14,<0.15
 httpx>=0.28.1
 python-dotenv>=1.2.2
 

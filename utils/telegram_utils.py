@@ -60,6 +60,13 @@ def set_bot_instance(bot: telegram.Bot) -> None:
     _bot_instance = bot
 
 
+def _format_exception_traceback(exc: BaseException) -> str:
+    """Формирует traceback из объекта исключения даже вне активного except-блока."""
+    if exc.__traceback__:
+        return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return "Traceback unavailable: exception was logged outside the original except block."
+
+
 async def _notify_admins_crash(
     *,
     error_code: str,
@@ -87,7 +94,7 @@ async def _notify_admins_crash(
         f"Exception: {type(exc).__name__}: {exc}",
         "",
         "Traceback:",
-        traceback.format_exc(),
+        _format_exception_traceback(exc),
     ]
     report_text = "\n".join(report_lines)
 
@@ -583,6 +590,13 @@ def _build_public_error_message(platform: str, error_code: str, error_msg: str) 
     return USER_ERROR_WITH_CODE.format(error_code=error_code)
 
 
+def _should_notify_admins_platform_failure(platform: str, category: str, stage: str) -> bool:
+    """Отделяет ожидаемые пользовательские ограничения платформ от настоящих аварий."""
+    if stage.endswith("_timeout") or category in {"NETWORK", "NETWORK_TIMEOUT"}:
+        return False
+    return True
+
+
 async def _log_platform_failure(
     *,
     platform: str,
@@ -592,6 +606,7 @@ async def _log_platform_failure(
     exc: Exception,
     session_id: str | None = None,
 ) -> None:
+    category = _classify_internal_error_category(platform, str(exc))
     cookie_status = "not_checked"
     cookie_summary = "not_checked"
     if platform in {"youtube", "instagram", "tiktok"}:
@@ -603,7 +618,9 @@ async def _log_platform_failure(
             cookie_status = "health_failed"
             cookie_summary = str(health_exc)
 
-    logger.error(
+    should_notify_admins = _should_notify_admins_platform_failure(platform, category, stage)
+    log_method = logger.error if should_notify_admins else logger.warning
+    log_method(
         "USER_FLOW_FAIL code=%s platform=%s stage=%s session_id=%s url=%s cookie_status=%s cookie_summary=%s error=%s",
         error_code,
         platform,
@@ -613,19 +630,20 @@ async def _log_platform_failure(
         cookie_status,
         cookie_summary,
         exc,
-        exc_info=True,
+        exc_info=should_notify_admins,
     )
 
-    await _notify_admins_crash(
-        error_code=error_code,
-        platform=platform,
-        stage=stage,
-        url=url,
-        exc=exc,
-        session_id=session_id,
-        cookie_status=cookie_status,
-        cookie_summary=cookie_summary,
-    )
+    if should_notify_admins:
+        await _notify_admins_crash(
+            error_code=error_code,
+            platform=platform,
+            stage=stage,
+            url=url,
+            exc=exc,
+            session_id=session_id,
+            cookie_status=cookie_status,
+            cookie_summary=cookie_summary,
+        )
 
 
 def _schedule_platform_failure_log(
