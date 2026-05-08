@@ -814,6 +814,11 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
         context (ContextTypes.DEFAULT_TYPE): Контекст.
     """
     user_id = update.effective_user.id
+    if url is None:
+        from utils.cookie_manager import handle_admin_text_input
+        if await handle_admin_text_input(update, context):
+            return
+
     if update.message:
         now = asyncio.get_running_loop().time()
         if _check_spam(user_id, context, now):

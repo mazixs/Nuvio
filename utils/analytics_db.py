@@ -268,6 +268,13 @@ def get_all_users(limit: int = 100, offset: int = 0) -> list[dict]:
         return [dict(row) for row in cur.fetchall()]
 
 
+def get_all_user_ids() -> list[int]:
+    """Возвращает ID всех известных пользователей для админской рассылки."""
+    with _cursor() as cur:
+        cur.execute("SELECT user_id FROM users ORDER BY last_seen DESC")
+        return [int(row["user_id"]) for row in cur.fetchall()]
+
+
 def get_user_detail(user_id: int) -> dict | None:
     with _cursor() as cur:
         cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))

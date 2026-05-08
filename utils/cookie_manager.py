@@ -7,10 +7,11 @@ import logging
 import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import BadRequest
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import ContextTypes
 
 from config import ADMIN_IDS, SECRETS_DIR
+from utils.analytics_db import get_all_user_ids, track_event
 from utils.cookie_health import CookieHealthResult, check_all_cookie_health
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,10 @@ async def _safe_edit(query, text, **kwargs):
             raise
 
 ADMIN_UPLOAD_TARGET_KEY = "admin_expected_cookie_file"
+ADMIN_BROADCAST_MODE_KEY = "admin_broadcast_mode"
 MAX_COOKIE_FILE_SIZE = 1 * 1024 * 1024  # 1 MiB
+BROADCAST_MAX_LENGTH = 4096
+BROADCAST_SEND_DELAY_SECONDS = 0.04
 ALLOWED_MIME_TYPES = {
     "text/plain",
     "application/octet-stream",
@@ -41,7 +45,6 @@ COOKIE_LABELS = {
     "instagram": "Instagram",
     "tiktok": "TikTok",
 }
-ALLOWED_COOKIE_FILES = set(COOKIE_TARGETS.values())
 NON_ADMIN_DOCUMENT_MESSAGE = (
     "🔒 Бот не принимает файлы от пользователей. "
     "Поддерживаются только ссылки на видео и админская загрузка cookies."
@@ -50,6 +53,7 @@ ADMIN_ONLY_MESSAGE = "🔒 Эта функция доступна только �
 ADMIN_UPLOAD_REQUIRED_MESSAGE = (
     "Сначала откройте /admin и выберите, cookies какой платформы хотите обновить."
 )
+BROADCAST_CANCELLED_MESSAGE = "Рассылка отменена."
 
 
 def is_admin(user_id: int | None) -> bool:
@@ -64,7 +68,11 @@ def build_admin_entry_markup() -> InlineKeyboardMarkup:
     )
 
 
-def _build_admin_panel_markup(expected_file_name: str | None = None) -> InlineKeyboardMarkup:
+def _build_admin_panel_markup(
+    expected_file_name: str | None = None,
+    *,
+    broadcast_mode: bool = False,
+) -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton("YouTube", callback_data="admin|cookies|upload|youtube"),
@@ -74,12 +82,15 @@ def _build_admin_panel_markup(expected_file_name: str | None = None) -> InlineKe
             InlineKeyboardButton("TikTok", callback_data="admin|cookies|upload|tiktok"),
             InlineKeyboardButton("Check Cookies", callback_data="admin|cookies|check"),
         ],
+        [InlineKeyboardButton("Сообщить всем", callback_data="admin|broadcast|start")],
         [InlineKeyboardButton("Refresh", callback_data="admin|cookies|panel")],
     ]
     if expected_file_name:
         keyboard.append(
             [InlineKeyboardButton("Cancel Upload Mode", callback_data="admin|cookies|cancel")]
         )
+    if broadcast_mode:
+        keyboard.append([InlineKeyboardButton("Отменить рассылку", callback_data="admin|broadcast|cancel")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -106,7 +117,8 @@ def _build_admin_panel_text(expected_file_name: str | None = None) -> str:
             [
                 "",
                 f"Upload mode enabled for: {expected_file_name}",
-                "Send exactly this .txt file as a Telegram document in the next message.",
+                "Send any .txt Netscape cookies file as a Telegram document.",
+                "The bot will save it with the required canonical filename automatically.",
             ]
         )
     else:
@@ -125,9 +137,22 @@ def _build_upload_instruction(file_name: str) -> str:
             "Upload mode enabled.",
             "",
             f"Expected file: {file_name}",
-            "Send it as a Telegram document.",
-            "Any other filename will be rejected.",
+            "Send any .txt Netscape cookies file as a Telegram document.",
+            f"It will be saved as {file_name}.",
             "Only .txt Netscape cookies are accepted.",
+        ]
+    )
+
+
+def _build_broadcast_instruction() -> str:
+    return "\n".join(
+        [
+            "Режим рассылки включён.",
+            "",
+            "Отправьте следующим сообщением текст объявления.",
+            "Бот перешлёт его всем пользователям из базы аналитики.",
+            "",
+            "Чтобы отменить, нажмите «Отменить рассылку» или отправьте /admin.",
         ]
     )
 
@@ -180,6 +205,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
+    context.user_data.pop(ADMIN_BROADCAST_MODE_KEY, None)
     await update.message.reply_text(
         _build_admin_panel_text(),
         reply_markup=_build_admin_panel_markup(),
@@ -223,6 +249,25 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
         await _safe_edit(query,
             _build_admin_panel_text(),
+            reply_markup=_build_admin_panel_markup(),
+        )
+        return
+
+    if data == "admin|broadcast|start":
+        context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
+        context.user_data[ADMIN_BROADCAST_MODE_KEY] = True
+        await _safe_edit(
+            query,
+            _build_broadcast_instruction(),
+            reply_markup=_build_admin_panel_markup(broadcast_mode=True),
+        )
+        return
+
+    if data == "admin|broadcast|cancel":
+        context.user_data.pop(ADMIN_BROADCAST_MODE_KEY, None)
+        await _safe_edit(
+            query,
+            BROADCAST_CANCELLED_MESSAGE,
             reply_markup=_build_admin_panel_markup(),
         )
         return
@@ -272,17 +317,10 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     file_name = document.file_name or ""
-    if file_name != expected_file_name:
+    if not file_name.lower().endswith(".txt"):
         await message.reply_text(
-            f"❌ Сейчас ожидается файл `{expected_file_name}`. "
-            f"Отправлен `{file_name or 'без имени'}`.",
+            "❌ Неверный тип файла. Отправьте cookies как документ с расширением `.txt`.",
             parse_mode="Markdown",
-        )
-        return
-
-    if file_name not in ALLOWED_COOKIE_FILES:
-        await message.reply_text(
-            "❌ Недопустимое имя файла. Разрешены только:\n" + "\n".join(sorted(ALLOWED_COOKIE_FILES))
         )
         return
 
@@ -311,21 +349,104 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
 
     try:
         telegram_file = await document.get_file()
-        file_path = SECRETS_DIR / file_name
+        file_path = SECRETS_DIR / expected_file_name
         await telegram_file.download_to_drive(file_path)
 
         if os.name != "nt":
             file_path.chmod(0o600)
 
         context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
-        logger.info("Admin %s updated cookie file %s", user_id, file_name)
+        logger.info(
+            "Admin %s updated cookie file %s from uploaded file %s",
+            user_id,
+            expected_file_name,
+            file_name,
+        )
         await message.reply_text(
-            f"✅ Файл {file_name} успешно обновлён.",
+            f"✅ Cookies обновлены и сохранены как {expected_file_name}.",
         )
         await message.reply_text(
             _build_admin_panel_text(),
             reply_markup=_build_admin_panel_markup(),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to update cookie file %s: %s", file_name, exc, exc_info=True)
+        logger.error("Failed to update cookie file %s: %s", expected_file_name, exc, exc_info=True)
         await message.reply_text(f"❌ Произошла ошибка при сохранении файла: {exc}")
+
+
+async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Обрабатывает текстовые админские режимы. Возвращает True, если сообщение уже обработано."""
+    user = update.effective_user
+    message = update.message
+    user_id = user.id if user else None
+
+    if not message or not message.text:
+        return False
+    if not is_admin(user_id):
+        return False
+    if not context.user_data.get(ADMIN_BROADCAST_MODE_KEY):
+        return False
+
+    text = message.text.strip()
+    if not text:
+        await message.reply_text(
+            "❌ Текст рассылки пустой. "
+            "Отправьте сообщение ещё раз или нажмите «Отменить рассылку»."
+        )
+        return True
+    if len(text) > BROADCAST_MAX_LENGTH:
+        await message.reply_text(
+            f"❌ Текст слишком длинный: {len(text)} символов. "
+            f"Максимум для Telegram-сообщения — {BROADCAST_MAX_LENGTH}."
+        )
+        return True
+
+    context.user_data.pop(ADMIN_BROADCAST_MODE_KEY, None)
+    user_ids = [target_id for target_id in get_all_user_ids() if target_id != user_id]
+    if not user_ids:
+        await message.reply_text("Некому отправлять рассылку: в базе пока нет пользователей.")
+        return True
+
+    status_message = await message.reply_text(f"Рассылаю объявление {len(user_ids)} пользователям...")
+    sent = 0
+    failed = 0
+    blocked = 0
+
+    for target_id in user_ids:
+        try:
+            await context.bot.send_message(chat_id=target_id, text=text)
+            sent += 1
+            track_event(target_id, "admin_broadcast", metadata=f"sent_by={user_id}")
+            await asyncio.sleep(BROADCAST_SEND_DELAY_SECONDS)
+        except RetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after))
+            try:
+                await context.bot.send_message(chat_id=target_id, text=text)
+                sent += 1
+                track_event(target_id, "admin_broadcast", metadata=f"sent_by={user_id}")
+            except Forbidden:
+                blocked += 1
+                failed += 1
+                logger.info("Broadcast retry skipped blocked user %s", target_id)
+            except TelegramError as retry_exc:
+                failed += 1
+                logger.warning("Broadcast retry failed for user %s: %s", target_id, retry_exc)
+        except Forbidden:
+            blocked += 1
+            failed += 1
+            logger.info("Broadcast skipped blocked user %s", target_id)
+        except TelegramError as exc:
+            failed += 1
+            logger.warning("Broadcast failed for user %s: %s", target_id, exc)
+
+    await status_message.edit_text(
+        "\n".join(
+            [
+                "Рассылка завершена.",
+                f"✅ Отправлено: {sent}",
+                f"🚫 Бот заблокирован: {blocked}",
+                f"❌ Ошибок: {failed - blocked}",
+            ]
+        )
+    )
+    return True

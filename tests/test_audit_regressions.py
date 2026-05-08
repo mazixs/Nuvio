@@ -105,6 +105,33 @@ class _DummyDocument:
         raise AssertionError("get_file must not be called in this test")
 
 
+class _DummyTelegramFile:
+    def __init__(self):
+        self.downloaded_to = None
+
+    async def download_to_drive(self, file_path):
+        self.downloaded_to = file_path
+        Path(file_path).write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+
+class _DownloadableDummyDocument(_DummyDocument):
+    def __init__(self, file_name: str, telegram_file: _DummyTelegramFile, **kwargs):
+        super().__init__(file_name, **kwargs)
+        self.telegram_file = telegram_file
+
+    async def get_file(self):
+        self.get_file_called = True
+        return self.telegram_file
+
+
+class _DummyBot:
+    def __init__(self):
+        self.sent_messages: list[tuple[int, str]] = []
+
+    async def send_message(self, chat_id, text):
+        self.sent_messages.append((chat_id, text))
+
+
 def test_check_spam_sets_real_timeout():
     context = SimpleNamespace(user_data={})
 
@@ -978,6 +1005,52 @@ def test_admin_document_upload_requires_armed_mode(monkeypatch):
     assert document.get_file_called is False
 
 
+def test_admin_cookie_upload_renames_txt_to_expected_file(monkeypatch, tmp_path):
+    telegram_file = _DummyTelegramFile()
+    document = _DownloadableDummyDocument("youtube-cookies-export.txt", telegram_file)
+    message = _DummyMessage("")
+    message.document = document
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        message=message,
+    )
+    context = SimpleNamespace(
+        user_data={cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "www.youtube.com_cookies.txt"}
+    )
+
+    monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
+    monkeypatch.setattr(cookie_manager, "SECRETS_DIR", tmp_path)
+
+    asyncio.run(cookie_manager.handle_document_upload(update, context))
+
+    expected_path = tmp_path / "www.youtube.com_cookies.txt"
+    assert document.get_file_called is True
+    assert telegram_file.downloaded_to == expected_path
+    assert expected_path.exists()
+    assert cookie_manager.ADMIN_UPLOAD_TARGET_KEY not in context.user_data
+    assert "сохранены как www.youtube.com_cookies.txt" in message.replies[-2]
+
+
+def test_admin_cookie_upload_rejects_non_txt_name(monkeypatch):
+    document = _DummyDocument("youtube-cookies.json")
+    message = _DummyMessage("")
+    message.document = document
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        message=message,
+    )
+    context = SimpleNamespace(
+        user_data={cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "www.youtube.com_cookies.txt"}
+    )
+
+    monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
+
+    asyncio.run(cookie_manager.handle_document_upload(update, context))
+
+    assert "расширением `.txt`" in message.replies[0]
+    assert document.get_file_called is False
+
+
 def test_admin_callback_arms_specific_cookie_upload(monkeypatch):
     query = _DummyQuery("admin|cookies|upload|youtube", user_id=1)
     update = SimpleNamespace(callback_query=query)
@@ -1052,6 +1125,39 @@ def test_admin_callback_runs_cookie_health_check(monkeypatch):
 
     assert "Cookie health check" in query.edits[-1][0]
     assert "YouTube: valid - probe ok" in query.edits[-1][0]
+
+
+def test_admin_broadcast_sends_text_to_all_known_users(monkeypatch):
+    message = _DummyMessage("Новость для всех")
+    status_reply = _EditableReply()
+
+    async def fake_reply_text(text, **kwargs):
+        message.replies.append(text)
+        message.reply_calls.append((text, kwargs))
+        return status_reply
+
+    message.reply_text = fake_reply_text
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        message=message,
+    )
+    bot = _DummyBot()
+    context = SimpleNamespace(
+        user_data={cookie_manager.ADMIN_BROADCAST_MODE_KEY: True},
+        bot=bot,
+    )
+    tracked_events = []
+
+    monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
+    monkeypatch.setattr(cookie_manager, "get_all_user_ids", lambda: [1, 7, 8])
+    monkeypatch.setattr(cookie_manager, "track_event", lambda *args, **kwargs: tracked_events.append((args, kwargs)))
+
+    asyncio.run(cookie_manager.handle_admin_text_input(update, context))
+
+    assert bot.sent_messages == [(7, "Новость для всех"), (8, "Новость для всех")]
+    assert cookie_manager.ADMIN_BROADCAST_MODE_KEY not in context.user_data
+    assert "Рассылка завершена." in status_reply.edits[-1][0]
+    assert len(tracked_events) == 2
 
 
 def test_search_cache_requires_admin(monkeypatch):
