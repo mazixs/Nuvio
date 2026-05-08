@@ -767,7 +767,7 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
             logger.info(f"Использование cookies: {TIKTOK_COOKIES_FILE}")
         
         with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
+            return ydl.extract_info(resolved_url, download=False)
     
     # Получаем оптимизированные конфигурации
     configurations = _get_tiktok_base_configs()

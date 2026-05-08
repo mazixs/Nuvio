@@ -1,16 +1,16 @@
 # Проект протестирован на Python >=3.13
-python-telegram-bot[job-queue]>=22.0
+python-telegram-bot[job-queue]>=22.7
 yt-dlp[default]>=2026.03.17
-curl_cffi>=0.10,<0.15
-httpx>=0.28.0
-python-dotenv>=1.0.1
+curl_cffi>=0.15,<0.16
+httpx>=0.28.1
+python-dotenv>=1.2.2
 
 # WebUI
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-jinja2>=3.1.0
+fastapi>=0.136.1
+uvicorn[standard]>=0.46.0
+jinja2>=3.1.6
 itsdangerous>=2.2.0
-python-multipart>=0.0.18
+python-multipart>=0.0.27
 
 # Тестирование
-pytest>=8.0
+pytest>=9.0.3

@@ -38,10 +38,11 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/app/data
+      - WEB_PORT=8080
       # ── Переменные дашборда (задать в .env) ───────────
       # WEB_USERNAME=admin
       # WEB_PASSWORD=changeme        ← сменить!
-      # WEB_PORT=8080
+      # WEB_PORT во внешнем .env задаёт порт хоста, внутри контейнера WebUI слушает 8080
       # WEB_SECRET_KEY=random_string
       # FAIL2BAN_RETRIES=5           ← попыток до блокировки
       # FAIL2BAN_TIME=10m            ← время блокировки (10m, 1h, 300)

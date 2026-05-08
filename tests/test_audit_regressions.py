@@ -22,6 +22,7 @@ class _CapturingYDL:
     """Minimal yt-dlp stub that records options."""
 
     captured_options: list[dict] = []
+    captured_urls: list[str] = []
 
     def __init__(self, options):
         self.options = options
@@ -34,6 +35,7 @@ class _CapturingYDL:
         return False
 
     def extract_info(self, url, download=False):
+        self.__class__.captured_urls.append(url)
         return {
             "title": "stub",
             "uploader": "tester",
@@ -264,8 +266,20 @@ def test_classify_large_file_delivery_error():
     )
 
 
+def test_classify_tiktok_russian_access_error():
+    error = (
+        "TikTok ограничил доступ даже с авторизацией.\n\n"
+        "Возможные причины:\n"
+        "• Превышен лимит запросов\n"
+        "• Региональные блокировки"
+    )
+
+    assert telegram_utils._classify_internal_error_category("tiktok", error) == "RATE_LIMIT"
+
+
 def test_tiktok_info_requests_full_metadata(monkeypatch):
     _CapturingYDL.captured_options.clear()
+    _CapturingYDL.captured_urls.clear()
     monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _CapturingYDL)
     monkeypatch.setattr(
         tiktok_instagram_utils,
@@ -288,6 +302,36 @@ def test_tiktok_info_requests_full_metadata(monkeypatch):
     assert info["title"] == "stub"
     assert _CapturingYDL.captured_options
     assert "extract_flat" not in _CapturingYDL.captured_options[0]
+
+
+def test_tiktok_info_uses_resolved_url(monkeypatch):
+    _CapturingYDL.captured_options.clear()
+    _CapturingYDL.captured_urls.clear()
+    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _CapturingYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_smart_retry",
+        lambda func, max_attempts=0, context="": func(),
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_get_tiktok_base_configs",
+        lambda: [{"quiet": True, "no_warnings": True}],
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda url: "https://www.tiktok.com/@user/video/1",
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "TIKTOK_COOKIES_FILE",
+        Path(r"C:\definitely-missing-tiktok-cookies.txt"),
+    )
+
+    tiktok_instagram_utils.get_tiktok_info("https://vt.tiktok.com/example/")
+
+    assert _CapturingYDL.captured_urls == ["https://www.tiktok.com/@user/video/1"]
 
 
 def test_tiktok_photo_info_uses_fallback_when_yt_dlp_cannot_parse(monkeypatch):

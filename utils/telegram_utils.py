@@ -540,9 +540,24 @@ def _classify_internal_error_category(platform: str, error_msg: str) -> str:
 
     if any(signature in msg_lower for signature in ("timed out", "network", "connection reset", "ssl", "eof")):
         return "NETWORK"
-    if any(signature in msg_lower for signature in ("rate-limit", "too many requests")):
+    if any(signature in msg_lower for signature in ("rate-limit", "too many requests", "лимит запросов")):
         return "RATE_LIMIT"
-    if any(signature in msg_lower for signature in ("login required", "sign in", "private", "forbidden", "blocked", "unavailable")):
+    if any(
+        signature in msg_lower
+        for signature in (
+            "login required",
+            "sign in",
+            "private",
+            "forbidden",
+            "blocked",
+            "unavailable",
+            "ограничил доступ",
+            "ограничения",
+            "блокировки",
+            "авторизац",
+            "недоступ",
+        )
+    ):
         return "ACCESS"
     if "story" in msg_lower and "не поддерживается" in msg_lower:
         return "STORY_UNSUPPORTED"
@@ -2095,4 +2110,3 @@ def escape_markdown(text: str) -> str:
         text = text.replace(char, f'\\{char}')
     
     return text
-
