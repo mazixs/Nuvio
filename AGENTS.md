@@ -6,10 +6,10 @@
 
 ## Обзор проекта
 
-**Nuvio** — асинхронный Telegram-бот для скачивания видео, фото-постов и аудио с YouTube, TikTok и Instagram. Поддерживает кэширование file_id для мгновенной повторной отправки, аналитику пользователей через WebUI-дашборд и автоматическое обновление yt-dlp.
+**Nuvio** — асинхронный Telegram-бот для скачивания видео, фото-постов и аудио с YouTube, TikTok, Instagram, Rutube и VK Video. Поддерживает кэширование file_id для мгновенной повторной отправки, аналитику пользователей через WebUI-дашборд и автоматическое обновление yt-dlp.
 
 Основные возможности:
-- YouTube (видео + Shorts), TikTok, Instagram (посты, reels, фото-посты, карусели)
+- YouTube (видео + Shorts), TikTok, Instagram (посты, reels, фото-посты, карусели), Rutube, VK Video
 - Извлечение аудио (MP3 192k через FFmpeg)
 - Кэширование file_id в SQLite (TTL 90 дней)
 - Файлы >50MB выгружаются на Gokapi и отправляются ссылкой
@@ -55,6 +55,7 @@ Nuvio/
 │   ├── telegram_utils.py        # Хэндлеры бота, callback-кнопки, отправка файлов, спам-защита
 │   ├── youtube_utils.py         # Загрузка YouTube/Shorts через yt-dlp
 │   ├── tiktok_instagram_utils.py # TikTok и Instagram: видео, фото-посты, карусели
+│   ├── rutube_vk_utils.py        # Rutube и VK Video: видео и аудио через yt-dlp
 │   ├── media_processor.py       # FFmpeg: конвертация webm→mp4, извлечение аудио, сжатие
 │   ├── video_cache.py           # SQLite-кэш file_id (WAL mode, TTL 90 дней)
 │   ├── analytics_db.py          # SQLite-аналитика: таблицы users, events (WAL mode)
@@ -197,7 +198,7 @@ ruff check --output-format=github .
 ### Обработка ошибок
 
 - **Коды ошибок**: формат `PREFIX-CATEGORY-RANDOM` (например, `YT-ACCESS-A1B2C3`).
-  - Префиксы: `YT` (YouTube), `TT` (TikTok), `IG` (Instagram), `TG` (Telegram), `FILE`, `BOT`.
+  - Префиксы: `YT` (YouTube), `TT` (TikTok), `IG` (Instagram), `RU` (Rutube), `VK` (VK), `TG` (Telegram), `FILE`, `BOT`.
   - Категории: `ACCESS`, `NETWORK`, `TIMEOUT`, `FORMAT_UNAVAILABLE`, `FFMPEG_MISSING`, `EXTRACTOR_RUNTIME`, `UNKNOWN`.
 - Пользователю показывается только код ошибки; traceback уходит в логи.
 - Используется `Exception.add_note()` для обогащения исключений контекстом.

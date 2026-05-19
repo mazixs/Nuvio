@@ -5,7 +5,7 @@
 <h1 align="center">Nuvio</h1>
 
 <p align="center">
-  Telegram-бот для скачивания видео, фото-постов и аудио с YouTube, TikTok и Instagram<br>
+  Telegram-бот для скачивания видео, фото-постов и аудио с YouTube, TikTok, Instagram, Rutube и VK Video<br>
   с поддержкой кэширования, аналитики и автоматического обновления yt-dlp.
 </p>
 
@@ -13,7 +13,7 @@
 
 ## Возможности
 
-- YouTube (видео + Shorts), TikTok, Instagram (посты, reels, фото-посты, карусели)
+- YouTube (видео + Shorts), TikTok, Instagram (посты, reels, фото-посты, карусели), Rutube, VK Video
 - TikTok и Instagram фото-посты: каждая картинка отправляется отдельным сообщением, звук — отдельно, если он есть
 - Извлечение аудио (MP3 192k через FFmpeg для видео и отдельная звуковая дорожка для фото-постов)
 - Кэширование file_id -- мгновенная повторная отправка через Telegram CDN
@@ -24,6 +24,12 @@
 - Автообновление yt-dlp (rolling-release, nightly channel)
 - Готовность к headless/systemd-развертыванию (`init_env.sh` в качестве `ExecStartPre`)
 - Поддержка Docker
+
+### Rutube и VK Video
+
+- **Rutube** — поддерживаются обычные видео, Shorts, embed и плейлисты. Скачивание выполняется через yt-dlp напрямую, без необходимости в cookies
+- **VK Video** — поддерживаются видео, клипы и посты со стены. Для обхода защиты HLS-фрагментов VK используется стратегия `best[protocol=https]`, которая выбирает прямые ссылки вместо фрагментированных потоков. Cookies не требуются для публичных видео
+- Для обеих платформ доступны две кнопки: «Скачать видео» и «Только аудио (MP3)». Аудио извлекается через FFmpeg в формате MP3 192k
 
 ### Фото-посты и карусели
 
@@ -186,6 +192,7 @@ Nuvio/
 │   ├── telegram_utils.py
 │   ├── youtube_utils.py
 │   ├── tiktok_instagram_utils.py
+│   ├── rutube_vk_utils.py
 │   ├── media_processor.py
 │   ├── video_cache.py
 │   ├── analytics_db.py
@@ -218,6 +225,7 @@ Nuvio/
 | `telegram_utils.py` | Хэндлеры бота: команды, callback-кнопки, обработка URL, отправка файлов |
 | `youtube_utils.py` | Загрузка YouTube/Shorts через yt-dlp с cookie-поддержкой и smart retry |
 | `tiktok_instagram_utils.py` | TikTok и Instagram: видео, фото-посты, карусели, запасные пути для картинок и отдельного звука |
+| `rutube_vk_utils.py` | Rutube и VK Video: видео и аудио через yt-dlp |
 | `media_processor.py` | FFmpeg: извлечение аудио, конвертация WebM в MP4, мерж аудио/видео |
 | `video_cache.py` | SQLite-кэш file_id для мгновенной повторной отправки (WAL mode, TTL 90 дней) |
 | `analytics_db.py` | SQLite-аналитика: таблицы users, events (WAL mode) |

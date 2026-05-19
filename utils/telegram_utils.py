@@ -40,6 +40,13 @@ from utils.tiktok_instagram_utils import (
     get_tiktok_info, get_instagram_info, is_instagram_audio_url, handle_instagram_audio_url,
     PhotoPostAudioMissingError,
 )
+from utils.rutube_vk_utils import (
+    is_valid_rutube_url, is_valid_vk_url,
+    get_rutube_info, get_vk_info,
+    get_available_formats_rutube, get_available_formats_vk,
+    download_rutube_video, download_vk_video,
+    download_rutube_audio, download_vk_audio,
+)
 from utils.video_cache import telegram_cache, CachedVideo
 from utils.gokapi_utils import is_gokapi_configured
 from utils.cookie_health import check_cookie_health
@@ -290,6 +297,24 @@ def _build_main_menu(
             text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
         return text, InlineKeyboardMarkup(keyboard)
 
+    if platform == 'rutube':
+        keyboard = [
+            [InlineKeyboardButton(BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "rutube_download"))],
+            [InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "rutube_audio"))],
+            [InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))],
+        ]
+        text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
+        return text, InlineKeyboardMarkup(keyboard)
+
+    if platform == 'vk':
+        keyboard = [
+            [InlineKeyboardButton(BTN_DOWNLOAD_VIDEO, callback_data=_make_callback_data(session_token, "main", "vk_download"))],
+            [InlineKeyboardButton(BTN_AUDIO_ONLY, callback_data=_make_callback_data(session_token, "main", "vk_audio"))],
+            [InlineKeyboardButton(BTN_BACK, callback_data=_make_callback_data(session_token, "main", "back"))],
+        ]
+        text = f"*{title}*\nАвтор: {uploader}\nДлительность: {duration}"
+        return text, InlineKeyboardMarkup(keyboard)
+
     keyboard = [
         [InlineKeyboardButton(BTN_TG_VIDEO, callback_data=_make_callback_data(session_token, "main", "tg_video"))],
         [InlineKeyboardButton(BTN_AUDIO_M4A, callback_data=_make_callback_data(session_token, "main", "audio_m4a"))],
@@ -529,6 +554,8 @@ def _make_error_code(platform: str, category: str) -> str:
         "youtube": "YT",
         "tiktok": "TT",
         "instagram": "IG",
+        "rutube": "RU",
+        "vk": "VK",
         "telegram": "TG",
         "file": "FILE",
         "bot": "BOT",
@@ -544,6 +571,30 @@ def _classify_internal_error_category(platform: str, error_msg: str) -> str:
     msg_lower = error_msg.lower()
     if platform == "youtube":
         return _youtube_error_code(error_msg)
+
+    if platform in ("rutube", "vk"):
+        if any(signature in msg_lower for signature in ("timed out", "network", "connection reset", "ssl", "eof")):
+            return "NETWORK"
+        if any(signature in msg_lower for signature in ("rate-limit", "too many requests", "лимит запросов")):
+            return "RATE_LIMIT"
+        if any(
+            signature in msg_lower
+            for signature in (
+                "login required",
+                "sign in",
+                "private",
+                "forbidden",
+                "blocked",
+                "unavailable",
+                "ограничил доступ",
+                "ограничения",
+                "блокировки",
+                "авторизац",
+                "недоступ",
+            )
+        ):
+            return "ACCESS"
+        return "UNKNOWN"
 
     if any(signature in msg_lower for signature in ("timed out", "network", "connection reset", "ssl", "eof")):
         return "NETWORK"
@@ -858,6 +909,10 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
         _analytics_platform = "tiktok"
     elif is_valid_instagram_url(url):
         _analytics_platform = "instagram"
+    elif is_valid_rutube_url(url):
+        _analytics_platform = "rutube"
+    elif is_valid_vk_url(url):
+        _analytics_platform = "vk"
     if _analytics_platform:
         track_event(user_id, "download", platform=_analytics_platform, url=url)
 
@@ -1035,6 +1090,84 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
                 session_id=session_id,
             )
             await processing_message.edit_text(_build_public_error_message("instagram", error_code, str(e)))
+            if session_id:
+                cleanup_temp_files(session_id)
+        return
+    # Проверка Rutube
+    if is_valid_rutube_url(url):
+        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
+        session_id = None
+        try:
+            video_info = await run_blocking(
+                get_rutube_info, url, description="get_rutube_info"
+            )
+            session_id = str(user_id) + "_" + str(uuid.uuid4())
+            create_temp_dir(session_id)
+            formats = get_available_formats_rutube(video_info)
+            session_token = _store_session(
+                context,
+                url=url,
+                video_info=video_info,
+                session_id=session_id,
+                platform='rutube',
+                formats=formats,
+            )
+            text, reply_markup = _build_main_menu('rutube', video_info, session_token)
+            await processing_message.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            error_code = _make_error_code("rutube", _classify_internal_error_category("rutube", str(e)))
+            _schedule_platform_failure_log(
+                platform="rutube",
+                stage="process_url",
+                url=url,
+                error_code=error_code,
+                exc=e,
+                session_id=session_id,
+            )
+            await processing_message.edit_text(_build_public_error_message("rutube", error_code, str(e)))
+            if session_id:
+                cleanup_temp_files(session_id)
+        return
+    # Проверка VK
+    if is_valid_vk_url(url):
+        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
+        session_id = None
+        try:
+            video_info = await run_blocking(
+                get_vk_info, url, description="get_vk_info"
+            )
+            session_id = str(user_id) + "_" + str(uuid.uuid4())
+            create_temp_dir(session_id)
+            formats = get_available_formats_vk(video_info)
+            session_token = _store_session(
+                context,
+                url=url,
+                video_info=video_info,
+                session_id=session_id,
+                platform='vk',
+                formats=formats,
+            )
+            text, reply_markup = _build_main_menu('vk', video_info, session_token)
+            await processing_message.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            error_code = _make_error_code("vk", _classify_internal_error_category("vk", str(e)))
+            _schedule_platform_failure_log(
+                platform="vk",
+                stage="process_url",
+                url=url,
+                error_code=error_code,
+                exc=e,
+                session_id=session_id,
+            )
+            await processing_message.edit_text(_build_public_error_message("vk", error_code, str(e)))
             if session_id:
                 cleanup_temp_files(session_id)
         return
@@ -1261,6 +1394,168 @@ async def _handle_main_callback(
                     session_id=session_id,
                 )
                 await query.edit_message_text(_build_public_error_message("instagram", error_code, str(e)))
+                await _cleanup_user_session(user_id, context, session_token)
+            return
+
+        case "rutube_download":
+            cache_key = _cache_format_id_for_main_action("rutube", "rutube_download")
+            if cache_key:
+                cached = telegram_cache.get(url, format_id=cache_key)
+                if cached:
+                    try:
+                        await query.message.reply_video(
+                            video=cached.file_id,
+                            caption=None,
+                            supports_streaming=True,
+                        )
+                        logger.info("Rutube видео доставлено из кэша (key=%s)", cache_key)
+                        await query.edit_message_text(FILE_SENT)
+                        await _cleanup_user_session(user_id, context, session_token)
+                        return
+                    except telegram.error.BadRequest as e:
+                        logger.warning("file_id устарел (key=%s): %s", cache_key, e)
+                        telegram_cache.delete_by_file_id(cached.file_id)
+
+            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+            try:
+                file_path = await run_blocking(
+                    download_rutube_video,
+                    url,
+                    session_id,
+                    description="download_rutube_video",
+                )
+                if not file_path:
+                    await query.edit_message_text(ERROR_MESSAGE)
+                    await _cleanup_user_session(user_id, context, session_token)
+                    return
+                await send_file(
+                    query,
+                    file_path,
+                    session_token,
+                    session_data,
+                    context,
+                    cache_format_id=_cache_format_id_for_main_action("rutube", "rutube_download"),
+                )
+            except Exception as e:
+                error_code = _make_error_code("rutube", _classify_internal_error_category("rutube", str(e)))
+                _schedule_platform_failure_log(
+                    platform="rutube",
+                    stage="download_video",
+                    url=url,
+                    error_code=error_code,
+                    exc=e,
+                    session_id=session_id,
+                )
+                await query.edit_message_text(_build_public_error_message("rutube", error_code, str(e)))
+                await _cleanup_user_session(user_id, context, session_token)
+            return
+
+        case "rutube_audio":
+            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            try:
+                file_path = await run_blocking(
+                    download_rutube_audio,
+                    url,
+                    session_id,
+                    description="download_rutube_audio",
+                )
+                if not file_path:
+                    await query.edit_message_text(ERROR_MESSAGE)
+                    await _cleanup_user_session(user_id, context, session_token)
+                    return
+                await send_file(query, file_path, session_token, session_data, context, cache_format_id="rutube_audio")
+            except Exception as e:
+                error_code = _make_error_code("rutube", _classify_internal_error_category("rutube", str(e)))
+                _schedule_platform_failure_log(
+                    platform="rutube",
+                    stage="download_audio",
+                    url=url,
+                    error_code=error_code,
+                    exc=e,
+                    session_id=session_id,
+                )
+                await query.edit_message_text(_build_public_error_message("rutube", error_code, str(e)))
+                await _cleanup_user_session(user_id, context, session_token)
+            return
+
+        case "vk_download":
+            cache_key = _cache_format_id_for_main_action("vk", "vk_download")
+            if cache_key:
+                cached = telegram_cache.get(url, format_id=cache_key)
+                if cached:
+                    try:
+                        await query.message.reply_video(
+                            video=cached.file_id,
+                            caption=None,
+                            supports_streaming=True,
+                        )
+                        logger.info("VK видео доставлено из кэша (key=%s)", cache_key)
+                        await query.edit_message_text(FILE_SENT)
+                        await _cleanup_user_session(user_id, context, session_token)
+                        return
+                    except telegram.error.BadRequest as e:
+                        logger.warning("file_id устарел (key=%s): %s", cache_key, e)
+                        telegram_cache.delete_by_file_id(cached.file_id)
+
+            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+            try:
+                file_path = await run_blocking(
+                    download_vk_video,
+                    url,
+                    session_id,
+                    description="download_vk_video",
+                )
+                if not file_path:
+                    await query.edit_message_text(ERROR_MESSAGE)
+                    await _cleanup_user_session(user_id, context, session_token)
+                    return
+                await send_file(
+                    query,
+                    file_path,
+                    session_token,
+                    session_data,
+                    context,
+                    cache_format_id=_cache_format_id_for_main_action("vk", "vk_download"),
+                )
+            except Exception as e:
+                error_code = _make_error_code("vk", _classify_internal_error_category("vk", str(e)))
+                _schedule_platform_failure_log(
+                    platform="vk",
+                    stage="download_video",
+                    url=url,
+                    error_code=error_code,
+                    exc=e,
+                    session_id=session_id,
+                )
+                await query.edit_message_text(_build_public_error_message("vk", error_code, str(e)))
+                await _cleanup_user_session(user_id, context, session_token)
+            return
+
+        case "vk_audio":
+            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            try:
+                file_path = await run_blocking(
+                    download_vk_audio,
+                    url,
+                    session_id,
+                    description="download_vk_audio",
+                )
+                if not file_path:
+                    await query.edit_message_text(ERROR_MESSAGE)
+                    await _cleanup_user_session(user_id, context, session_token)
+                    return
+                await send_file(query, file_path, session_token, session_data, context, cache_format_id="vk_audio")
+            except Exception as e:
+                error_code = _make_error_code("vk", _classify_internal_error_category("vk", str(e)))
+                _schedule_platform_failure_log(
+                    platform="vk",
+                    stage="download_audio",
+                    url=url,
+                    error_code=error_code,
+                    exc=e,
+                    session_id=session_id,
+                )
+                await query.edit_message_text(_build_public_error_message("vk", error_code, str(e)))
                 await _cleanup_user_session(user_id, context, session_token)
             return
 

@@ -19,6 +19,7 @@ from yt_dlp.networking.impersonate import ImpersonateTarget
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.gokapi_utils import upload_to_gokapi, is_gokapi_configured
+from utils.media_processor import convert_webm_to_mp4
 from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
 
 logger = setup_logger(__name__)
@@ -1005,6 +1006,8 @@ def download_tiktok_video(
         opts['outtmpl'] = str(output_path_template)
         opts['quiet'] = False
         opts['no_warnings'] = True
+        opts['format'] = 'bestvideo+bestaudio/best'
+        opts['merge_output_format'] = 'mp4'
         
         if use_cookies and TIKTOK_COOKIES_FILE.exists():
             opts['cookiefile'] = str(TIKTOK_COOKIES_FILE)
@@ -1018,6 +1021,16 @@ def download_tiktok_video(
                 raise Exception("Файл не был загружен.")
             
             logger.info(f"Видео успешно скачано: {downloaded_file}")
+            
+            # Конвертация webm → mp4 для совместимости Telegram
+            if downloaded_file.suffix.lower() == '.webm':
+                logger.info(f"Обнаружен webm файл, конвертируем в mp4: {downloaded_file}")
+                try:
+                    downloaded_file = convert_webm_to_mp4(downloaded_file, session_id)
+                    logger.info(f"Конвертация webm в mp4 завершена: {downloaded_file}")
+                except Exception as e:
+                    logger.warning(f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.", exc_info=True)
+            
             file_size = downloaded_file.stat().st_size
             
             # Загрузка на Gokapi при превышении лимита

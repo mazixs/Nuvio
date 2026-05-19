@@ -1,6 +1,6 @@
 # === ОПИСАНИЯ, ПРИВЕТСТВИЯ, ПОДСКАЗКИ ===
 WELCOME_MESSAGE = """
-👋 Привет! Я бот для скачивания видео с YouTube, TikTok и Instagram.
+👋 Привет! Я бот для скачивания видео с YouTube, TikTok, Instagram, Rutube и VK.
 
 Отправь мне ссылку на видео, и я помогу тебе скачать его в нужном формате.
 Используй /help для получения подробной информации.
@@ -9,6 +9,8 @@ WELCOME_MESSAGE = """
 • YouTube (видео и Shorts)
 • TikTok (видео)
 • Instagram (видео и Reels)
+• Rutube
+• VK Video
 
 По вопросам и предложениям обращайтесь к администратору бота.
 """
@@ -32,6 +34,8 @@ HELP_MESSAGE = """
 • YouTube (видео и Shorts)
 • TikTok (видео)
 • Instagram (видео и Reels)
+• Rutube
+• VK Video
 
 ⚠️ *Ограничения:*
 - Максимальная длительность видео: 3 часа.
