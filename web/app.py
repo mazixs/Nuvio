@@ -166,9 +166,13 @@ app.add_middleware(
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
 WEB_USERNAME = os.environ.get("WEB_USERNAME", "admin")
-WEB_PASSWORD_HASH = hashlib.sha256(
-    os.environ.get("WEB_PASSWORD", "changeme").encode()
-).hexdigest()
+SALT = secrets.token_bytes(16)
+WEB_PASSWORD_HASH = hashlib.pbkdf2_hmac(
+    "sha256",
+    os.environ.get("WEB_PASSWORD", "changeme").encode(),
+    SALT,
+    100000
+)
 
 
 def _check_auth(request: Request) -> bool:
@@ -231,8 +235,13 @@ async def login_submit(request: Request, username: str = Form(...), password: st
             {"error": "Заполните все поля"},
         )
 
-    # Timing-safe сравнение (защита от timing attack)
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    # Timing-safe сравнение с использованием PBKDF2 (защита от timing attack и brute-force)
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode(),
+        SALT,
+        100000
+    )
     username_ok = hmac.compare_digest(username, WEB_USERNAME)
     password_ok = hmac.compare_digest(password_hash, WEB_PASSWORD_HASH)
 
