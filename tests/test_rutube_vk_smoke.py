@@ -4,8 +4,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from utils import rutube_vk_utils
 
 

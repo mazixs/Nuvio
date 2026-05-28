@@ -11,7 +11,6 @@ from config import MAX_FILE_SIZE, MAX_VIDEO_DURATION
 from utils.logger import setup_logger
 from utils.media_processor import convert_webm_to_mp4
 from utils.temp_file_manager import get_temp_file_path
-from utils.gokapi_utils import upload_to_gokapi
 from utils.youtube_utils import (
     _apply_network_opts,
     _execute_with_backoff,
