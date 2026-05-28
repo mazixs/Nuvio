@@ -2,9 +2,10 @@
 Модуль для обработки медиафайлов с использованием FFmpeg.
 """
 
+import json
 import subprocess
 from pathlib import Path
-from config import MAX_FILE_SIZE
+from config import MAX_FILE_SIZE, BLOCKING_TASK_TIMEOUT
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 
@@ -78,7 +79,12 @@ def convert_to_format(
             text=True
         )
         
-        stdout, stderr = process.communicate()
+        try:
+            stdout, stderr = process.communicate(timeout=BLOCKING_TASK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise Exception(f"FFmpeg процесс превысил лимит времени в {BLOCKING_TASK_TIMEOUT} секунд.")
         
         if process.returncode != 0:
             logger.error(f"Ошибка FFmpeg: {stderr}")
@@ -146,12 +152,12 @@ def compress_file(
         
         output_path = get_temp_file_path(session_id, output_filename)
         
-        # Получаем информацию о входном файле
+        # Получаем информацию о входном файле через JSON
         probe_cmd = [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "format=duration,bit_rate",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-show_format",
+            "-print_format", "json",
             str(input_path)
         ]
         
@@ -162,22 +168,37 @@ def compress_file(
             text=True
         )
         
-        probe_stdout, probe_stderr = probe_process.communicate()
+        try:
+            probe_stdout, probe_stderr = probe_process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            probe_process.kill()
+            probe_stdout, probe_stderr = probe_process.communicate()
+            raise Exception("FFprobe процесс превысил лимит времени в 15 секунд.")
         
         if probe_process.returncode != 0:
             logger.error(f"Ошибка FFprobe: {probe_stderr}")
             raise Exception(f"Ошибка при получении информации о файле: {probe_stderr}")
         
-        # Парсим вывод FFprobe
-        duration, bit_rate = probe_stdout.strip().split('\n')
-        duration = float(duration)
+        # Безопасно парсим JSON-вывод FFprobe
+        try:
+            probe_data = json.loads(probe_stdout)
+            format_info = probe_data.get("format", {})
+            duration_str = format_info.get("duration")
+            duration = float(duration_str) if duration_str else 0.0
+            
+            bit_rate_str = format_info.get("bit_rate")
+            bit_rate = int(bit_rate_str) if (bit_rate_str and bit_rate_str != "N/A") else 0
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Не удалось распарсить вывод FFprobe: {e}")
+            raise Exception(f"Ошибка при разборе метаданных файла: {e}")
+        
+        if duration <= 0.0:
+            raise Exception("Не удалось определить длительность медиафайла или она равна нулю.")
         
         # Если bit_rate пусто, вычисляем его из размера файла и длительности
-        if not bit_rate or bit_rate == 'N/A':
+        if bit_rate <= 0:
             file_size = input_path.stat().st_size
             bit_rate = int(file_size * 8 / duration)
-        else:
-            bit_rate = int(bit_rate)
         
         # Вычисляем новый битрейт для достижения целевого размера
         target_bit_rate = int((target_size * 0.95 * 8) / duration)  # 95% от целевого размера для запаса
@@ -202,7 +223,12 @@ def compress_file(
             text=True
         )
         
-        stdout, stderr = process.communicate()
+        try:
+            stdout, stderr = process.communicate(timeout=BLOCKING_TASK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise Exception(f"FFmpeg процесс превысил лимит времени в {BLOCKING_TASK_TIMEOUT} секунд.")
         
         if process.returncode != 0:
             logger.error(f"Ошибка FFmpeg: {stderr}")
@@ -252,12 +278,12 @@ def convert_to_mp3_with_compression(
         raise Exception("FFmpeg не установлен. Установите FFmpeg для конвертации файлов.")
 
     try:
-        # Получаем информацию о входном файле
+        # Получаем информацию о входном файле через JSON
         probe_cmd = [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "format=duration,bit_rate",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-show_format",
+            "-print_format", "json",
             str(input_path)
         ]
         probe_process = subprocess.Popen(
@@ -266,17 +292,36 @@ def convert_to_mp3_with_compression(
             stderr=subprocess.PIPE,
             text=True
         )
-        probe_stdout, probe_stderr = probe_process.communicate()
+        try:
+            probe_stdout, probe_stderr = probe_process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            probe_process.kill()
+            probe_stdout, probe_stderr = probe_process.communicate()
+            raise Exception("FFprobe процесс превысил лимит времени в 15 секунд.")
+            
         if probe_process.returncode != 0:
             logger.error(f"Ошибка FFprobe: {probe_stderr}")
             raise Exception(f"Ошибка при получении информации о файле: {probe_stderr}")
-        duration, bit_rate = probe_stdout.strip().split('\n')
-        duration = float(duration)
-        if not bit_rate or bit_rate == 'N/A':
+            
+        try:
+            probe_data = json.loads(probe_stdout)
+            format_info = probe_data.get("format", {})
+            duration_str = format_info.get("duration")
+            duration = float(duration_str) if duration_str else 0.0
+            
+            bit_rate_str = format_info.get("bit_rate")
+            bit_rate = int(bit_rate_str) if (bit_rate_str and bit_rate_str != "N/A") else 0
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Не удалось распарсить вывод FFprobe: {e}")
+            raise Exception(f"Ошибка при разборе метаданных файла: {e}")
+            
+        if duration <= 0.0:
+            raise Exception("Не удалось определить длительность медиафайла или она равна нулю.")
+            
+        if bit_rate <= 0:
             file_size = input_path.stat().st_size
             bit_rate = int(file_size * 8 / duration)
-        else:
-            bit_rate = int(bit_rate)
+            
         # Новый битрейт для уменьшения размера на 50%
         target_bit_rate = int(bit_rate // 2)
         if output_filename is None:
@@ -296,7 +341,12 @@ def convert_to_mp3_with_compression(
             stderr=subprocess.PIPE,
             text=True
         )
-        stdout, stderr = process.communicate()
+        try:
+            stdout, stderr = process.communicate(timeout=BLOCKING_TASK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise Exception(f"FFmpeg процесс превысил лимит времени в {BLOCKING_TASK_TIMEOUT} секунд.")
         if process.returncode != 0:
             logger.error(f"Ошибка FFmpeg: {stderr}")
             raise Exception(f"Ошибка при конвертации файла: {stderr}")
