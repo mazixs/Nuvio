@@ -11,10 +11,10 @@ from config import MAX_FILE_SIZE, MAX_VIDEO_DURATION
 from utils.logger import setup_logger
 from utils.media_processor import convert_webm_to_mp4
 from utils.temp_file_manager import get_temp_file_path
-from utils.youtube_utils import (
-    _apply_network_opts,
-    _execute_with_backoff,
-    _maybe_upload_large_file,
+from utils.ytdlp_common import (
+    apply_network_opts,
+    execute_with_backoff,
+    finalize_downloaded_file,
 )
 
 logger = setup_logger(__name__)
@@ -44,7 +44,7 @@ def _get_info(url: str, platform: str) -> dict[str, Any]:
         'no_warnings': True,
         'skip_download': True,
     }
-    _apply_network_opts(ydl_opts)
+    apply_network_opts(ydl_opts)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         duration = info.get('duration')
@@ -169,7 +169,7 @@ def _download_video(
             'merge_output_format': 'mp4',
             'progress_hooks': [lambda d: logger.debug(f"Скачивание: {d['status']} - {d.get('_percent_str', '0%')}")],
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
         logger.info(f"Скачивание {url} через yt-dlp без cookies, формат: {format_selector}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -178,9 +178,9 @@ def _download_video(
                 raise Exception("Файл не был загружен.")
             logger.info(f"Видео успешно скачано: {downloaded_file}")
             downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
-            return _maybe_upload_large_file(downloaded_file, force_local)
+            return finalize_downloaded_file(downloaded_file, force_local)
 
-    return _execute_with_backoff(f"Скачивание видео {url}", _download)
+    return execute_with_backoff(f"Скачивание видео {url}", _download)
 
 
 def download_rutube_video(
@@ -226,7 +226,7 @@ def _download_audio(
             }],
             'progress_hooks': [lambda d: logger.debug(f"Скачивание аудио: {d['status']} - {d.get('_percent_str', '0%')}")],
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
         logger.info(f"Скачивание аудио {url} через yt-dlp без cookies, формат: {format_selector}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -235,9 +235,9 @@ def _download_audio(
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан после postprocessing.")
             logger.info(f"Аудио успешно извлечено: {downloaded_file}")
-            return _maybe_upload_large_file(downloaded_file, force_local)
+            return finalize_downloaded_file(downloaded_file, force_local)
 
-    return _execute_with_backoff(f"Скачивание аудио {url}", _download)
+    return execute_with_backoff(f"Скачивание аудио {url}", _download)
 
 
 def download_rutube_audio(

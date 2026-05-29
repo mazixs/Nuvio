@@ -18,7 +18,8 @@ from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
 from yt_dlp.networking.impersonate import ImpersonateTarget
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
-from utils.gokapi_utils import upload_to_gokapi, is_gokapi_configured
+from utils.gokapi_utils import is_gokapi_configured
+from utils.ytdlp_common import finalize_downloaded_file
 from utils.media_processor import convert_webm_to_mp4
 from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
 
@@ -667,18 +668,7 @@ def _collect_instagram_photo_assets(
     return info, image_paths, audio_path
 
 
-def _finalize_downloaded_file(file_path: Path, force_local: bool) -> Path | str:
-    file_size = file_path.stat().st_size
-    if not force_local and file_size > MAX_FILE_SIZE:
-        success, link_or_error = upload_to_gokapi(file_path)
-        if success:
-            try:
-                file_path.unlink()
-            except Exception as e:
-                logger.warning("Не удалось удалить локальный файл %s после загрузки: %s", file_path, e)
-            return link_or_error
-        raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
-    return file_path
+
 
 
 def download_tiktok_photo_post_assets(
@@ -708,7 +698,7 @@ def download_tiktok_photo_audio(
         logger.debug("output_dir=%s передан для аудио фото-поста, используется временная директория сессии", output_dir)
     if audio_path is None:
         raise PhotoPostAudioMissingError(f"У TikTok фото-поста «{info.get('title') or 'без названия'}» нет отдельной аудиодорожки.")
-    return _finalize_downloaded_file(audio_path, force_local)
+    return finalize_downloaded_file(audio_path, force_local)
 
 
 def download_instagram_photo_post_assets(
@@ -738,7 +728,7 @@ def download_instagram_photo_audio(
         logger.debug("output_dir=%s передан для аудио фото-поста Instagram, используется временная директория сессии", output_dir)
     if audio_path is None:
         raise PhotoPostAudioMissingError(f"У Instagram фото-поста «{info.get('title') or 'без названия'}» нет отдельной аудиодорожки.")
-    return _finalize_downloaded_file(audio_path, force_local)
+    return finalize_downloaded_file(audio_path, force_local)
 
 
 def get_tiktok_info(url: str) -> dict[str, Any]:
@@ -1031,23 +1021,7 @@ def download_tiktok_video(
                 except Exception as e:
                     logger.warning(f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.", exc_info=True)
             
-            file_size = downloaded_file.stat().st_size
-            
-            # Загрузка на Gokapi при превышении лимита
-            if not force_local and file_size > MAX_FILE_SIZE:
-                logger.warning(f"Размер {file_size} байт превышает лимит. Загрузка на Gokapi...")
-                success, link_or_error = upload_to_gokapi(downloaded_file)
-                if success:
-                    logger.info(f"Загружено на Gokapi: {link_or_error}")
-                    try:
-                        downloaded_file.unlink()
-                    except Exception as e:
-                        logger.error(f"Ошибка удаления локального файла: {e}")
-                    return link_or_error
-                else:
-                    raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
-            
-            return downloaded_file
+            return finalize_downloaded_file(downloaded_file, force_local)
     
     # Получаем оптимизированные конфигурации
     configurations = _get_tiktok_base_configs()
@@ -1165,26 +1139,7 @@ def download_instagram_video(
                         )
                     raise Exception("Файл не был загружен, хотя ydl.extract_info завершился.")
             
-            logger.info(f"Видео успешно скачано. Файл: {downloaded_file}")
-            file_size = downloaded_file.stat().st_size
-            
-            if not force_local and file_size > MAX_FILE_SIZE:
-                logger.warning(f"Размер файла ({downloaded_file}) превышает лимит: {file_size} байт. Загружаем на Gokapi.")
-                success, link_or_error = upload_to_gokapi(downloaded_file)
-                if success:
-                    logger.info(f"Файл загружен на Gokapi: {link_or_error}")
-                    try:
-                        downloaded_file.unlink()
-                        logger.info(f"Локальный файл {downloaded_file} удален после загрузки на Gokapi.")
-                    except Exception as e_del:
-                        logger.error(f"Ошибка при удалении локального файла {downloaded_file} после загрузки на Gokapi: {e_del}")
-                    return link_or_error
-                else:
-                    logger.error(f"Не удалось загрузить файл на Gokapi: {link_or_error}")
-                    raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
-            
-            logger.info(f"Видео ({downloaded_file}) успешно загружено (для прямой отправки).")
-            return downloaded_file
+            return finalize_downloaded_file(downloaded_file, force_local)
     
     # Сначала пробуем без cookies
     try:
@@ -1362,24 +1317,7 @@ def download_tiktok_audio(
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан.")
             
-            logger.info(f"Нативное M4A аудио успешно извлечено: {downloaded_file}")
-            file_size = downloaded_file.stat().st_size
-            
-            # Загрузка на Gokapi при превышении лимита
-            if not force_local and file_size > MAX_FILE_SIZE:
-                logger.warning(f"Размер {file_size} байт превышает лимит. Загрузка на Gokapi...")
-                success, link_or_error = upload_to_gokapi(downloaded_file)
-                if success:
-                    logger.info(f"Загружено на Gokapi: {link_or_error}")
-                    try:
-                        downloaded_file.unlink()
-                    except Exception as e:
-                        logger.error(f"Ошибка удаления: {e}")
-                    return link_or_error
-                else:
-                    raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
-            
-            return downloaded_file
+            return finalize_downloaded_file(downloaded_file, force_local)
     
     # Получаем конфигурации и пробуем скачать
     configurations = _get_tiktok_base_configs()
@@ -1518,26 +1456,7 @@ def download_instagram_audio(
         if not audio_path.exists():
             raise Exception("Аудио файл не был создан.")
             
-        logger.info(f"Аудио успешно извлечено. Файл: {audio_path}")
-        file_size = audio_path.stat().st_size
-        
-        if not force_local and file_size > MAX_FILE_SIZE:
-            logger.warning(f"Размер файла ({audio_path}) превышает лимит: {file_size} байт. Загружаем на Gokapi.")
-            success, link_or_error = upload_to_gokapi(audio_path)
-            if success:
-                logger.info(f"Файл загружен на Gokapi: {link_or_error}")
-                try:
-                    audio_path.unlink()
-                    logger.info(f"Локальный файл {audio_path} удален после загрузки на Gokapi.")
-                except Exception as e_del:
-                    logger.error(f"Ошибка при удалении локального файла {audio_path} после загрузки на Gokapi: {e_del}")
-                return link_or_error
-            else:
-                logger.error(f"Не удалось загрузить файл на Gokapi: {link_or_error}")
-                raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
-        
-        logger.info(f"Аудио ({audio_path}) успешно загружено (для прямой отправки).")
-        return audio_path
+        return finalize_downloaded_file(audio_path, force_local)
         
     except Exception as e:
         # Если что-то пошло не так, удаляем временные файлы

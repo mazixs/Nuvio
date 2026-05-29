@@ -4,8 +4,6 @@
 
 import re
 import sys
-import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict, NotRequired
 
@@ -19,58 +17,16 @@ from config import (
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.media_processor import convert_webm_to_mp4
-from utils.gokapi_utils import upload_to_gokapi
 from utils.ytdlp_runtime import extract_cli_output_path, run_yt_dlp_cli
-
-logger = setup_logger(__name__)
-
-DEFAULT_YTDLP_NETWORK_OPTS: dict[str, Any] = {
-    'retries': 5,
-    'socket_timeout': 40,
-    'http_chunk_size': 10_485_760,  # 10 МБ
-    'fragment_retries': 5,
-    'skip_unavailable_fragments': True,
-    'abort_on_unavailable_fragments': False,
-    'concurrent_fragment_downloads': 4,
-    'continuedl': False,
-    'noplaylist': True,
-    # EJS: YouTube требует JS runtime для решения n-parameter challenge (с yt-dlp 2025.11+)
-    'remote_components': ['ejs:github'],
-}
-
-_NETWORK_TIMEOUT_SIGNATURES = (
-    'Read timed out',
-    'Connection timed out',
-    'Timed out',
-    'Connection reset by peer',
-    'UNEXPECTED_EOF_WHILE_READING',
-    'EOF occurred in violation of protocol',
-    'fragment not found',
-    'HTTP Error 403',
+from utils.ytdlp_common import (
+    DEFAULT_YTDLP_NETWORK_OPTS,
+    apply_network_opts,
+    classify_download_error_kind,
+    execute_with_backoff,
+    finalize_downloaded_file,
 )
 
-
-def _classify_download_error_kind(message: str) -> str:
-    """Классифицирует тип DownloadError для корректного уровня логирования."""
-    msg_lower = message.lower()
-    if 'requested format is not available' in msg_lower:
-        return 'FORMAT_UNAVAILABLE'
-    if any(signature in msg_lower for signature in ('http error 403', 'forbidden', 'login required', 'private video')):
-        return 'ACCESS_RESTRICTED'
-    if any(
-        signature in msg_lower
-        for signature in (
-            'requires a javascript runtime',
-            'nsig extraction failed',
-            'signature extraction failed',
-            'unable to extract initial player response',
-            'remote components',
-        )
-    ):
-        return 'EXTRACTOR_RUNTIME'
-    if any(signature.lower() in msg_lower for signature in _NETWORK_TIMEOUT_SIGNATURES):
-        return 'NETWORK_TIMEOUT'
-    return 'UNKNOWN'
+logger = setup_logger(__name__)
 
 # Регулярное выражение для проверки YouTube URL (включая Shorts)
 YOUTUBE_URL_PATTERN = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=|shorts\/)?([a-zA-Z0-9_-]{11})'
@@ -112,7 +68,7 @@ def get_video_info(url: str) -> dict[str, Any]:
             'no_warnings': True,
             'skip_download': True,
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
         if use_cookies and YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
             logger.info(f"Использование файла cookies: {YOUTUBE_COOKIES_FILE}")
             ydl_opts['cookiefile'] = YOUTUBE_COOKIES_FILE
@@ -220,39 +176,7 @@ def get_available_formats(video_info: dict[str, Any], filter_by_size: bool = Tru
         'combined': combined_formats
     }
 
-def _apply_network_opts(options: dict[str, Any]) -> None:
-    """Добавляет в options дефолтные параметры сети для yt-dlp."""
-    options.update(DEFAULT_YTDLP_NETWORK_OPTS)
 
-
-def _execute_with_backoff(description: str, func: Callable[[], Path | str], max_attempts: int = 3) -> Path | str:
-    """Запускает функцию с экспоненциальным backoff при сетевых таймаутах."""
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return func()
-        except yt_dlp.utils.DownloadError as e:
-            message = str(e)
-            error_kind = _classify_download_error_kind(message)
-            if error_kind == 'NETWORK_TIMEOUT':
-                if attempt == max_attempts:
-                    logger.error(
-                        f"{description} не удалось после {attempt} попыток из-за таймаута: {message}",
-                        exc_info=True,
-                    )
-                    raise
-                delay = min(2 ** attempt, 30)
-                logger.warning(
-                    f"{description}: таймаут (попытка {attempt}/{max_attempts}). Повтор через {delay}с",
-                )
-                time.sleep(delay)
-                continue
-            if error_kind in {'FORMAT_UNAVAILABLE', 'ACCESS_RESTRICTED'}:
-                logger.warning(
-                    f"{description}: ожидаемая ошибка yt-dlp ({error_kind}): {message}"
-                )
-            else:
-                logger.error(f"{description}: ошибка скачивания: {message}", exc_info=True)
-            raise
 
 
 def _convert_webm_if_needed(downloaded_file: Path, session_id: str) -> Path:
@@ -287,30 +211,7 @@ def _cookiefile_if_available(use_cookies: bool) -> str | None:
     return None
 
 
-def _maybe_upload_large_file(downloaded_file: Path, force_local: bool) -> Path | str:
-    """Отдаёт файл локально или выгружает его через Gokapi при превышении лимита."""
-    file_size = downloaded_file.stat().st_size
-    if force_local or file_size <= MAX_FILE_SIZE:
-        return downloaded_file
 
-    logger.warning(
-        "Размер файла %s (%s байт) превышает лимит Telegram. Пробуем Gokapi.",
-        downloaded_file,
-        file_size,
-    )
-    try:
-        success, link_or_error = upload_to_gokapi(downloaded_file)
-        if success:
-            logger.info("Файл загружен на Gokapi: %s", link_or_error)
-            return link_or_error
-        raise Exception(f"Сервер загрузки недоступен: {link_or_error}")
-    finally:
-        try:
-            if downloaded_file.exists():
-                downloaded_file.unlink()
-                logger.info("Локальный файл %s удалён после попытки выгрузки.", downloaded_file)
-        except Exception as e_del:
-            logger.error("Ошибка при удалении локального файла %s: %s", downloaded_file, e_del)
 
 
 def _build_cli_download_command(
@@ -395,7 +296,7 @@ def _download_with_cli_fallback(
 
     if extract_audio_codec != "mp3":
         downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
-    return _maybe_upload_large_file(downloaded_file, force_local)
+    return finalize_downloaded_file(downloaded_file, force_local)
 
 
 def download_video(
@@ -449,7 +350,7 @@ def download_video(
             'progress_hooks': [lambda d: logger.debug(f"Скачивание: {d['status']} - {d.get('_percent_str', '0%')}")],
             'merge_output_format': 'mp4',
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
             logger.info("Использование файла cookies для скачивания: %s", cookiefile)
@@ -466,7 +367,7 @@ def download_video(
                 raise Exception("Файл не был загружен, хотя ydl.extract_info завершился.")
             logger.info("Видео успешно скачано. Файл: %s", downloaded_file)
             downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
-            result = _maybe_upload_large_file(downloaded_file, force_local)
+            result = finalize_downloaded_file(downloaded_file, force_local)
             logger.info("Видео готово к выдаче: %s", result)
             return result
 
@@ -487,7 +388,7 @@ def download_video(
     if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
         logger.info("Используем cookies для YouTube с первой попытки")
         try:
-            return _execute_with_backoff(
+            return execute_with_backoff(
                 "Скачивание видео с cookies",
                 lambda: _try_with_fallback(True),
             )
@@ -499,7 +400,7 @@ def download_video(
         logger.warning("Cookies не найдены, скачиваем без авторизации")
 
     try:
-        return _execute_with_backoff(
+        return execute_with_backoff(
             "Скачивание видео без cookies",
             lambda: _try_with_fallback(False),
         )
@@ -508,7 +409,7 @@ def download_video(
         logger.error("Ошибка скачивания видео встроенным API: %s", e, exc_info=True)
 
     if YTDLP_CLI_FALLBACK:
-        error_kind = _classify_download_error_kind(str(final_error or ""))
+        error_kind = classify_download_error_kind(str(final_error or ""))
         if error_kind != 'ACCESS_RESTRICTED':
             logger.warning("Переключаемся на локальный CLI fallback yt-dlp")
             cli_overrides: list[tuple[bool, str | None, bool]] = [
@@ -576,7 +477,7 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
             'no_warnings': True,
             'progress_hooks': [lambda d: logger.debug(f"Скачивание нативного аудио: {d['status']} - {d.get('_percent_str', '0%')}")],
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
 
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
@@ -593,7 +494,7 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан.")
             logger.info("Нативное аудио успешно скачано: %s", downloaded_file)
-            return _maybe_upload_large_file(downloaded_file, force_local)
+            return finalize_downloaded_file(downloaded_file, force_local)
 
     def _try_audio_native(use_cookies: bool) -> Path | str:
         try:
@@ -606,7 +507,7 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
 
     final_error: Exception | None = None
     try:
-        return _execute_with_backoff(
+        return execute_with_backoff(
             "Скачивание нативного аудио без cookies",
             lambda: _try_audio_native(False),
         )
@@ -616,7 +517,7 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
 
     if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
         try:
-            return _execute_with_backoff(
+            return execute_with_backoff(
                 "Скачивание нативного аудио с cookies",
                 lambda: _try_audio_native(True),
             )
@@ -624,7 +525,7 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
             final_error = e
             logger.error("Ошибка при скачивании нативного аудио даже с cookies: %s", e, exc_info=True)
 
-    if YTDLP_CLI_FALLBACK and _classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
+    if YTDLP_CLI_FALLBACK and classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
         logger.warning("Переключаемся на CLI fallback для нативного аудио")
         for use_cookies, override_format in ((False, None), (True, None), (False, "bestaudio"), (True, "bestaudio")):
             if use_cookies and not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
@@ -687,7 +588,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
             }],
             'progress_hooks': [lambda d: logger.debug(f"Скачивание аудио: {d['status']} - {d.get('_percent_str', '0%')}")],
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
 
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
@@ -705,7 +606,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан после postprocessing.")
             logger.info("Аудио успешно извлечено и конвертировано в %s: %s", preferred_codec, downloaded_file)
-            return _maybe_upload_large_file(downloaded_file, force_local)
+            return finalize_downloaded_file(downloaded_file, force_local)
 
     def _try_audio(use_cookies: bool) -> Path | str:
         try:
@@ -718,7 +619,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
 
     final_error: Exception | None = None
     try:
-        return _execute_with_backoff(
+        return execute_with_backoff(
             "Скачивание аудио без cookies",
             lambda: _try_audio(False),
         )
@@ -728,7 +629,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
 
     if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
         try:
-            return _execute_with_backoff(
+            return execute_with_backoff(
                 "Скачивание аудио с cookies",
                 lambda: _try_audio(True),
             )
@@ -736,7 +637,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
             final_error = e
             logger.error("Ошибка при скачивании аудио даже с cookies: %s", e, exc_info=True)
 
-    if YTDLP_CLI_FALLBACK and _classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
+    if YTDLP_CLI_FALLBACK and classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
         logger.warning("Переключаемся на CLI fallback для %s-аудио", preferred_codec)
         for use_cookies, override_format in ((False, None), (True, None), (False, "bestaudio"), (True, "bestaudio")):
             if use_cookies and not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
@@ -788,7 +689,7 @@ def download_subtitles(url: str, session_id: str, output_dir: Path | None = None
             'quiet': False,
             'no_warnings': True,
         }
-        _apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts)
         
         if use_cookies and YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
             logger.info(f"Использование cookies для субтитров: {YOUTUBE_COOKIES_FILE}")
