@@ -48,6 +48,14 @@ class PhotoPostAudioMissingError(Exception):
     """У фото-поста нет отдельной аудиодорожки."""
 
 
+class CriticalExtractorError(Exception):
+    """Критическая ошибка экстрактора (блокировка, приватный контент, необходимость авторизации)."""
+
+
+class RateLimitError(Exception):
+    """Лимит запросов превышен и не был сброшен после попыток повтора."""
+
+
 def is_valid_tiktok_url(url: str) -> bool:
     return bool(re.match(TIKTOK_URL_PATTERN, url))
 
@@ -101,15 +109,17 @@ def _smart_retry(func: Callable, max_attempts: int = MAX_RETRY_ATTEMPTS, context
             elif 'ssl' in error_msg or 'unexpected eof' in error_msg:
                 logger.warning(f"{context} - SSL/EOF ошибка, пропускаем конфигурацию: {e}")
                 raise
-            elif any(keyword in error_msg for keyword in ['blocked', 'forbidden', 'unavailable']):
+            elif any(keyword in error_msg for keyword in ['blocked', 'forbidden', 'unavailable', 'login required', 'sign in']):
                 logger.error(f"{context} - Критическая ошибка: {e}. Дальнейшие попытки бесполезны.")
-                raise
+                raise CriticalExtractorError(str(e)) from e
             
             if attempt < max_attempts:
                 logger.warning(f"{context} - Попытка {attempt}/{max_attempts} неудачна: {e}")
             else:
                 logger.error(f"{context} - Все {max_attempts} попытки неудачны")
     
+    if last_exception and ('rate-limit' in str(last_exception).lower() or 'too many requests' in str(last_exception).lower()):
+        raise RateLimitError(str(last_exception)) from last_exception
     raise last_exception
 
 
@@ -777,6 +787,8 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
                         max_attempts=2,
                         context=f"TikTok info (config {attempt}, с cookies)"
                     )
+                except (CriticalExtractorError, RateLimitError):
+                    raise
                 except Exception as e:
                     logger.warning(f"Конфигурация {attempt} с cookies неудачна: {e}")
             
@@ -787,7 +799,9 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
                 max_attempts=2,
                 context=f"TikTok info (config {attempt}, без cookies)"
             )
-        
+        except (CriticalExtractorError, RateLimitError) as e:
+            logger.error(f"Прерываем обход конфигураций из-за критической ошибки: {e}")
+            raise
         except Exception as e:
             error_msg = str(e).lower()
             logger.warning(f"Конфигурация {attempt} неудачна: {e}")
@@ -1039,6 +1053,8 @@ def download_tiktok_video(
                         max_attempts=2,
                         context=f"TikTok download (config {attempt}, с cookies)"
                     )
+                except (CriticalExtractorError, RateLimitError):
+                    raise
                 except Exception as e:
                     logger.warning(f"Конфигурация {attempt} с cookies неудачна: {e}")
             
@@ -1049,7 +1065,9 @@ def download_tiktok_video(
                 max_attempts=2,
                 context=f"TikTok download (config {attempt}, без cookies)"
             )
-        
+        except (CriticalExtractorError, RateLimitError) as e:
+            logger.error(f"Прерываем обход конфигураций из-за критической ошибки при скачивании: {e}")
+            raise
         except Exception as e:
             logger.warning(f"Конфигурация {attempt} неудачна: {e}")
             if attempt == len(configurations):
@@ -1334,6 +1352,8 @@ def download_tiktok_audio(
                         max_attempts=2,
                         context=f"TikTok audio M4A (config {attempt}, с cookies)"
                     )
+                except (CriticalExtractorError, RateLimitError):
+                    raise
                 except Exception as e:
                     logger.warning(f"Конфигурация {attempt} с cookies неудачна: {e}")
             
@@ -1344,7 +1364,9 @@ def download_tiktok_audio(
                 max_attempts=2,
                 context=f"TikTok audio M4A (config {attempt}, без cookies)"
             )
-        
+        except (CriticalExtractorError, RateLimitError) as e:
+            logger.error(f"Прерываем обход конфигураций из-за критической ошибки при скачивании аудио: {e}")
+            raise
         except Exception as e:
             logger.warning(f"Конфигурация {attempt} неудачна: {e}")
             if attempt == len(configurations):
