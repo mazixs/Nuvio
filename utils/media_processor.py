@@ -203,13 +203,17 @@ def compress_file(
         # Вычисляем новый битрейт для достижения целевого размера
         target_bit_rate = int((target_size * 0.95 * 8) / duration)  # 95% от целевого размера для запаса
         
+        # Вычисляем видеобитрейт как остаток от целевого битрейта за вычетом аудио (128k).
+        # Задаем нижний порог в 100 kbps, чтобы видео не превратилось в шум.
+        video_bitrate = max(target_bit_rate - 128_000, 100_000)
+        
         # Команда FFmpeg для сжатия
         cmd = [
             "ffmpeg",
             "-i", str(input_path),
-            "-b:v", f"{target_bit_rate // 2}",  # Половина битрейта для видео
-            "-maxrate", f"{target_bit_rate // 2}",
-            "-bufsize", f"{target_bit_rate // 4}",
+            "-b:v", f"{video_bitrate}",
+            "-maxrate", f"{video_bitrate}",
+            "-bufsize", f"{video_bitrate // 2}",
             "-b:a", "128k",  # Фиксированный битрейт для аудио
             "-y",  # Перезаписать выходной файл, если он существует
             str(output_path)
@@ -322,8 +326,8 @@ def convert_to_mp3_with_compression(
             file_size = input_path.stat().st_size
             bit_rate = int(file_size * 8 / duration)
             
-        # Новый битрейт для уменьшения размера на 50%
-        target_bit_rate = int(bit_rate // 2)
+        # Новый битрейт для уменьшения размера на 50% с защитным порогом 64 kbps
+        target_bit_rate = max(int(bit_rate // 2), 64_000)
         if output_filename is None:
             output_filename = f"{input_path.stem}_compressed.mp3"
         output_path = get_temp_file_path(session_id, output_filename)
