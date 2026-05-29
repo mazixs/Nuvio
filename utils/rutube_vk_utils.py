@@ -63,7 +63,7 @@ def get_vk_info(url: str) -> dict[str, Any]:
     return _get_info(url, "VK")
 
 
-def _get_available_formats(video_info: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _get_available_formats(video_info: dict[str, Any], filter_by_size: bool = True) -> dict[str, list[dict[str, Any]]]:
     formats = video_info.get('formats', [])
     video_formats: list[dict[str, Any]] = []
     audio_formats: list[dict[str, Any]] = []
@@ -73,7 +73,7 @@ def _get_available_formats(video_info: dict[str, Any]) -> dict[str, list[dict[st
         filesize = format_info.get('filesize') or format_info.get('filesize_approx')
         if not format_info.get('height') and not format_info.get('audio_channels'):
             continue
-        if filesize and filesize > MAX_FILE_SIZE:
+        if filter_by_size and filesize and filesize > MAX_FILE_SIZE:
             continue
 
         format_id = format_info.get('format_id')
@@ -121,12 +121,12 @@ def _get_available_formats(video_info: dict[str, Any]) -> dict[str, list[dict[st
     }
 
 
-def get_available_formats_rutube(video_info: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    return _get_available_formats(video_info)
+def get_available_formats_rutube(video_info: dict[str, Any], filter_by_size: bool = True) -> dict[str, list[dict[str, Any]]]:
+    return _get_available_formats(video_info, filter_by_size)
 
 
-def get_available_formats_vk(video_info: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    return _get_available_formats(video_info)
+def get_available_formats_vk(video_info: dict[str, Any], filter_by_size: bool = True) -> dict[str, list[dict[str, Any]]]:
+    return _get_available_formats(video_info, filter_by_size)
 
 
 def _resolve_output_template(session_id: str, output_dir: Path | None) -> Path:
