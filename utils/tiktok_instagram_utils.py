@@ -8,7 +8,7 @@ import re
 import time
 from html import unescape
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import Any
 from urllib.parse import urlparse
 
@@ -215,10 +215,30 @@ def _download_remote_file(url: str, destination: Path, referer: str | None = Non
         timeout=60,
     ) as response:
         response.raise_for_status()
-        with destination.open("wb") as file:
-            for chunk in response.iter_bytes():
-                if chunk:
-                    file.write(chunk)
+        
+        # Проверяем Content-Length перед скачиванием
+        content_length_str = response.headers.get("content-length")
+        if content_length_str:
+            try:
+                if int(content_length_str) > MAX_FILE_SIZE:
+                    raise ValueError(f"Размер удаленного файла превышает лимит в {MAX_FILE_SIZE // 1024 // 1024} МБ.")
+            except ValueError as val_err:
+                if "превышает лимит" in str(val_err):
+                    raise
+        
+        total_downloaded = 0
+        try:
+            with destination.open("wb") as file:
+                for chunk in response.iter_bytes():
+                    if chunk:
+                        total_downloaded += len(chunk)
+                        if total_downloaded > MAX_FILE_SIZE:
+                            raise ValueError(f"Размер скачанного удаленного файла превысил лимит в {MAX_FILE_SIZE // 1024 // 1024} МБ.")
+                        file.write(chunk)
+        except Exception:
+            if destination.exists():
+                destination.unlink()
+            raise
     return destination
 
 
@@ -474,18 +494,15 @@ def _extract_instagram_photo_images(media: dict[str, Any]) -> list[str]:
     return image_urls
 
 
-def _iter_nested_leaves(value: Any, path: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], Any]]:
+def _iter_nested_leaves(value: Any, path: tuple[str, ...] = ()) -> Generator[tuple[tuple[str, ...], Any], None, None]:
     if isinstance(value, dict):
-        items: list[tuple[tuple[str, ...], Any]] = []
         for key, nested_value in value.items():
-            items.extend(_iter_nested_leaves(nested_value, (*path, str(key))))
-        return items
-    if isinstance(value, list):
-        items = []
+            yield from _iter_nested_leaves(nested_value, (*path, str(key)))
+    elif isinstance(value, list):
         for index, nested_value in enumerate(value):
-            items.extend(_iter_nested_leaves(nested_value, (*path, str(index))))
-        return items
-    return [(path, value)]
+            yield from _iter_nested_leaves(nested_value, (*path, str(index)))
+    else:
+        yield path, value
 
 
 def _extract_instagram_audio_url(media: dict[str, Any]) -> str | None:
