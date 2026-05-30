@@ -2,6 +2,7 @@
 """
 Telegram бот для скачивания видео с YouTube, TikTok и Instagram.
 """
+
 import asyncio
 import signal
 from contextlib import suppress
@@ -9,7 +10,14 @@ from pathlib import Path
 
 import telegram
 from dotenv import load_dotenv
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+)
 
 # Load file-based environment variables from canonical to legacy paths.
 _BASE_DIR = Path(__file__).parent
@@ -24,9 +32,17 @@ for _dotenv_path in (
 from config import TELEGRAM_TOKEN, LOG_LEVEL, validate_config  # noqa: E402
 from utils.logger import setup_logger  # noqa: E402
 from utils.temp_file_manager import cleanup_temp_files  # noqa: E402
-from utils.cache_commands import stats_command, cleanup_cache_command, search_cache_command  # noqa: E402
+from utils.cache_commands import (
+    stats_command,
+    cleanup_cache_command,
+    search_cache_command,
+)  # noqa: E402
 from utils.video_cache import telegram_cache  # noqa: E402
-from utils.cookie_manager import admin_command, handle_admin_callback, handle_document_upload  # noqa: E402
+from utils.cookie_manager import (
+    admin_command,
+    handle_admin_callback,
+    handle_document_upload,
+)  # noqa: E402
 from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version  # noqa: E402
 from utils.analytics_db import get_users_for_csi  # noqa: E402
 
@@ -45,7 +61,10 @@ def _classify_polling_error(exc: telegram.error.TelegramError) -> tuple[str, str
             "Параллельный polling другим экземпляром или сервером с тем же токеном.",
         )
 
-    if "server disconnected without sending a response" in msg_lower or "remoteprotocolerror" in msg_lower:
+    if (
+        "server disconnected without sending a response" in msg_lower
+        or "remoteprotocolerror" in msg_lower
+    ):
         return (
             "REMOTE_DISCONNECT",
             "Bot API закрыл long polling без ответа. Частый сценарий: другой сервер перехватил polling или произошёл обрыв на переключении маршрута.",
@@ -85,6 +104,7 @@ def _polling_error_callback(exc: telegram.error.TelegramError) -> None:
         exc,
     )
 
+
 async def scheduled_cache_cleanup(context: ContextTypes.DEFAULT_TYPE):
     """Периодическая очистка кеша (запускается раз в сутки)."""
     try:
@@ -93,6 +113,8 @@ async def scheduled_cache_cleanup(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"🧹 Автоматическая очистка кэша: удалено {deleted} записей")
     except Exception as e:
         logger.error(f"Ошибка при автоматической очистке кэша: {e}")
+
+
 async def scheduled_cache_vacuum(context: ContextTypes.DEFAULT_TYPE):
     """Еженедельная оптимизация SQLite кэша."""
     try:
@@ -113,6 +135,7 @@ async def scheduled_csi_dispatch(context: ContextTypes.DEFAULT_TYPE):
     """Ежедневная рассылка CSI-опросов активным пользователям."""
     try:
         from utils.telegram_utils import send_csi_request
+
         user_ids = get_users_for_csi(days_since_last=7, min_active_days=1)
         for user_id in user_ids:
             try:
@@ -123,6 +146,7 @@ async def scheduled_csi_dispatch(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"📊 Разослано {len(user_ids)} CSI-опросов")
     except Exception as e:
         logger.error(f"Ошибка при рассылке CSI: {e}")
+
 
 def _build_application() -> Application:
     """Создаёт и конфигурирует экземпляр Application."""
@@ -153,11 +177,14 @@ def _build_application() -> Application:
 
     set_bot_instance(application.bot)
 
-    async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _global_error_handler(
+        update: object, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Глобальный обработчик необработанных исключений — шлёт краш-репорт админам."""
         logger.error("Необработанное исключение:", exc_info=context.error)
         if context.error:
             from utils.telegram_utils import _make_error_code
+
             error_code = _make_error_code("bot", "GLOBAL")
             await _notify_admins_crash(
                 error_code=error_code,
@@ -178,16 +205,30 @@ def _build_application() -> Application:
     application.add_handler(CommandHandler("cleanup_cache", cleanup_cache_command))
     application.add_handler(CommandHandler("search_cache", search_cache_command))
 
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document_upload))
-    application.add_handler(CallbackQueryHandler(handle_admin_callback, pattern=r"^admin\|"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_url))
+    application.add_handler(
+        MessageHandler(filters.Document.ALL, handle_document_upload)
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_admin_callback, pattern=r"^admin\|")
+    )
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, process_url)
+    )
     application.add_handler(CallbackQueryHandler(button_callback))
 
     if application.job_queue:
-        application.job_queue.run_repeating(scheduled_cache_cleanup, interval=86400, first=60)
-        application.job_queue.run_repeating(scheduled_cache_vacuum, interval=604800, first=600)
-        application.job_queue.run_repeating(scheduled_csi_dispatch, interval=86400, first=3600)
-        logger.info("🕒 Планировщик задач инициализирован (автоочистка кэша + CSI активны)")
+        application.job_queue.run_repeating(
+            scheduled_cache_cleanup, interval=86400, first=60
+        )
+        application.job_queue.run_repeating(
+            scheduled_cache_vacuum, interval=604800, first=600
+        )
+        application.job_queue.run_repeating(
+            scheduled_csi_dispatch, interval=86400, first=3600
+        )
+        logger.info(
+            "🕒 Планировщик задач инициализирован (автоочистка кэша + CSI активны)"
+        )
 
     return application
 
@@ -220,7 +261,9 @@ async def run_bot() -> None:
             "Автообновление yt-dlp не подтвердилось. Продолжаем с локальной версией %s",
             update_result.version_after or update_result.version_before or "unknown",
         )
-    logger.info("Текущая версия yt-dlp: %s", get_installed_yt_dlp_version() or "unknown")
+    logger.info(
+        "Текущая версия yt-dlp: %s", get_installed_yt_dlp_version() or "unknown"
+    )
     application = _build_application()
     try:
         await application.initialize()
@@ -272,6 +315,7 @@ def main() -> None:
         logger.error(f"Неожиданная ошибка: {exc}", exc_info=True)
     finally:
         cleanup_temp_files()
+
 
 if __name__ == "__main__":
     main()

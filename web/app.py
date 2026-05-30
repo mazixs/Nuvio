@@ -1,6 +1,7 @@
 """
 WebUI дашборд аналитики бота.
 """
+
 import hmac
 import logging
 import os
@@ -21,10 +22,14 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 import sys  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.analytics_db import (  # noqa: E402
-    init_db, dashboard_summary, get_all_users, get_user_detail,
+    init_db,
+    dashboard_summary,
+    get_all_users,
+    get_user_detail,
 )
 
 logger = logging.getLogger("nuvio.web")
@@ -67,15 +72,18 @@ _MAX_TRACKED_IPS = 10_000
 def _cleanup_old_ips() -> None:
     """Удаляет записи с истёкшими попытками, ограничивает общий размер."""
     now = time.time()
-    expired = [ip for ip, attempts in _login_attempts.items()
-               if all(now - t >= LOGIN_LOCKOUT for t, _ in attempts)]
+    expired = [
+        ip
+        for ip, attempts in _login_attempts.items()
+        if all(now - t >= LOGIN_LOCKOUT for t, _ in attempts)
+    ]
     for ip in expired:
         del _login_attempts[ip]
         _notified_ips.discard(ip)
     # Если всё ещё слишком много — удаляем самые старые
     if len(_login_attempts) > _MAX_TRACKED_IPS:
         by_oldest = sorted(_login_attempts, key=lambda ip: _login_attempts[ip][0][0])
-        for ip in by_oldest[:len(_login_attempts) - _MAX_TRACKED_IPS]:
+        for ip in by_oldest[: len(_login_attempts) - _MAX_TRACKED_IPS]:
             del _login_attempts[ip]
             _notified_ips.discard(ip)
 
@@ -110,13 +118,17 @@ async def _notify_admins_brute_force(ip: str) -> None:
     if ip in _notified_ips:
         return
     if not TELEGRAM_TOKEN or not ADMIN_IDS:
-        logger.warning("Fail2ban сработал для %s, но TELEGRAM_TOKEN/ADMIN_IDS не заданы", ip)
+        logger.warning(
+            "Fail2ban сработал для %s, но TELEGRAM_TOKEN/ADMIN_IDS не заданы", ip
+        )
         return
 
     _notified_ips.add(ip)
 
     attempts = _login_attempts.get(ip, [])
-    logins_used = list(dict.fromkeys(u for _, u in attempts))  # уникальные, сохраняя порядок
+    logins_used = list(
+        dict.fromkeys(u for _, u in attempts)
+    )  # уникальные, сохраняя порядок
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     lockout_min = LOGIN_LOCKOUT // 60
 
@@ -134,13 +146,18 @@ async def _notify_admins_brute_force(ip: str) -> None:
     async with httpx.AsyncClient(timeout=10) as client:
         for admin_id in ADMIN_IDS:
             try:
-                await client.post(url, json={
-                    "chat_id": admin_id,
-                    "text": text,
-                    "parse_mode": "HTML",
-                })
+                await client.post(
+                    url,
+                    json={
+                        "chat_id": admin_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                    },
+                )
             except Exception:
-                logger.error("Не удалось отправить fail2ban уведомление админу %s", admin_id)
+                logger.error(
+                    "Не удалось отправить fail2ban уведомление админу %s", admin_id
+                )
 
 
 def _sanitize_input(value: str) -> str:
@@ -168,10 +185,7 @@ templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 WEB_USERNAME = os.environ.get("WEB_USERNAME", "admin")
 SALT = secrets.token_bytes(16)
 WEB_PASSWORD_HASH = hashlib.pbkdf2_hmac(
-    "sha256",
-    os.environ.get("WEB_PASSWORD", "changeme").encode(),
-    SALT,
-    100000
+    "sha256", os.environ.get("WEB_PASSWORD", "changeme").encode(), SALT, 100000
 )
 
 
@@ -211,7 +225,9 @@ async def login_page(request: Request):
 
 
 @app.post("/login", response_class=HTMLResponse)
-async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+async def login_submit(
+    request: Request, username: str = Form(...), password: str = Form(...)
+):
     client_ip = request.client.host if request.client else "unknown"
 
     # Санитизация ввода
@@ -236,12 +252,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         )
 
     # Timing-safe сравнение с использованием PBKDF2 (защита от timing attack и brute-force)
-    password_hash = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode(),
-        SALT,
-        100000
-    )
+    password_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), SALT, 100000)
     username_ok = hmac.compare_digest(username, WEB_USERNAME)
     password_ok = hmac.compare_digest(password_hash, WEB_PASSWORD_HASH)
 
@@ -313,6 +324,7 @@ async def api_summary(request: Request, _=Depends(require_auth)):
 
 def run():
     import uvicorn
+
     port = int(os.environ.get("WEB_PORT", "8080"))
     uvicorn.run(app, host="0.0.0.0", port=port)
 

@@ -86,7 +86,9 @@ def _read_netscape_cookies(file_path: Path) -> list[dict[str, object]]:
             try:
                 expires = int(expires_raw)
             except ValueError as exc:
-                raise ValueError(f"Invalid cookie expiration value: {expires_raw}") from exc
+                raise ValueError(
+                    f"Invalid cookie expiration value: {expires_raw}"
+                ) from exc
 
             records.append(
                 {
@@ -117,7 +119,9 @@ def _is_cache_valid(platform: str, file_path: Path, now: float) -> bool:
     return entry.file_size == file_size and entry.file_mtime_ns == file_mtime_ns
 
 
-def _cache_result(platform: str, file_path: Path, result: CookieHealthResult) -> CookieHealthResult:
+def _cache_result(
+    platform: str, file_path: Path, result: CookieHealthResult
+) -> CookieHealthResult:
     file_size, file_mtime_ns = _get_file_signature(file_path)
     _COOKIE_HEALTH_CACHE[platform] = _CookieHealthCacheEntry(
         result=result,
@@ -158,7 +162,9 @@ def _probe_authenticated_session(platform: str, file_path: Path) -> str:
             return "stale"
         if exc.code == 429:
             return "rate_limited"
-        if any(marker.lower() in body.lower() for marker in config["rate_limit_markers"]):
+        if any(
+            marker.lower() in body.lower() for marker in config["rate_limit_markers"]
+        ):
             return "rate_limited"
         return "probe_failed"
     except OSError as exc:
@@ -167,9 +173,15 @@ def _probe_authenticated_session(platform: str, file_path: Path) -> str:
 
     final_url_lower = final_url.lower()
     body_lower = body.lower()
-    if any(marker.lower() in final_url_lower or marker.lower() in body_lower for marker in config["rate_limit_markers"]):
+    if any(
+        marker.lower() in final_url_lower or marker.lower() in body_lower
+        for marker in config["rate_limit_markers"]
+    ):
         return "rate_limited"
-    if any(marker.lower() in final_url_lower or marker.lower() in body_lower for marker in config["unauth_markers"]):
+    if any(
+        marker.lower() in final_url_lower or marker.lower() in body_lower
+        for marker in config["unauth_markers"]
+    ):
         return "stale"
     return "valid"
 
@@ -202,18 +214,28 @@ def check_cookie_health(platform: str, *, force: bool = False) -> CookieHealthRe
         return _COOKIE_HEALTH_CACHE[platform].result
 
     if not file_path.exists():
-        return _cache_result(platform, file_path, _result(platform, "missing", "file not found"))
+        return _cache_result(
+            platform, file_path, _result(platform, "missing", "file not found")
+        )
 
     try:
         records = _read_netscape_cookies(file_path)
     except ValueError as exc:
-        return _cache_result(platform, file_path, _result(platform, "invalid_format", str(exc)))
+        return _cache_result(
+            platform, file_path, _result(platform, "invalid_format", str(exc))
+        )
 
     if not records:
-        return _cache_result(platform, file_path, _result(platform, "invalid_format", "no cookie records found"))
+        return _cache_result(
+            platform,
+            file_path,
+            _result(platform, "invalid_format", "no cookie records found"),
+        )
 
     auth_names = AUTH_COOKIE_NAMES[platform]
-    auth_records = [record for record in records if record["name"] in auth_names and record["value"]]
+    auth_records = [
+        record for record in records if record["name"] in auth_names and record["value"]
+    ]
     if not auth_records:
         return _cache_result(
             platform,

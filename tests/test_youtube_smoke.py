@@ -40,15 +40,23 @@ class FakeYDL:
 
     def _resolve_output_path(self, info=None):
         info = info or self._info
-        template = self.options["outtmpl"] if "outtmpl" in self.options else "% (title)s.%(ext)s"
-        path_str = template.replace("%(title)s", info["title"]).replace("%(ext)s", info["ext"])
+        template = (
+            self.options["outtmpl"]
+            if "outtmpl" in self.options
+            else "% (title)s.%(ext)s"
+        )
+        path_str = template.replace("%(title)s", info["title"]).replace(
+            "%(ext)s", info["ext"]
+        )
         return Path(path_str)
 
 
 @pytest.fixture(autouse=True)
 def patch_cookies(monkeypatch):
     """Ensure tests do not depend on local cookie files."""
-    monkeypatch.setattr(youtube_utils.Path, "is_file", lambda *args, **kwargs: False, raising=False)
+    monkeypatch.setattr(
+        youtube_utils.Path, "is_file", lambda *args, **kwargs: False, raising=False
+    )
 
 
 def test_get_video_info_smoke_without_network(monkeypatch):
@@ -82,7 +90,9 @@ def test_get_video_info_uses_cookiefile_option(monkeypatch):
 
     monkeypatch.setattr(youtube_utils.yt_dlp, "YoutubeDL", CapturingYDL)
     monkeypatch.setattr(youtube_utils, "YOUTUBE_COOKIES_FILE", "cookies.txt")
-    monkeypatch.setattr(youtube_utils.Path, "is_file", lambda *args, **kwargs: True, raising=False)
+    monkeypatch.setattr(
+        youtube_utils.Path, "is_file", lambda *args, **kwargs: True, raising=False
+    )
 
     youtube_utils.get_video_info("https://youtu.be/abc123def45")
 

@@ -16,11 +16,16 @@ def test_classify_timeout_error():
 
 def test_classify_ffmpeg_missing():
     message = _classify_youtube_error("ffmpeg is not installed")
-    assert message == "❌ FFmpeg не найден в системе. Установите FFmpeg и добавьте его в PATH."
+    assert (
+        message
+        == "❌ FFmpeg не найден в системе. Установите FFmpeg и добавьте его в PATH."
+    )
 
 
 def test_classify_extractor_runtime_issue():
-    message = _classify_youtube_error("nsig extraction failed: requires a javascript runtime")
+    message = _classify_youtube_error(
+        "nsig extraction failed: requires a javascript runtime"
+    )
     assert message is not None
     assert "extractor" in message.lower()
 
@@ -30,7 +35,9 @@ def test_classify_unknown_error_returns_none():
 
 
 def test_youtube_error_code_format_unavailable():
-    assert _youtube_error_code("Requested format is not available") == "FORMAT_UNAVAILABLE"
+    assert (
+        _youtube_error_code("Requested format is not available") == "FORMAT_UNAVAILABLE"
+    )
 
 
 def test_youtube_error_code_access_restricted():

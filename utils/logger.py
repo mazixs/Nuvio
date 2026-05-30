@@ -21,39 +21,41 @@ def _get_shared_file_handler() -> RotatingFileHandler:
             _LOG_FILE,
             maxBytes=10 * 1024 * 1024,  # 10 МБ
             backupCount=5,
-            encoding='utf-8',
+            encoding="utf-8",
         )
         _shared_file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     return _shared_file_handler
 
 
-def setup_logger(name: str, level: int | None = None, log_to_file: bool = True) -> logging.Logger:
+def setup_logger(
+    name: str, level: int | None = None, log_to_file: bool = True
+) -> logging.Logger:
     """
     Настраивает и возвращает логгер с указанным именем и уровнем логирования.
     Все логгеры пишут в единый файл bot.log с ротацией.
-    
+
     Args:
         name: Имя логгера
         level: Уровень логирования. По умолчанию INFO.
         log_to_file: Сохранять логи в файл. По умолчанию True.
-        
+
     Returns:
         Настроенный логгер
     """
     resolved_level = LOG_LEVEL if level is None else level
     logger = logging.getLogger(name)
     logger.setLevel(resolved_level)
-    
+
     if logger.hasHandlers():
         return logger
-    
+
     formatter = logging.Formatter(LOG_FORMAT)
-    
+
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
+
     if log_to_file:
         logger.addHandler(_get_shared_file_handler())
-    
+
     return logger

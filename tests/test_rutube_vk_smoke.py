@@ -59,7 +59,9 @@ class FakeYDL:
     def _resolve_output_path(self, info=None):
         info = info or self._info
         template = self.options.get("outtmpl", "%(title)s.%(ext)s")
-        path_str = template.replace("%(title)s", info["title"]).replace("%(ext)s", info["ext"])
+        path_str = template.replace("%(title)s", info["title"]).replace(
+            "%(ext)s", info["ext"]
+        )
         return Path(path_str)
 
 

@@ -15,7 +15,9 @@ def cache_db(tmp_path: Path) -> TelegramVideoCache:
     return TelegramVideoCache(db_path=tmp_path / "telegram_cache_test.db")
 
 
-def _sample_cached(url: str = "https://example.com/video", unique_id: str = "unique123") -> CachedVideo:
+def _sample_cached(
+    url: str = "https://example.com/video", unique_id: str = "unique123"
+) -> CachedVideo:
     return CachedVideo(
         url=url,
         file_id="file123",

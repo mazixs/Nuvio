@@ -147,7 +147,9 @@ def ensure_latest_yt_dlp(
     )
 
 
-def run_yt_dlp_cli(command: list[str], *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def run_yt_dlp_cli(
+    command: list[str], *, timeout: int | None = None
+) -> subprocess.CompletedProcess[str]:
     """Запускает локальный `python -m yt_dlp` сценарий без GUI."""
     logger.info("CLI fallback yt-dlp: %s", " ".join(command))
     return subprocess.run(

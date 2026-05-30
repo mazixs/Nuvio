@@ -35,7 +35,10 @@ def _parse_admin_ids(value: str | None) -> list[int]:
         try:
             admin_ids.append(int(candidate))
         except ValueError:
-            logging.warning("ADMIN_IDS содержит некорректное значение %r и будет проигнорирован", candidate)
+            logging.warning(
+                "ADMIN_IDS содержит некорректное значение %r и будет проигнорирован",
+                candidate,
+            )
     return admin_ids
 
 
@@ -49,6 +52,7 @@ def _parse_ytdlp_release_channel(value: str | None) -> str:
         value,
     )
     return "nightly"
+
 
 # Токен Telegram бота (получить у @BotFather)
 # ОБЯЗАТЕЛЬНО: установите переменную окружения TELEGRAM_TOKEN
@@ -93,13 +97,14 @@ GOKAPI_BASE_URL = os.environ.get("GOKAPI_BASE_URL", "")
 # Пример: ADMIN_IDS = 123456789,987654321
 ADMIN_IDS = _parse_admin_ids(os.environ.get("ADMIN_IDS"))
 
+
 # Валидация критически важных переменных окружения
 def validate_config():
     """Проверяет наличие всех необходимых переменных окружения."""
     missing_vars = []
     gokapi_api_key = (GOKAPI_API_KEY or "").strip()
     gokapi_base_url = (GOKAPI_BASE_URL or "").strip()
-    
+
     if not TELEGRAM_TOKEN:
         missing_vars.append("TELEGRAM_TOKEN")
 
@@ -120,8 +125,9 @@ def validate_config():
         logging.warning(
             "GOKAPI_BASE_URL задан без GOKAPI_API_KEY. Выгрузка больших файлов будет недоступна."
         )
-    
+
     return True
+
 
 def _default_secret_path(filename: str) -> Path:
     """Возвращает основной путь для приватных файлов внутри .secrets."""
@@ -153,15 +159,21 @@ def resolve_secret_path(filename: str) -> Path:
 # Пути к файлам cookies (опционально). По умолчанию используются файлы в `.secrets/`,
 # но legacy-файлы в корне проекта продолжают поддерживаться как fallback.
 YOUTUBE_COOKIES_PATH = Path(
-    os.environ.get("YOUTUBE_COOKIES_FILE", str(resolve_secret_path("www.youtube.com_cookies.txt")))
+    os.environ.get(
+        "YOUTUBE_COOKIES_FILE", str(resolve_secret_path("www.youtube.com_cookies.txt"))
+    )
 )
 INSTAGRAM_COOKIES_PATH = Path(
-    os.environ.get("INSTAGRAM_COOKIES_FILE", str(resolve_secret_path("www.instagram.com_cookies.txt")))
+    os.environ.get(
+        "INSTAGRAM_COOKIES_FILE",
+        str(resolve_secret_path("www.instagram.com_cookies.txt")),
+    )
 )
 TIKTOK_COOKIES_PATH = Path(
-    os.environ.get("TIKTOK_COOKIES_FILE", str(resolve_secret_path("www.tiktok.com_cookies.txt")))
+    os.environ.get(
+        "TIKTOK_COOKIES_FILE", str(resolve_secret_path("www.tiktok.com_cookies.txt"))
+    )
 )
 
 # Строковая совместимость для youtube_utils/tests
 YOUTUBE_COOKIES_FILE = str(YOUTUBE_COOKIES_PATH)
-

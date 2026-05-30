@@ -25,6 +25,7 @@ async def _safe_edit(query, text, **kwargs):
         if "Message is not modified" not in str(e):
             raise
 
+
 ADMIN_UPLOAD_TARGET_KEY = "admin_expected_cookie_file"
 ADMIN_BROADCAST_MODE_KEY = "admin_broadcast_mode"
 MAX_COOKIE_FILE_SIZE = 1 * 1024 * 1024  # 1 MiB
@@ -75,8 +76,12 @@ def _build_admin_panel_markup(
 ) -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton("YouTube", callback_data="admin|cookies|upload|youtube"),
-            InlineKeyboardButton("Instagram", callback_data="admin|cookies|upload|instagram"),
+            InlineKeyboardButton(
+                "YouTube", callback_data="admin|cookies|upload|youtube"
+            ),
+            InlineKeyboardButton(
+                "Instagram", callback_data="admin|cookies|upload|instagram"
+            ),
         ],
         [
             InlineKeyboardButton("TikTok", callback_data="admin|cookies|upload|tiktok"),
@@ -87,10 +92,20 @@ def _build_admin_panel_markup(
     ]
     if expected_file_name:
         keyboard.append(
-            [InlineKeyboardButton("Cancel Upload Mode", callback_data="admin|cookies|cancel")]
+            [
+                InlineKeyboardButton(
+                    "Cancel Upload Mode", callback_data="admin|cookies|cancel"
+                )
+            ]
         )
     if broadcast_mode:
-        keyboard.append([InlineKeyboardButton("Отменить рассылку", callback_data="admin|broadcast|cancel")])
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "Отменить рассылку", callback_data="admin|broadcast|cancel"
+                )
+            ]
+        )
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -178,7 +193,9 @@ def _build_cookie_health_text(
     for platform in ("youtube", "instagram", "tiktok"):
         result = results[platform]
         label = COOKIE_LABELS[platform]
-        lines.append(f"{_format_health_icon(result.status)} {label}: {result.status} - {result.summary}")
+        lines.append(
+            f"{_format_health_icon(result.status)} {label}: {result.status} - {result.summary}"
+        )
 
     if expected_file_name:
         lines.extend(
@@ -212,7 +229,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_admin_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handles admin-only inline actions for cookie management."""
     query = update.callback_query
     user_id = query.from_user.id if query and query.from_user else None
@@ -229,7 +248,8 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data in {"admin|cookies|panel", "admin|cookies|refresh"}:
         expected_file_name = context.user_data.get(ADMIN_UPLOAD_TARGET_KEY)
-        await _safe_edit(query,
+        await _safe_edit(
+            query,
             _build_admin_panel_text(expected_file_name),
             reply_markup=_build_admin_panel_markup(expected_file_name),
         )
@@ -237,9 +257,14 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "admin|cookies|check":
         expected_file_name = context.user_data.get(ADMIN_UPLOAD_TARGET_KEY)
-        await _safe_edit(query,"Checking cookie health...", reply_markup=_build_admin_panel_markup(expected_file_name))
+        await _safe_edit(
+            query,
+            "Checking cookie health...",
+            reply_markup=_build_admin_panel_markup(expected_file_name),
+        )
         results = await asyncio.to_thread(check_all_cookie_health)
-        await _safe_edit(query,
+        await _safe_edit(
+            query,
             _build_cookie_health_text(results, expected_file_name),
             reply_markup=_build_admin_panel_markup(expected_file_name),
         )
@@ -247,7 +272,8 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "admin|cookies|cancel":
         context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
-        await _safe_edit(query,
+        await _safe_edit(
+            query,
             _build_admin_panel_text(),
             reply_markup=_build_admin_panel_markup(),
         )
@@ -277,26 +303,31 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         platform = parts[3]
         file_name = COOKIE_TARGETS.get(platform)
         if not file_name:
-            await _safe_edit(query,
+            await _safe_edit(
+                query,
                 _build_admin_panel_text(),
                 reply_markup=_build_admin_panel_markup(),
             )
             return
 
         context.user_data[ADMIN_UPLOAD_TARGET_KEY] = file_name
-        await _safe_edit(query,
+        await _safe_edit(
+            query,
             _build_upload_instruction(file_name),
             reply_markup=_build_admin_panel_markup(file_name),
         )
         return
 
-    await _safe_edit(query,
+    await _safe_edit(
+        query,
         _build_admin_panel_text(),
         reply_markup=_build_admin_panel_markup(),
     )
 
 
-async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_document_upload(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handles document uploads with strict admin-only gating."""
     user = update.effective_user
     message = update.message
@@ -370,11 +401,18 @@ async def handle_document_upload(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=_build_admin_panel_markup(),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to update cookie file %s: %s", expected_file_name, exc, exc_info=True)
+        logger.error(
+            "Failed to update cookie file %s: %s",
+            expected_file_name,
+            exc,
+            exc_info=True,
+        )
         await message.reply_text(f"❌ Произошла ошибка при сохранении файла: {exc}")
 
 
-async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def handle_admin_text_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
     """Обрабатывает текстовые админские режимы. Возвращает True, если сообщение уже обработано."""
     user = update.effective_user
     message = update.message
@@ -404,10 +442,14 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.pop(ADMIN_BROADCAST_MODE_KEY, None)
     user_ids = [target_id for target_id in get_all_user_ids() if target_id != user_id]
     if not user_ids:
-        await message.reply_text("Некому отправлять рассылку: в базе пока нет пользователей.")
+        await message.reply_text(
+            "Некому отправлять рассылку: в базе пока нет пользователей."
+        )
         return True
 
-    status_message = await message.reply_text(f"Рассылаю объявление {len(user_ids)} пользователям...")
+    status_message = await message.reply_text(
+        f"Рассылаю объявление {len(user_ids)} пользователям..."
+    )
     sent = 0
     failed = 0
     blocked = 0
@@ -430,7 +472,9 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
                 logger.info("Broadcast retry skipped blocked user %s", target_id)
             except TelegramError as retry_exc:
                 failed += 1
-                logger.warning("Broadcast retry failed for user %s: %s", target_id, retry_exc)
+                logger.warning(
+                    "Broadcast retry failed for user %s: %s", target_id, retry_exc
+                )
         except Forbidden:
             blocked += 1
             failed += 1

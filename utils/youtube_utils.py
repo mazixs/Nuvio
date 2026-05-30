@@ -29,7 +29,8 @@ from utils.ytdlp_common import (
 logger = setup_logger(__name__)
 
 # Регулярное выражение для проверки YouTube URL (включая Shorts)
-YOUTUBE_URL_PATTERN = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=|shorts\/)?([a-zA-Z0-9_-]{11})'
+YOUTUBE_URL_PATTERN = r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=|shorts\/)?([a-zA-Z0-9_-]{11})"
+
 
 class FormatInfoDict(TypedDict, total=False):
     format_id: str
@@ -43,17 +44,19 @@ class FormatInfoDict(TypedDict, total=False):
     acodec: NotRequired[str]
     type: NotRequired[str]
 
+
 def is_valid_youtube_url(url: str) -> bool:
     """
     Проверяет, является ли URL действительной ссылкой на YouTube видео.
-    
+
     Args:
         url (str): URL для проверки.
-        
+
     Returns:
         bool: True, если URL является допустимой ссылкой на YouTube, иначе False.
     """
     return bool(re.match(YOUTUBE_URL_PATTERN, url))
+
 
 def get_video_info(url: str) -> dict[str, Any]:
     """
@@ -61,27 +64,35 @@ def get_video_info(url: str) -> dict[str, Any]:
     Сначала пробует без cookies, при ошибке — повторяет с cookies (если файл есть).
     """
     logger.info(f"Получение информации о видео: {url}")
-    
+
     def _get_info(use_cookies: bool) -> dict[str, Any]:
         ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
         }
         apply_network_opts(ydl_opts)
-        if use_cookies and YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
+        if (
+            use_cookies
+            and YOUTUBE_COOKIES_FILE
+            and Path(YOUTUBE_COOKIES_FILE).is_file()
+        ):
             logger.info(f"Использование файла cookies: {YOUTUBE_COOKIES_FILE}")
-            ydl_opts['cookiefile'] = YOUTUBE_COOKIES_FILE
+            ydl_opts["cookiefile"] = YOUTUBE_COOKIES_FILE
         elif use_cookies:
-            logger.warning(f"Файл cookies указан ({YOUTUBE_COOKIES_FILE}), но не найден. Запрос будет выполнен без cookies.")
+            logger.warning(
+                f"Файл cookies указан ({YOUTUBE_COOKIES_FILE}), но не найден. Запрос будет выполнен без cookies."
+            )
         else:
             logger.info("Пробуем получить информацию о видео без cookies.")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            duration = info.get('duration')
+            duration = info.get("duration")
             if duration and duration > MAX_VIDEO_DURATION:
                 logger.warning(f"Видео слишком длинное: {duration} секунд")
-                raise Exception(f"Видео слишком длинное. Максимальная длительность: {MAX_VIDEO_DURATION // 60} минут.")
+                raise Exception(
+                    f"Видео слишком длинное. Максимальная длительность: {MAX_VIDEO_DURATION // 60} минут."
+                )
             logger.info("Информация о видео успешно получена.")
             return info
 
@@ -90,93 +101,118 @@ def get_video_info(url: str) -> dict[str, Any]:
         try:
             return _get_info(True)
         except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError) as e:
-            logger.warning(f"Ошибка с cookies: {e}. Пробуем без cookies как fallback...")
+            logger.warning(
+                f"Ошибка с cookies: {e}. Пробуем без cookies как fallback..."
+            )
             try:
                 return _get_info(False)
             except Exception as e2:
-                logger.error(f"Ошибка при получении информации о видео даже без cookies: {e2}", exc_info=True)
+                logger.error(
+                    f"Ошибка при получении информации о видео даже без cookies: {e2}",
+                    exc_info=True,
+                )
                 raise
     else:
         try:
             return _get_info(False)
         except Exception as e:
-            logger.error(f"Ошибка при получении информации о видео без cookies: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при получении информации о видео без cookies: {e}",
+                exc_info=True,
+            )
             raise
 
-def get_available_formats(video_info: dict[str, Any], filter_by_size: bool = True) -> dict[str, list[FormatInfoDict]]:
+
+def get_available_formats(
+    video_info: dict[str, Any], filter_by_size: bool = True
+) -> dict[str, list[FormatInfoDict]]:
     """
     Получает список доступных форматов видео с опциональной фильтрацией по размеру.
-    
+
     Args:
         video_info (Dict[str, Any]): Информация о видео.
         filter_by_size (bool): Фильтровать форматы по MAX_FILE_SIZE (по умолчанию True).
-        
+
     Returns:
         Dict[str, List[Dict[str, Any]]]: Словарь с группами форматов.
     """
-    formats = video_info.get('formats', [])
+    formats = video_info.get("formats", [])
     video_formats: list[FormatInfoDict] = []
     audio_formats: list[FormatInfoDict] = []
     combined_formats: list[FormatInfoDict] = []
-    
+
     for format_info in formats:
         # Логируем, что получили по filesize
-        filesize = format_info.get('filesize') or format_info.get('filesize_approx')
-        logger.debug(f"FormatID={format_info.get('format_id')}, ext={format_info.get('ext')}, height={format_info.get('height')}, filesize={filesize}")
-        
-        if not format_info.get('height') and not format_info.get('audio_channels'):
+        filesize = format_info.get("filesize") or format_info.get("filesize_approx")
+        logger.debug(
+            f"FormatID={format_info.get('format_id')}, ext={format_info.get('ext')}, height={format_info.get('height')}, filesize={filesize}"
+        )
+
+        if not format_info.get("height") and not format_info.get("audio_channels"):
             continue
-        
+
         # Применяем фильтрацию по размеру файла (если включена)
         if filter_by_size and filesize:
             if filesize > MAX_FILE_SIZE:
-                logger.debug(f"Формат {format_info.get('format_id')} пропущен: размер {filesize} превышает {MAX_FILE_SIZE}")
+                logger.debug(
+                    f"Формат {format_info.get('format_id')} пропущен: размер {filesize} превышает {MAX_FILE_SIZE}"
+                )
                 continue
-        
-        format_id = format_info.get('format_id')
-        
-        if format_info.get('vcodec') != 'none' and format_info.get('acodec') == 'none':
-            video_formats.append({
-                'format_id': format_id,
-                'format': format_info.get('format'),
-                'ext': format_info.get('ext'),
-                'height': format_info.get('height'),
-                'width': format_info.get('width'),
-                'filesize': filesize,
-                'type': 'video_only'
-            })
-        elif format_info.get('vcodec') == 'none' and format_info.get('acodec') != 'none':
-            audio_formats.append({
-                'format_id': format_id,
-                'format': format_info.get('format'),
-                'ext': format_info.get('ext'),
-                'filesize': filesize,
-                'type': 'audio_only'
-            })
-        elif format_info.get('vcodec') != 'none' and format_info.get('acodec') != 'none':
-            combined_formats.append({
-                'format_id': format_id,
-                'format': format_info.get('format'),
-                'ext': format_info.get('ext'),
-                'height': format_info.get('height'),
-                'width': format_info.get('width'),
-                'filesize': filesize,
-                'type': 'combined'
-            })
-    
-    video_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
-    audio_formats.sort(key=lambda x: x.get('filesize', 0) or 0, reverse=True)
-    combined_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
-    
-    logger.info(f"Найдено форматов: video_only={len(video_formats)}, audio_only={len(audio_formats)}, combined={len(combined_formats)}")
-    
+
+        format_id = format_info.get("format_id")
+
+        if format_info.get("vcodec") != "none" and format_info.get("acodec") == "none":
+            video_formats.append(
+                {
+                    "format_id": format_id,
+                    "format": format_info.get("format"),
+                    "ext": format_info.get("ext"),
+                    "height": format_info.get("height"),
+                    "width": format_info.get("width"),
+                    "filesize": filesize,
+                    "type": "video_only",
+                }
+            )
+        elif (
+            format_info.get("vcodec") == "none" and format_info.get("acodec") != "none"
+        ):
+            audio_formats.append(
+                {
+                    "format_id": format_id,
+                    "format": format_info.get("format"),
+                    "ext": format_info.get("ext"),
+                    "filesize": filesize,
+                    "type": "audio_only",
+                }
+            )
+        elif (
+            format_info.get("vcodec") != "none" and format_info.get("acodec") != "none"
+        ):
+            combined_formats.append(
+                {
+                    "format_id": format_id,
+                    "format": format_info.get("format"),
+                    "ext": format_info.get("ext"),
+                    "height": format_info.get("height"),
+                    "width": format_info.get("width"),
+                    "filesize": filesize,
+                    "type": "combined",
+                }
+            )
+
+    video_formats.sort(key=lambda x: x.get("height", 0), reverse=True)
+    audio_formats.sort(key=lambda x: x.get("filesize", 0) or 0, reverse=True)
+    combined_formats.sort(key=lambda x: x.get("height", 0), reverse=True)
+
+    logger.info(
+        f"Найдено форматов: video_only={len(video_formats)}, audio_only={len(audio_formats)}, combined={len(combined_formats)}"
+    )
+
     return {
-        'video_only': video_formats,
-        'audio_only': audio_formats,
-        'combined': combined_formats
+        "video_only": video_formats,
+        "audio_only": audio_formats,
+        "combined": combined_formats,
     }
-
-
 
 
 def _convert_webm_if_needed(downloaded_file: Path, session_id: str) -> Path:
@@ -209,9 +245,6 @@ def _cookiefile_if_available(use_cookies: bool) -> str | None:
     if use_cookies and YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
         return YOUTUBE_COOKIES_FILE
     return None
-
-
-
 
 
 def _build_cli_download_command(
@@ -300,11 +333,11 @@ def _download_with_cli_fallback(
 
 
 def download_video(
-    url: str, 
-    format_id: str, 
-    session_id: str, 
+    url: str,
+    format_id: str,
+    session_id: str,
     output_dir: Path | None = None,
-    force_local: bool = False
+    force_local: bool = False,
 ) -> Path | str:
     logger.info(f"Скачивание видео: {url}, формат: {format_id}")
     output_path_template = _resolve_output_template(session_id, output_dir)
@@ -324,39 +357,53 @@ def download_video(
             logger.info("Фолбек на non-HLS формат: %s", fallback_non_hls)
             return fallback_non_hls
 
-        if not override_format and '+' in format_to_use:
-            logger.info("Комбинированный формат %s, добавляем приоритет русского аудио", format_to_use)
-            parts = format_to_use.split('+')
+        if not override_format and "+" in format_to_use:
+            logger.info(
+                "Комбинированный формат %s, добавляем приоритет русского аудио",
+                format_to_use,
+            )
+            parts = format_to_use.split("+")
             if len(parts) == 2:
                 video_id, audio_id = parts
-                audio_base = audio_id.split('-')[0] if '-' in audio_id else audio_id
+                audio_base = audio_id.split("-")[0] if "-" in audio_id else audio_id
                 format_to_use = f"{video_id}+({audio_base}-1/{audio_base}-0/{audio_id})"
                 logger.info("Итоговый combined selector: %s", format_to_use)
-        elif not override_format and not force_local and '[' not in format_to_use:
+        elif not override_format and not force_local and "[" not in format_to_use:
             format_to_use = f"{format_to_use}[filesize<=?{MAX_FILE_SIZE}]"
             logger.info("Применяем фильтр по размеру: %s", format_to_use)
 
         return format_to_use
 
-    def _download(use_cookies: bool, prefer_non_hls: bool = False, override_format: str | None = None) -> Path | str:
+    def _download(
+        use_cookies: bool,
+        prefer_non_hls: bool = False,
+        override_format: str | None = None,
+    ) -> Path | str:
         ydl_opts = {
-            'format': _resolve_format_selector(
+            "format": _resolve_format_selector(
                 prefer_non_hls=prefer_non_hls,
                 override_format=override_format,
             ),
-            'outtmpl': str(output_path_template),
-            'quiet': False,
-            'no_warnings': True,
-            'progress_hooks': [lambda d: logger.debug(f"Скачивание: {d['status']} - {d.get('_percent_str', '0%')}")],
-            'merge_output_format': 'mp4',
+            "outtmpl": str(output_path_template),
+            "quiet": False,
+            "no_warnings": True,
+            "progress_hooks": [
+                lambda d: logger.debug(
+                    f"Скачивание: {d['status']} - {d.get('_percent_str', '0%')}"
+                )
+            ],
+            "merge_output_format": "mp4",
         }
         apply_network_opts(ydl_opts)
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
             logger.info("Использование файла cookies для скачивания: %s", cookiefile)
-            ydl_opts['cookiefile'] = cookiefile
+            ydl_opts["cookiefile"] = cookiefile
         elif use_cookies:
-            logger.warning("Файл cookies указан (%s), но не найден. Скачивание будет без cookies.", YOUTUBE_COOKIES_FILE)
+            logger.warning(
+                "Файл cookies указан (%s), но не найден. Скачивание будет без cookies.",
+                YOUTUBE_COOKIES_FILE,
+            )
         else:
             logger.info("Пробуем скачать видео без cookies.")
 
@@ -364,7 +411,9 @@ def download_video(
             info = ydl.extract_info(url, download=True)
             downloaded_file = Path(ydl.prepare_filename(info))
             if not downloaded_file.exists():
-                raise Exception("Файл не был загружен, хотя ydl.extract_info завершился.")
+                raise Exception(
+                    "Файл не был загружен, хотя ydl.extract_info завершился."
+                )
             logger.info("Видео успешно скачано. Файл: %s", downloaded_file)
             downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
             result = finalize_downloaded_file(downloaded_file, force_local)
@@ -376,12 +425,16 @@ def download_video(
             return _download(use_cookies)
         except yt_dlp.utils.DownloadError as e:
             message = str(e)
-            if '403' in message or 'HTTP Error 403' in message or 'fragment' in message:
+            if "403" in message or "HTTP Error 403" in message or "fragment" in message:
                 logger.warning("Пробуем non-HLS фолбек после 403/fragment ошибки")
                 return _download(use_cookies, prefer_non_hls=True)
-            if 'Requested format is not available' in message:
-                logger.warning("Формат недоступен, пробуем generic bestvideo+bestaudio/best")
-                return _download(use_cookies, override_format="bestvideo+bestaudio/best")
+            if "Requested format is not available" in message:
+                logger.warning(
+                    "Формат недоступен, пробуем generic bestvideo+bestaudio/best"
+                )
+                return _download(
+                    use_cookies, override_format="bestvideo+bestaudio/best"
+                )
             raise
 
     final_error: Exception | None = None
@@ -392,9 +445,16 @@ def download_video(
                 "Скачивание видео с cookies",
                 lambda: _try_with_fallback(True),
             )
-        except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError, FileNotFoundError, PermissionError) as e:
+        except (
+            yt_dlp.utils.DownloadError,
+            yt_dlp.cookies.CookieLoadError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             final_error = e
-            logger.warning("Ошибка с cookies: %s. Пробуем без cookies как fallback...", e)
+            logger.warning(
+                "Ошибка с cookies: %s. Пробуем без cookies как fallback...", e
+            )
 
     else:
         logger.warning("Cookies не найдены, скачиваем без авторизации")
@@ -404,13 +464,18 @@ def download_video(
             "Скачивание видео без cookies",
             lambda: _try_with_fallback(False),
         )
-    except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError, FileNotFoundError, PermissionError) as e:
+    except (
+        yt_dlp.utils.DownloadError,
+        yt_dlp.cookies.CookieLoadError,
+        FileNotFoundError,
+        PermissionError,
+    ) as e:
         final_error = e
         logger.error("Ошибка скачивания видео встроенным API: %s", e, exc_info=True)
 
     if YTDLP_CLI_FALLBACK:
         error_kind = classify_download_error_kind(str(final_error or ""))
-        if error_kind != 'ACCESS_RESTRICTED':
+        if error_kind != "ACCESS_RESTRICTED":
             logger.warning("Переключаемся на локальный CLI fallback yt-dlp")
             cli_overrides: list[tuple[bool, str | None, bool]] = [
                 (True, None, False),
@@ -421,7 +486,9 @@ def download_video(
                 (False, None, True),
             ]
             for use_cookies, override_format, prefer_non_hls in cli_overrides:
-                if use_cookies and not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
+                if use_cookies and not (
+                    YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()
+                ):
                     continue
                 try:
                     return _download_with_cli_fallback(
@@ -434,7 +501,7 @@ def download_video(
                         use_cookies=use_cookies,
                         output_dir=output_dir,
                         force_local=force_local,
-                        merge_output_format='mp4',
+                        merge_output_format="mp4",
                     )
                 except Exception as cli_error:
                     logger.warning("CLI fallback не удался: %s", cli_error)
@@ -443,18 +510,25 @@ def download_video(
         raise final_error
     raise RuntimeError("Не удалось скачать видео: неизвестная ошибка")
 
-def download_audio_native(url: str, format_id: str, session_id: str, force_local: bool = False, output_dir: Path | None = None) -> Path | str:
+
+def download_audio_native(
+    url: str,
+    format_id: str,
+    session_id: str,
+    force_local: bool = False,
+    output_dir: Path | None = None,
+) -> Path | str:
     """
     Скачивает только аудио в оригинальном формате (m4a/ogg) БЕЗ конвертации.
     Для нативного воспроизведения в Telegram.
-    
+
     Args:
         url: URL YouTube видео
         format_id: ID формата аудио
         session_id: ID сессии
         force_local: Принудительное локальное сохранение
         output_dir: Директория для сохранения
-    
+
     Returns:
         Path к аудио файлу или ссылка на Gokapi
     """
@@ -463,28 +537,44 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
 
     def _resolve_native_audio_selector(override_format: str | None = None) -> str:
         effective_format = override_format or format_id
-        if not override_format and not force_local and '[' not in effective_format and '+' not in effective_format:
+        if (
+            not override_format
+            and not force_local
+            and "[" not in effective_format
+            and "+" not in effective_format
+        ):
             filtered = f"{effective_format}[filesize<=?{MAX_FILE_SIZE}]"
             logger.info("Применяем фильтр по размеру для нативного аудио: %s", filtered)
             return filtered
         return effective_format
 
-    def _download_audio_native(use_cookies: bool, override_format: str | None = None) -> Path | str:
+    def _download_audio_native(
+        use_cookies: bool, override_format: str | None = None
+    ) -> Path | str:
         ydl_opts = {
-            'format': _resolve_native_audio_selector(override_format),
-            'outtmpl': str(output_path_template),
-            'quiet': False,
-            'no_warnings': True,
-            'progress_hooks': [lambda d: logger.debug(f"Скачивание нативного аудио: {d['status']} - {d.get('_percent_str', '0%')}")],
+            "format": _resolve_native_audio_selector(override_format),
+            "outtmpl": str(output_path_template),
+            "quiet": False,
+            "no_warnings": True,
+            "progress_hooks": [
+                lambda d: logger.debug(
+                    f"Скачивание нативного аудио: {d['status']} - {d.get('_percent_str', '0%')}"
+                )
+            ],
         }
         apply_network_opts(ydl_opts)
 
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
-            logger.info("Использование файла cookies для скачивания нативного аудио: %s", cookiefile)
-            ydl_opts['cookiefile'] = cookiefile
+            logger.info(
+                "Использование файла cookies для скачивания нативного аудио: %s",
+                cookiefile,
+            )
+            ydl_opts["cookiefile"] = cookiefile
         elif use_cookies:
-            logger.warning("Файл cookies указан (%s), но не найден.", YOUTUBE_COOKIES_FILE)
+            logger.warning(
+                "Файл cookies указан (%s), но не найден.", YOUTUBE_COOKIES_FILE
+            )
         else:
             logger.info("Пробуем скачать нативное аудио без cookies.")
 
@@ -500,8 +590,10 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
         try:
             return _download_audio_native(use_cookies)
         except yt_dlp.utils.DownloadError as e:
-            if 'Requested format is not available' in str(e):
-                logger.warning("Формат нативного аудио недоступен, пробуем generic bestaudio")
+            if "Requested format is not available" in str(e):
+                logger.warning(
+                    "Формат нативного аудио недоступен, пробуем generic bestaudio"
+                )
                 return _download_audio_native(use_cookies, override_format="bestaudio")
             raise
 
@@ -511,9 +603,16 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
             "Скачивание нативного аудио без cookies",
             lambda: _try_audio_native(False),
         )
-    except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError, FileNotFoundError, PermissionError) as e:
+    except (
+        yt_dlp.utils.DownloadError,
+        yt_dlp.cookies.CookieLoadError,
+        FileNotFoundError,
+        PermissionError,
+    ) as e:
         final_error = e
-        logger.warning("Ошибка скачивания нативного аудио без cookies: %s. Пробуем с cookies...", e)
+        logger.warning(
+            "Ошибка скачивания нативного аудио без cookies: %s. Пробуем с cookies...", e
+        )
 
     if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
         try:
@@ -521,14 +620,33 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
                 "Скачивание нативного аудио с cookies",
                 lambda: _try_audio_native(True),
             )
-        except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError, FileNotFoundError, PermissionError) as e:
+        except (
+            yt_dlp.utils.DownloadError,
+            yt_dlp.cookies.CookieLoadError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             final_error = e
-            logger.error("Ошибка при скачивании нативного аудио даже с cookies: %s", e, exc_info=True)
+            logger.error(
+                "Ошибка при скачивании нативного аудио даже с cookies: %s",
+                e,
+                exc_info=True,
+            )
 
-    if YTDLP_CLI_FALLBACK and classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
+    if (
+        YTDLP_CLI_FALLBACK
+        and classify_download_error_kind(str(final_error or "")) != "ACCESS_RESTRICTED"
+    ):
         logger.warning("Переключаемся на CLI fallback для нативного аудио")
-        for use_cookies, override_format in ((False, None), (True, None), (False, "bestaudio"), (True, "bestaudio")):
-            if use_cookies and not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
+        for use_cookies, override_format in (
+            (False, None),
+            (True, None),
+            (False, "bestaudio"),
+            (True, "bestaudio"),
+        ):
+            if use_cookies and not (
+                YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()
+            ):
                 continue
             try:
                 return _download_with_cli_fallback(
@@ -546,7 +664,15 @@ def download_audio_native(url: str, format_id: str, session_id: str, force_local
         raise final_error
     raise RuntimeError("Не удалось скачать нативное аудио: неизвестная ошибка")
 
-def download_audio(url: str, format_id: str, session_id: str, force_local: bool = False, output_dir: Path | None = None, preferred_codec: str = 'mp3') -> Path | str:
+
+def download_audio(
+    url: str,
+    format_id: str,
+    session_id: str,
+    force_local: bool = False,
+    output_dir: Path | None = None,
+    preferred_codec: str = "mp3",
+) -> Path | str:
     """
     Скачивает только аудио и конвертирует через FFmpegExtractAudio.
     Оптимизировано: использует yt-dlp postprocessor для прямого извлечения аудио.
@@ -558,7 +684,7 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
         force_local: Принудительное локальное сохранение
         output_dir: Директория для сохранения
         preferred_codec: Выходной аудио-кодек (по умолчанию 'mp3')
-    
+
     Returns:
         Path к MP3 файлу или ссылка на Gokapi
     """
@@ -567,52 +693,77 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
 
     def _resolve_audio_selector(override_format: str | None = None) -> str:
         effective_format = override_format or format_id
-        if not override_format and not force_local and '[' not in effective_format and '+' not in effective_format:
+        if (
+            not override_format
+            and not force_local
+            and "[" not in effective_format
+            and "+" not in effective_format
+        ):
             filtered = f"{effective_format}[filesize<=?{MAX_FILE_SIZE}]"
             logger.info("Применяем фильтр по размеру для аудио: %s", filtered)
             return filtered
-        if '+' in effective_format:
-            logger.info("Комбинированный формат аудио %s - фильтр не применяется", effective_format)
+        if "+" in effective_format:
+            logger.info(
+                "Комбинированный формат аудио %s - фильтр не применяется",
+                effective_format,
+            )
         return effective_format
 
-    def _download_audio(use_cookies: bool, override_format: str | None = None) -> Path | str:
+    def _download_audio(
+        use_cookies: bool, override_format: str | None = None
+    ) -> Path | str:
         ydl_opts = {
-            'format': _resolve_audio_selector(override_format),
-            'outtmpl': str(output_path_template),
-            'quiet': False,
-            'no_warnings': True,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': preferred_codec,
-                'preferredquality': '192',
-            }],
-            'progress_hooks': [lambda d: logger.debug(f"Скачивание аудио: {d['status']} - {d.get('_percent_str', '0%')}")],
+            "format": _resolve_audio_selector(override_format),
+            "outtmpl": str(output_path_template),
+            "quiet": False,
+            "no_warnings": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": preferred_codec,
+                    "preferredquality": "192",
+                }
+            ],
+            "progress_hooks": [
+                lambda d: logger.debug(
+                    f"Скачивание аудио: {d['status']} - {d.get('_percent_str', '0%')}"
+                )
+            ],
         }
         apply_network_opts(ydl_opts)
 
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
-            logger.info("Использование файла cookies для скачивания аудио: %s", cookiefile)
-            ydl_opts['cookiefile'] = cookiefile
+            logger.info(
+                "Использование файла cookies для скачивания аудио: %s", cookiefile
+            )
+            ydl_opts["cookiefile"] = cookiefile
         elif use_cookies:
-            logger.warning("Файл cookies указан (%s), но не найден. Скачивание аудио будет без cookies.", YOUTUBE_COOKIES_FILE)
+            logger.warning(
+                "Файл cookies указан (%s), но не найден. Скачивание аудио будет без cookies.",
+                YOUTUBE_COOKIES_FILE,
+            )
         else:
             logger.info("Пробуем скачать аудио без cookies.")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             base_filename = Path(ydl.prepare_filename(info))
-            downloaded_file = base_filename.with_suffix(f'.{preferred_codec}')
+            downloaded_file = base_filename.with_suffix(f".{preferred_codec}")
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан после postprocessing.")
-            logger.info("Аудио успешно извлечено и конвертировано в %s: %s", preferred_codec, downloaded_file)
+            logger.info(
+                "Аудио успешно извлечено и конвертировано в %s: %s",
+                preferred_codec,
+                downloaded_file,
+            )
             return finalize_downloaded_file(downloaded_file, force_local)
 
     def _try_audio(use_cookies: bool) -> Path | str:
         try:
             return _download_audio(use_cookies)
         except yt_dlp.utils.DownloadError as e:
-            if 'Requested format is not available' in str(e):
+            if "Requested format is not available" in str(e):
                 logger.warning("Формат аудио недоступен, пробуем generic bestaudio")
                 return _download_audio(use_cookies, override_format="bestaudio")
             raise
@@ -623,9 +774,16 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
             "Скачивание аудио без cookies",
             lambda: _try_audio(False),
         )
-    except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError, FileNotFoundError, PermissionError) as e:
+    except (
+        yt_dlp.utils.DownloadError,
+        yt_dlp.cookies.CookieLoadError,
+        FileNotFoundError,
+        PermissionError,
+    ) as e:
         final_error = e
-        logger.warning("Ошибка скачивания аудио без cookies: %s. Пробуем с cookies...", e)
+        logger.warning(
+            "Ошибка скачивания аудио без cookies: %s. Пробуем с cookies...", e
+        )
 
     if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
         try:
@@ -633,14 +791,31 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
                 "Скачивание аудио с cookies",
                 lambda: _try_audio(True),
             )
-        except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError, FileNotFoundError, PermissionError) as e:
+        except (
+            yt_dlp.utils.DownloadError,
+            yt_dlp.cookies.CookieLoadError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             final_error = e
-            logger.error("Ошибка при скачивании аудио даже с cookies: %s", e, exc_info=True)
+            logger.error(
+                "Ошибка при скачивании аудио даже с cookies: %s", e, exc_info=True
+            )
 
-    if YTDLP_CLI_FALLBACK and classify_download_error_kind(str(final_error or "")) != 'ACCESS_RESTRICTED':
+    if (
+        YTDLP_CLI_FALLBACK
+        and classify_download_error_kind(str(final_error or "")) != "ACCESS_RESTRICTED"
+    ):
         logger.warning("Переключаемся на CLI fallback для %s-аудио", preferred_codec)
-        for use_cookies, override_format in ((False, None), (True, None), (False, "bestaudio"), (True, "bestaudio")):
-            if use_cookies and not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
+        for use_cookies, override_format in (
+            (False, None),
+            (True, None),
+            (False, "bestaudio"),
+            (True, "bestaudio"),
+        ):
+            if use_cookies and not (
+                YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()
+            ):
                 continue
             try:
                 return _download_with_cli_fallback(
@@ -653,100 +828,113 @@ def download_audio(url: str, format_id: str, session_id: str, force_local: bool 
                     extract_audio_codec=preferred_codec,
                 )
             except Exception as cli_error:
-                logger.warning("CLI fallback %s-аудио не удался: %s", preferred_codec, cli_error)
+                logger.warning(
+                    "CLI fallback %s-аудио не удался: %s", preferred_codec, cli_error
+                )
 
     if final_error:
         raise final_error
     raise RuntimeError("Не удалось скачать аудио: неизвестная ошибка")
 
-def download_subtitles(url: str, session_id: str, output_dir: Path | None = None) -> Path | None:
+
+def download_subtitles(
+    url: str, session_id: str, output_dir: Path | None = None
+) -> Path | None:
     """
     Скачивает субтитры в формате SRT.
     Приоритет: русские -> английские -> первые доступные.
-    
+
     Args:
         url: URL YouTube видео
         session_id: ID сессии
         output_dir: Директория для сохранения
-    
+
     Returns:
         Path к SRT файлу или None если субтитры недоступны
     """
     logger.info(f"Скачивание субтитров: {url}")
-    
+
     def _download_subs(use_cookies: bool) -> Path | None:
         if output_dir is None:
             output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")
         else:
             output_path_template = output_dir / "%(title)s.%(ext)s"
-        
+
         ydl_opts = {
-            'skip_download': True,  # Не скачиваем видео
-            'writesubtitles': True,  # Скачиваем субтитры
-            'writeautomaticsub': True,  # Включаем автоматические субтитры
-            'subtitlesformat': 'srt',  # Формат SRT
-            'outtmpl': str(output_path_template),
-            'quiet': False,
-            'no_warnings': True,
+            "skip_download": True,  # Не скачиваем видео
+            "writesubtitles": True,  # Скачиваем субтитры
+            "writeautomaticsub": True,  # Включаем автоматические субтитры
+            "subtitlesformat": "srt",  # Формат SRT
+            "outtmpl": str(output_path_template),
+            "quiet": False,
+            "no_warnings": True,
         }
         apply_network_opts(ydl_opts)
-        
-        if use_cookies and YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
+
+        if (
+            use_cookies
+            and YOUTUBE_COOKIES_FILE
+            and Path(YOUTUBE_COOKIES_FILE).is_file()
+        ):
             logger.info(f"Использование cookies для субтитров: {YOUTUBE_COOKIES_FILE}")
-            ydl_opts['cookiefile'] = YOUTUBE_COOKIES_FILE
-        
+            ydl_opts["cookiefile"] = YOUTUBE_COOKIES_FILE
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            
+
             # Проверяем доступные субтитры
-            available_subs = info.get('subtitles', {})
-            auto_subs = info.get('automatic_captions', {})
-            
+            available_subs = info.get("subtitles", {})
+            auto_subs = info.get("automatic_captions", {})
+
             # Объединяем ручные и автоматические субтитры
             all_subs = {**auto_subs, **available_subs}
-            
+
             if not all_subs:
                 logger.warning("Субтитры не найдены для этого видео")
                 return None
-            
+
             # Определяем приоритетный язык: ru -> en -> первый доступный
             lang = None
-            if 'ru' in all_subs:
-                lang = 'ru'
+            if "ru" in all_subs:
+                lang = "ru"
                 logger.info("Найдены русские субтитры")
-            elif 'en' in all_subs:
-                lang = 'en'
+            elif "en" in all_subs:
+                lang = "en"
                 logger.info("Найдены английские субтитры")
             else:
                 lang = list(all_subs.keys())[0]
                 logger.info(f"Используем субтитры на языке: {lang}")
-            
+
             # Настраиваем скачивание конкретного языка
-            ydl_opts['subtitleslangs'] = [lang]
-            
+            ydl_opts["subtitleslangs"] = [lang]
+
             # Скачиваем субтитры
             with yt_dlp.YoutubeDL(ydl_opts) as ydl_download:
                 ydl_download.download([url])
-            
+
             # Формируем путь к файлу субтитров
             base_filename = Path(ydl.prepare_filename(info))
-            subtitle_file = base_filename.with_suffix(f'.{lang}.srt')
-            
+            subtitle_file = base_filename.with_suffix(f".{lang}.srt")
+
             if not subtitle_file.exists():
                 logger.error(f"Файл субтитров не найден: {subtitle_file}")
                 return None
-            
+
             logger.info(f"Субтитры успешно скачаны: {subtitle_file}")
             return subtitle_file
-    
+
     try:
         return _download_subs(False)
     except Exception as e:
-        logger.warning(f"Ошибка скачивания субтитров без cookies: {e}. Пробуем с cookies...")
+        logger.warning(
+            f"Ошибка скачивания субтитров без cookies: {e}. Пробуем с cookies..."
+        )
         if not (YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()):
             raise
         try:
             return _download_subs(True)
         except Exception as e2:
-            logger.error(f"Ошибка скачивания субтитров даже с cookies: {e2}", exc_info=True)
+            logger.error(
+                f"Ошибка скачивания субтитров даже с cookies: {e2}", exc_info=True
+            )
             raise

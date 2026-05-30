@@ -1,0 +1,3 @@
+[tool.ruff.lint.per-file-ignores]
+# main.py: импорты специально расположены ниже load_dotenv() для загрузки .env
+"main.py" = ["E402"]

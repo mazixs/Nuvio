@@ -94,7 +94,9 @@ class _EditableReply:
 
 
 class _DummyDocument:
-    def __init__(self, file_name: str, *, file_size: int = 128, mime_type: str = "text/plain"):
+    def __init__(
+        self, file_name: str, *, file_size: int = 128, mime_type: str = "text/plain"
+    ):
         self.file_name = file_name
         self.file_size = file_size
         self.mime_type = mime_type
@@ -207,7 +209,9 @@ def test_cleanup_specific_session_keeps_other_sessions(monkeypatch):
 
     assert cleaned_sessions == ["session-1"]
     assert telegram_utils._get_session(context, first) is None
-    assert telegram_utils._get_session(context, second)["url"] == "https://example.com/2"
+    assert (
+        telegram_utils._get_session(context, second)["url"] == "https://example.com/2"
+    )
 
 
 def test_process_url_applies_antispam_to_plain_messages(monkeypatch):
@@ -224,9 +228,13 @@ def test_process_url_applies_antispam_to_plain_messages(monkeypatch):
     monkeypatch.setattr(telegram_utils, "is_valid_instagram_url", lambda url: False)
 
     for _ in range(3):
-        asyncio.run(telegram_utils.process_url(update, context, "https://example.com/video"))
+        asyncio.run(
+            telegram_utils.process_url(update, context, "https://example.com/video")
+        )
 
-    asyncio.run(telegram_utils.process_url(update, context, "https://example.com/video"))
+    asyncio.run(
+        telegram_utils.process_url(update, context, "https://example.com/video")
+    )
 
     assert message.replies[-1] == telegram_utils.SPAM_WARNING
 
@@ -239,9 +247,7 @@ def test_build_main_menu_uses_platform_specific_callbacks():
     )
 
     callbacks = [
-        button.callback_data
-        for row in instagram_menu.inline_keyboard
-        for button in row
+        button.callback_data for row in instagram_menu.inline_keyboard for button in row
     ]
 
     assert "s|sess1234|main|instagram_download" in callbacks
@@ -305,7 +311,10 @@ def test_classify_tiktok_russian_access_error():
         "• Региональные блокировки"
     )
 
-    assert telegram_utils._classify_internal_error_category("tiktok", error) == "RATE_LIMIT"
+    assert (
+        telegram_utils._classify_internal_error_category("tiktok", error)
+        == "RATE_LIMIT"
+    )
 
 
 def test_tiktok_rate_limit_failure_notifies_admins(monkeypatch):
@@ -321,7 +330,9 @@ def test_tiktok_rate_limit_failure_notifies_admins(monkeypatch):
     monkeypatch.setattr(
         telegram_utils,
         "check_cookie_health",
-        lambda platform: cookie_health.CookieHealthResult(platform, "valid", "auth cookies are active", 0.0, 2, 2),
+        lambda platform: cookie_health.CookieHealthResult(
+            platform, "valid", "auth cookies are active", 0.0, 2, 2
+        ),
     )
 
     asyncio.run(
@@ -367,7 +378,9 @@ def test_tiktok_info_requests_full_metadata(monkeypatch):
         Path(r"C:\definitely-missing-tiktok-cookies.txt"),
     )
 
-    info = tiktok_instagram_utils.get_tiktok_info("https://www.tiktok.com/@user/video/1")
+    info = tiktok_instagram_utils.get_tiktok_info(
+        "https://www.tiktok.com/@user/video/1"
+    )
 
     assert info["title"] == "stub"
     assert _CapturingYDL.captured_options
@@ -447,9 +460,13 @@ def test_tiktok_download_uses_resolved_url(monkeypatch, tmp_path):
 def test_tiktok_photo_info_uses_fallback_when_yt_dlp_cannot_parse(monkeypatch):
     class _UnsupportedPhotoYDL(_CapturingYDL):
         def extract_info(self, url, download=False):
-            raise tiktok_instagram_utils.yt_dlp.utils.DownloadError(f"ERROR: Unsupported URL: {url}")
+            raise tiktok_instagram_utils.yt_dlp.utils.DownloadError(
+                f"ERROR: Unsupported URL: {url}"
+            )
 
-    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _UnsupportedPhotoYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils.yt_dlp, "YoutubeDL", _UnsupportedPhotoYDL
+    )
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_smart_retry",
@@ -532,9 +549,13 @@ def test_instagram_info_falls_back_to_photo_post(monkeypatch):
             return False
 
         def extract_info(self, url, download=False):
-            raise Exception("ERROR: [Instagram] DWLd9IYDVeD: There is no video in this post")
+            raise Exception(
+                "ERROR: [Instagram] DWLd9IYDVeD: There is no video in this post"
+            )
 
-    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _NoVideoInstagramYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils.yt_dlp, "YoutubeDL", _NoVideoInstagramYDL
+    )
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_fetch_instagram_photo_post_media",
@@ -546,7 +567,9 @@ def test_instagram_info_falls_back_to_photo_post(monkeypatch):
                 {"src": "https://cdn.example/1-small.jpg", "config_width": 640},
                 {"src": "https://cdn.example/1-large.jpg", "config_width": 1080},
             ],
-            "edge_media_to_caption": {"edges": [{"node": {"text": "Фото-пост Instagram"}}]},
+            "edge_media_to_caption": {
+                "edges": [{"node": {"text": "Фото-пост Instagram"}}]
+            },
             "clips_metadata": {
                 "music_info": {
                     "music_asset_info": {
@@ -557,7 +580,9 @@ def test_instagram_info_falls_back_to_photo_post(monkeypatch):
         },
     )
 
-    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/p/DWLd9IYDVeD/")
+    info = tiktok_instagram_utils.get_instagram_info(
+        "https://www.instagram.com/p/DWLd9IYDVeD/"
+    )
 
     assert info["_nuvio_instagram_photo_post"] is True
     assert info["uploader"] == "tester"
@@ -582,7 +607,9 @@ def test_instagram_info_rate_limit_falls_back_to_photo_post(monkeypatch):
                 "rate-limit reached or login required."
             )
 
-    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _RateLimitedInstagramYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils.yt_dlp, "YoutubeDL", _RateLimitedInstagramYDL
+    )
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "INSTAGRAM_COOKIES_FILE",
@@ -600,7 +627,9 @@ def test_instagram_info_rate_limit_falls_back_to_photo_post(monkeypatch):
         },
     )
 
-    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/p/DWLd9IYDVeD/")
+    info = tiktok_instagram_utils.get_instagram_info(
+        "https://www.instagram.com/p/DWLd9IYDVeD/"
+    )
 
     assert info["_nuvio_instagram_photo_post"] is True
     assert info["_nuvio_instagram_images"] == ["https://cdn.example/cover.jpg"]
@@ -625,7 +654,9 @@ def test_instagram_info_empty_playlist_falls_back_to_photo_post(monkeypatch):
                 "title": "Post by hamiboom.world",
             }
 
-    monkeypatch.setattr(tiktok_instagram_utils.yt_dlp, "YoutubeDL", _EmptyPlaylistInstagramYDL)
+    monkeypatch.setattr(
+        tiktok_instagram_utils.yt_dlp, "YoutubeDL", _EmptyPlaylistInstagramYDL
+    )
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_fetch_instagram_photo_post_media",
@@ -634,12 +665,20 @@ def test_instagram_info_empty_playlist_falls_back_to_photo_post(monkeypatch):
             "shortcode": "DTgni55AKmO",
             "owner": {"username": "tester"},
             "carousel_media": [
-                {"image_versions2": {"candidates": [{"url": "https://cdn.example/1.jpg", "width": 1080}]}}
+                {
+                    "image_versions2": {
+                        "candidates": [
+                            {"url": "https://cdn.example/1.jpg", "width": 1080}
+                        ]
+                    }
+                }
             ],
         },
     )
 
-    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/p/DTgni55AKmO")
+    info = tiktok_instagram_utils.get_instagram_info(
+        "https://www.instagram.com/p/DTgni55AKmO"
+    )
 
     assert info["_nuvio_instagram_photo_post"] is True
     assert info["_nuvio_instagram_images"] == ["https://cdn.example/1.jpg"]
@@ -665,11 +704,17 @@ def test_fetch_instagram_photo_post_media_falls_back_to_webpage_meta(monkeypatch
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_fetch_public_instagram_graphql_media",
-        lambda canonical_url, shortcode: (_ for _ in ()).throw(Exception("401 Unauthorized")),
+        lambda canonical_url, shortcode: (_ for _ in ()).throw(
+            Exception("401 Unauthorized")
+        ),
     )
-    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(
+        tiktok_instagram_utils.httpx, "get", lambda *args, **kwargs: _FakeResponse()
+    )
 
-    media = tiktok_instagram_utils._fetch_instagram_photo_post_media("https://www.instagram.com/p/ABC123/")
+    media = tiktok_instagram_utils._fetch_instagram_photo_post_media(
+        "https://www.instagram.com/p/ABC123/"
+    )
 
     assert media["display_url"] == "https://cdn.example/post.jpg"
     assert media["owner"] == {"username": "tester"}
@@ -689,7 +734,16 @@ def test_fetch_public_instagram_graphql_media_returns_first_item(monkeypatch):
                             {
                                 "id": "123",
                                 "carousel_media": [
-                                    {"image_versions2": {"candidates": [{"url": "https://cdn.example/1.jpg", "width": 1080}]}}
+                                    {
+                                        "image_versions2": {
+                                            "candidates": [
+                                                {
+                                                    "url": "https://cdn.example/1.jpg",
+                                                    "width": 1080,
+                                                }
+                                            ]
+                                        }
+                                    }
                                 ],
                             }
                         ]
@@ -709,7 +763,10 @@ def test_fetch_public_instagram_graphql_media_returns_first_item(monkeypatch):
 
         def get(self, url, params=None):
             assert url == tiktok_instagram_utils.INSTAGRAM_GRAPHQL_URL
-            assert params["doc_id"] == tiktok_instagram_utils.INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID
+            assert (
+                params["doc_id"]
+                == tiktok_instagram_utils.INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID
+            )
             return _FakeResponse()
 
     monkeypatch.setattr(tiktok_instagram_utils.httpx, "Client", _FakeClient)
@@ -720,7 +777,10 @@ def test_fetch_public_instagram_graphql_media_returns_first_item(monkeypatch):
     )
 
     assert media["id"] == "123"
-    assert media["carousel_media"][0]["image_versions2"]["candidates"][0]["url"] == "https://cdn.example/1.jpg"
+    assert (
+        media["carousel_media"][0]["image_versions2"]["candidates"][0]["url"]
+        == "https://cdn.example/1.jpg"
+    )
 
 
 def test_instagram_photo_audio_short_circuits_to_photo_handler(monkeypatch):
@@ -756,8 +816,14 @@ def test_build_instagram_photo_info_collects_sidecar_images():
                     {
                         "node": {
                             "display_resources": [
-                                {"src": "https://cdn.example/1-small.jpg", "config_width": 640},
-                                {"src": "https://cdn.example/1-large.jpg", "config_width": 1080},
+                                {
+                                    "src": "https://cdn.example/1-small.jpg",
+                                    "config_width": 640,
+                                },
+                                {
+                                    "src": "https://cdn.example/1-large.jpg",
+                                    "config_width": 1080,
+                                },
                             ],
                             "is_video": False,
                         }
@@ -795,9 +861,24 @@ def test_build_instagram_photo_info_deduplicates_signed_image_variants():
             "owner": {"username": "tester"},
             "edge_sidecar_to_children": {
                 "edges": [
-                    {"node": {"display_url": "https://cdn.example/photo.jpg?sig=1", "is_video": False}},
-                    {"node": {"display_url": "https://cdn.example/photo.jpg?sig=2", "is_video": False}},
-                    {"node": {"display_url": "https://cdn.example/photo-2.jpg?sig=3", "is_video": False}},
+                    {
+                        "node": {
+                            "display_url": "https://cdn.example/photo.jpg?sig=1",
+                            "is_video": False,
+                        }
+                    },
+                    {
+                        "node": {
+                            "display_url": "https://cdn.example/photo.jpg?sig=2",
+                            "is_video": False,
+                        }
+                    },
+                    {
+                        "node": {
+                            "display_url": "https://cdn.example/photo-2.jpg?sig=3",
+                            "is_video": False,
+                        }
+                    },
                 ]
             },
         },
@@ -825,7 +906,9 @@ def test_handle_main_callback_routes_tiktok_photo_to_asset_sender(monkeypatch):
     async def fake_send_photo_post_assets(*args):
         called.append(args)
 
-    monkeypatch.setattr(telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets)
+    monkeypatch.setattr(
+        telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets
+    )
 
     asyncio.run(
         telegram_utils._handle_main_callback(
@@ -856,7 +939,9 @@ def test_handle_main_callback_routes_instagram_photo_to_asset_sender(monkeypatch
     async def fake_send_photo_post_assets(*args):
         called.append(args)
 
-    monkeypatch.setattr(telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets)
+    monkeypatch.setattr(
+        telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets
+    )
 
     asyncio.run(
         telegram_utils._handle_main_callback(
@@ -871,7 +956,9 @@ def test_handle_main_callback_routes_instagram_photo_to_asset_sender(monkeypatch
     assert called
 
 
-def test_handle_main_callback_reroutes_instagram_photo_exception_to_asset_sender(monkeypatch):
+def test_handle_main_callback_reroutes_instagram_photo_exception_to_asset_sender(
+    monkeypatch,
+):
     called: list[tuple] = []
     context = SimpleNamespace(user_data={})
     session_token = telegram_utils._store_session(
@@ -888,11 +975,21 @@ def test_handle_main_callback_reroutes_instagram_photo_exception_to_asset_sender
         called.append(args)
 
     def fake_download_instagram_video(*args, **kwargs):
-        raise Exception("Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио.")
+        raise Exception(
+            "Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио."
+        )
 
-    monkeypatch.setattr(telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets)
-    monkeypatch.setattr(telegram_utils.telegram_cache, "get", lambda *args, **kwargs: None)
-    monkeypatch.setattr(tiktok_instagram_utils, "download_instagram_video", fake_download_instagram_video)
+    monkeypatch.setattr(
+        telegram_utils, "_send_photo_post_assets", fake_send_photo_post_assets
+    )
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache, "get", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "download_instagram_video",
+        fake_download_instagram_video,
+    )
 
     asyncio.run(
         telegram_utils._handle_main_callback(
@@ -979,7 +1076,9 @@ def test_build_main_menu_hides_instagram_audio_button_without_audio():
     assert telegram_utils.BTN_AUDIO_ONLY not in buttons
 
 
-def test_handle_main_callback_reports_missing_instagram_photo_audio_without_failure_log(monkeypatch):
+def test_handle_main_callback_reports_missing_instagram_photo_audio_without_failure_log(
+    monkeypatch,
+):
     logged: list[tuple] = []
     context = SimpleNamespace(user_data={})
     session_token = telegram_utils._store_session(
@@ -999,8 +1098,16 @@ def test_handle_main_callback_reports_missing_instagram_photo_audio_without_fail
     def fake_download_instagram_audio(*args, **kwargs):
         raise tiktok_instagram_utils.PhotoPostAudioMissingError()
 
-    monkeypatch.setattr(tiktok_instagram_utils, "download_instagram_audio", fake_download_instagram_audio)
-    monkeypatch.setattr(telegram_utils, "_schedule_platform_failure_log", lambda *args, **kwargs: logged.append((args, kwargs)))
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "download_instagram_audio",
+        fake_download_instagram_audio,
+    )
+    monkeypatch.setattr(
+        telegram_utils,
+        "_schedule_platform_failure_log",
+        lambda *args, **kwargs: logged.append((args, kwargs)),
+    )
 
     asyncio.run(
         telegram_utils._handle_main_callback(
@@ -1025,7 +1132,9 @@ def test_instagram_info_requests_full_metadata(monkeypatch):
         Path(r"C:\definitely-missing-instagram-cookies.txt"),
     )
 
-    info = tiktok_instagram_utils.get_instagram_info("https://www.instagram.com/reel/abc123/")
+    info = tiktok_instagram_utils.get_instagram_info(
+        "https://www.instagram.com/reel/abc123/"
+    )
 
     assert info["title"] == "stub"
     assert _CapturingYDL.captured_options
@@ -1098,7 +1207,9 @@ def test_admin_cookie_upload_renames_txt_to_expected_file(monkeypatch, tmp_path)
         message=message,
     )
     context = SimpleNamespace(
-        user_data={cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "www.youtube.com_cookies.txt"}
+        user_data={
+            cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "www.youtube.com_cookies.txt"
+        }
     )
 
     monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
@@ -1123,7 +1234,9 @@ def test_admin_cookie_upload_rejects_non_txt_name(monkeypatch):
         message=message,
     )
     context = SimpleNamespace(
-        user_data={cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "www.youtube.com_cookies.txt"}
+        user_data={
+            cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "www.youtube.com_cookies.txt"
+        }
     )
 
     monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
@@ -1143,7 +1256,10 @@ def test_admin_callback_arms_specific_cookie_upload(monkeypatch):
 
     asyncio.run(cookie_manager.handle_admin_callback(update, context))
 
-    assert context.user_data[cookie_manager.ADMIN_UPLOAD_TARGET_KEY] == "www.youtube.com_cookies.txt"
+    assert (
+        context.user_data[cookie_manager.ADMIN_UPLOAD_TARGET_KEY]
+        == "www.youtube.com_cookies.txt"
+    )
     assert "Expected file: www.youtube.com_cookies.txt" in query.edits[-1][0]
 
 
@@ -1153,7 +1269,9 @@ def test_admin_command_shows_cookie_panel(monkeypatch):
         effective_user=SimpleNamespace(id=1),
         message=message,
     )
-    context = SimpleNamespace(user_data={cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "stale.txt"})
+    context = SimpleNamespace(
+        user_data={cookie_manager.ADMIN_UPLOAD_TARGET_KEY: "stale.txt"}
+    )
 
     monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
 
@@ -1198,9 +1316,20 @@ def test_admin_callback_runs_cookie_health_check(monkeypatch):
         cookie_manager,
         "check_all_cookie_health",
         lambda: {
-            "youtube": cookie_health.CookieHealthResult("youtube", "valid", "probe ok", 0.0, 3, 3),
-            "instagram": cookie_health.CookieHealthResult("instagram", "expired", "all auth cookies are expired", 0.0, 2, 0),
-            "tiktok": cookie_health.CookieHealthResult("tiktok", "rate_limited", "platform temporarily rate-limited the validation probe", 0.0, 2, 2),
+            "youtube": cookie_health.CookieHealthResult(
+                "youtube", "valid", "probe ok", 0.0, 3, 3
+            ),
+            "instagram": cookie_health.CookieHealthResult(
+                "instagram", "expired", "all auth cookies are expired", 0.0, 2, 0
+            ),
+            "tiktok": cookie_health.CookieHealthResult(
+                "tiktok",
+                "rate_limited",
+                "platform temporarily rate-limited the validation probe",
+                0.0,
+                2,
+                2,
+            ),
         },
     )
 
@@ -1233,7 +1362,11 @@ def test_admin_broadcast_sends_text_to_all_known_users(monkeypatch):
 
     monkeypatch.setattr(cookie_manager, "ADMIN_IDS", [1])
     monkeypatch.setattr(cookie_manager, "get_all_user_ids", lambda: [1, 7, 8])
-    monkeypatch.setattr(cookie_manager, "track_event", lambda *args, **kwargs: tracked_events.append((args, kwargs)))
+    monkeypatch.setattr(
+        cookie_manager,
+        "track_event",
+        lambda *args, **kwargs: tracked_events.append((args, kwargs)),
+    )
 
     asyncio.run(cookie_manager.handle_admin_text_input(update, context))
 
@@ -1339,14 +1472,25 @@ def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
     context = SimpleNamespace(user_data={}, args=[])
 
     async def fail_if_cached(*args, **kwargs):
-        raise AssertionError("YouTube path must not short-circuit through cached video before format selection")
+        raise AssertionError(
+            "YouTube path must not short-circuit through cached video before format selection"
+        )
 
     async def fake_run_blocking(func, *args, **kwargs):
-        return {"title": "Stub title", "uploader": "Tester", "duration": 30, "formats": []}
+        return {
+            "title": "Stub title",
+            "uploader": "Tester",
+            "duration": 30,
+            "formats": [],
+        }
 
     monkeypatch.setattr(telegram_utils, "_try_send_cached", fail_if_cached)
     monkeypatch.setattr(telegram_utils, "is_valid_youtube_url", lambda url: True)
-    monkeypatch.setattr(telegram_utils, "get_available_formats", lambda video_info: {"combined": [], "video_only": [], "audio_only": []})
+    monkeypatch.setattr(
+        telegram_utils,
+        "get_available_formats",
+        lambda video_info: {"combined": [], "video_only": [], "audio_only": []},
+    )
     monkeypatch.setattr(telegram_utils, "create_temp_dir", lambda session_id: None)
     monkeypatch.setattr(telegram_utils, "run_blocking", fake_run_blocking)
 
@@ -1366,7 +1510,9 @@ def test_process_url_tiktok_shows_menu_not_cache(monkeypatch):
     context = SimpleNamespace(user_data={}, args=[])
     cache_called = False
 
-    async def fake_try_send_cached(update, url, user_id, cache_format_id, platform="video"):
+    async def fake_try_send_cached(
+        update, url, user_id, cache_format_id, platform="video"
+    ):
         nonlocal cache_called
         cache_called = True
         return True
@@ -1395,7 +1541,9 @@ def test_process_url_tiktok_shows_menu_not_cache(monkeypatch):
 
     asyncio.run(telegram_utils.process_url(update, context, message.text))
 
-    assert not cache_called, "process_url не должен проверять кэш для TikTok — это делает callback handler"
+    assert not cache_called, (
+        "process_url не должен проверять кэш для TikTok — это делает callback handler"
+    )
 
 
 def test_send_single_file_persists_explicit_cache_key(monkeypatch, tmp_path):
@@ -1415,7 +1563,9 @@ def test_send_single_file_persists_explicit_cache_key(monkeypatch, tmp_path):
 
     query = _DummyQuery()
     query.message.reply_video = fake_reply_video
-    monkeypatch.setattr(telegram_utils.telegram_cache, "set", lambda cached: stored.append(cached))
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache, "set", lambda cached: stored.append(cached)
+    )
 
     result = asyncio.run(
         telegram_utils.send_single_file(

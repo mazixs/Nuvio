@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Лёгкая заглушка yt_dlp, если библиотека не установлена в среде тестов.
-if 'yt_dlp' not in sys.modules:
+if "yt_dlp" not in sys.modules:
     try:  # pragma: no cover - если установлен, пропускаем
         __import__("yt_dlp")  # type: ignore[import-not-found]
     except ImportError:  # pragma: no cover - fallback только для CI без зависимостей
@@ -26,31 +26,25 @@ if 'yt_dlp' not in sys.modules:
             utils=types.SimpleNamespace(DownloadError=Exception),
             cookies=types.SimpleNamespace(CookieLoadError=Exception),
         )
-        sys.modules['yt_dlp'] = stub_module
+        sys.modules["yt_dlp"] = stub_module
 
 
 # === МАРКЕРЫ ===
 
+
 def pytest_configure(config):
     """Регистрация пользовательских маркеров."""
-    config.addinivalue_line(
-        "markers", "syntax: тесты синтаксического анализа кода"
-    )
-    config.addinivalue_line(
-        "markers", "unit: модульные тесты отдельных функций"
-    )
-    config.addinivalue_line(
-        "markers", "integration: интеграционные тесты компонентов"
-    )
+    config.addinivalue_line("markers", "syntax: тесты синтаксического анализа кода")
+    config.addinivalue_line("markers", "unit: модульные тесты отдельных функций")
+    config.addinivalue_line("markers", "integration: интеграционные тесты компонентов")
     config.addinivalue_line(
         "markers", "slow: медленные тесты (пропускаются по умолчанию)"
     )
-    config.addinivalue_line(
-        "markers", "network: тесты, требующие интернет-соединения"
-    )
+    config.addinivalue_line("markers", "network: тесты, требующие интернет-соединения")
 
 
 # === ОБЩИЕ ФИКСТУРЫ ===
+
 
 @pytest.fixture(scope="session")
 def project_root() -> Path:
@@ -72,9 +66,10 @@ def tests_dir(project_root: Path) -> Path:
 
 # === ХУКИ ===
 
+
 def pytest_collection_modifyitems(config, items):
     """Модификация собранных тестов.
-    
+
     Добавляет маркер 'slow' для тестов, которые могут выполняться долго.
     """
     for item in items:
@@ -89,23 +84,23 @@ def pytest_addoption(parser):
         "--run-slow",
         action="store_true",
         default=False,
-        help="Запустить медленные тесты"
+        help="Запустить медленные тесты",
     )
     parser.addoption(
         "--run-network",
         action="store_true",
         default=False,
-        help="Запустить тесты, требующие интернет-соединения"
+        help="Запустить тесты, требующие интернет-соединения",
     )
 
 
 def pytest_runtest_setup(item):
     """Настройка перед запуском каждого теста.
-    
+
     Пропускает тесты с определенными маркерами, если не указаны флаги.
     """
     if "slow" in item.keywords and not item.config.getoption("--run-slow"):
         pytest.skip("Пропускаем медленный тест (используйте --run-slow)")
-    
+
     if "network" in item.keywords and not item.config.getoption("--run-network"):
         pytest.skip("Пропускаем сетевой тест (используйте --run-network)")

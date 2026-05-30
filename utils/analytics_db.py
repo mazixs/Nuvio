@@ -8,6 +8,7 @@
 - isolation_level=None + BEGIN IMMEDIATE: ручное управление транзакциями
   и защита от upgrade deadlock при конкурентной записи.
 """
+
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -16,7 +17,9 @@ from pathlib import Path
 
 import os
 
-_DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parent.parent)))
+_DATA_DIR = Path(
+    os.environ.get("DATA_DIR", str(Path(__file__).resolve().parent.parent))
+)
 _DB_PATH = Path(_DATA_DIR) / "analytics.db"
 _local = threading.local()
 
@@ -55,7 +58,7 @@ def _cursor_read():
 def _cursor_write():
     """
     Контекстный менеджер для операций записи.
-    
+
     Использует BEGIN IMMEDIATE для резервирования права записи
     на старте транзакции, предотвращая upgrade deadlock.
     """
@@ -110,7 +113,9 @@ def init_db() -> None:
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_csi_user ON csi_responses(user_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_csi_created ON csi_responses(created_at)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_csi_created ON csi_responses(created_at)"
+        )
 
         # Миграция: добавляем last_csi_sent в users если колонка отсутствует
         cur.execute("PRAGMA table_info(users)")
@@ -121,7 +126,9 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user   ON events(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_event  ON events(event)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_platform ON events(platform)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_platform ON events(platform)"
+        )
 
 
 # ── запись событий ──────────────────────────────────────────────
@@ -299,7 +306,9 @@ def new_users(days: int = 1) -> int:
 def active_users(days: int = 1) -> int:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
-        cur.execute("SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?", (since,))
+        cur.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?", (since,)
+        )
         return cur.fetchone()[0]
 
 
@@ -542,13 +551,16 @@ def cohort_retention(weeks: int = 8) -> list[dict]:
             cohort["w0"] = 100.0  # неделя регистрации — всегда 100%
 
             for w in range(1, weeks + 1):
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT COUNT(DISTINCT e.user_id)
                     FROM events e
                     JOIN users u ON u.user_id = e.user_id
                     WHERE strftime('%Y-W%%W', u.first_seen) = ?
                       AND CAST((julianday(e.ts) - julianday(u.first_seen)) / 7 AS INTEGER) = ?
-                """, (week, w))
+                """,
+                    (week, w),
+                )
                 returned = cur.fetchone()[0]
                 cohort[f"w{w}"] = round(returned / size * 100, 1) if size > 0 else 0.0
 
@@ -563,19 +575,25 @@ def engagement_per_day(days: int = 30) -> list[dict]:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         # MAU для каждого дня = уникальные пользователи за 30 дней до этого дня
-        cur.execute("""
+        cur.execute(
+            """
             SELECT DATE(ts) as day, COUNT(DISTINCT user_id) as dau
             FROM events
             WHERE ts >= ?
             GROUP BY day
             ORDER BY day
-        """, (since,))
+        """,
+            (since,),
+        )
         daily = [dict(row) for row in cur.fetchall()]
 
         # Общий MAU за весь период
-        cur.execute("""
+        cur.execute(
+            """
             SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?
-        """, (since,))
+        """,
+            (since,),
+        )
         mau = cur.fetchone()[0] or 1
 
         for d in daily:

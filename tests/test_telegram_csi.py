@@ -66,7 +66,9 @@ async def test_send_csi_request_builds_keyboard(monkeypatch):
 @pytest.fixture
 def mock_csi_deps(monkeypatch):
     """Моки для зависимостей CSI callback."""
-    monkeypatch.setattr(telegram_utils, "_should_rate_limit_callback", lambda data: False)
+    monkeypatch.setattr(
+        telegram_utils, "_should_rate_limit_callback", lambda data: False
+    )
     monkeypatch.setattr(telegram_utils, "_check_spam", lambda *a, **k: False)
 
 

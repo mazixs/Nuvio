@@ -60,12 +60,8 @@ def test_get_users_for_csi(fresh_analytics_db):
     # user2: старый last_csi_sent, активен
     # user3: неактивен (last_seen давно)
     with db._cursor_write() as cur:
-        cur.execute(
-            "UPDATE users SET last_csi_sent = ? WHERE user_id = ?", (old, 2)
-        )
-        cur.execute(
-            "UPDATE users SET last_seen = ? WHERE user_id = ?", (old, 3)
-        )
+        cur.execute("UPDATE users SET last_csi_sent = ? WHERE user_id = ?", (old, 2))
+        cur.execute("UPDATE users SET last_seen = ? WHERE user_id = ?", (old, 3))
 
     users = db.get_users_for_csi(days_since_last=7, min_active_days=1)
     assert 1 in users
