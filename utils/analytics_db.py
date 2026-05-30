@@ -1,5 +1,12 @@
 """
 Аналитическая SQLite база данных для трекинга пользователей и событий.
+
+Оптимизации WAL:
+- timeout=30.0: терпеливое ожидание при блокировке
+- synchronous=NORMAL: ускорение записи без потери целостности
+- cache_size=-64000: 64 МБ кэш страниц
+- isolation_level=None + BEGIN IMMEDIATE: ручное управление транзакциями
+  и защита от upgrade deadlock при конкурентной записи.
 """
 import sqlite3
 import threading
@@ -15,25 +22,51 @@ _local = threading.local()
 
 
 def _get_connection() -> sqlite3.Connection:
+    """Возвращает thread-local соединение с настроенными PRAGMA."""
     conn = getattr(_local, "conn", None)
     if conn is None:
-        conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        conn = sqlite3.connect(
+            str(_DB_PATH),
+            check_same_thread=False,
+            timeout=30.0,
+            isolation_level=None,
+        )
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-64000")
         conn.row_factory = sqlite3.Row
         _local.conn = conn
     return conn
 
 
 @contextmanager
-def _cursor():
+def _cursor_read():
+    """Контекстный менеджер для операций чтения."""
     conn = _get_connection()
     cur = conn.cursor()
     try:
         yield cur
-        conn.commit()
+    finally:
+        cur.close()
+
+
+@contextmanager
+def _cursor_write():
+    """
+    Контекстный менеджер для операций записи.
+    
+    Использует BEGIN IMMEDIATE для резервирования права записи
+    на старте транзакции, предотвращая upgrade deadlock.
+    """
+    conn = _get_connection()
+    cur = conn.cursor()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield cur
+        conn.execute("COMMIT")
     except Exception:
-        conn.rollback()
+        conn.execute("ROLLBACK")
         raise
     finally:
         cur.close()
@@ -41,8 +74,8 @@ def _cursor():
 
 def init_db() -> None:
     """Создаёт таблицы если не существуют."""
-    with _cursor() as cur:
-        cur.executescript("""
+    with _cursor_write() as cur:
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id       INTEGER PRIMARY KEY,
                 username      TEXT,
@@ -51,8 +84,10 @@ def init_db() -> None:
                 language_code TEXT,
                 first_seen    TEXT NOT NULL,
                 last_seen     TEXT NOT NULL
-            );
+            )
+        """)
 
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id   INTEGER NOT NULL,
@@ -61,13 +96,32 @@ def init_db() -> None:
                 url       TEXT,
                 metadata  TEXT,
                 ts        TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_events_user   ON events(user_id);
-            CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
-            CREATE INDEX IF NOT EXISTS idx_events_event  ON events(event);
-            CREATE INDEX IF NOT EXISTS idx_events_platform ON events(platform);
+            )
         """)
+
+        # Таблица ответов CSI (Customer Satisfaction Index)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS csi_responses (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                rating      INTEGER NOT NULL,
+                feedback    TEXT,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_csi_user ON csi_responses(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_csi_created ON csi_responses(created_at)")
+
+        # Миграция: добавляем last_csi_sent в users если колонка отсутствует
+        cur.execute("PRAGMA table_info(users)")
+        existing_cols = {row[1] for row in cur.fetchall()}
+        if "last_csi_sent" not in existing_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN last_csi_sent TEXT")
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user   ON events(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_event  ON events(event)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_platform ON events(platform)")
 
 
 # ── запись событий ──────────────────────────────────────────────
@@ -82,7 +136,7 @@ def track_user(
 ) -> None:
     """Создаёт или обновляет пользователя."""
     now = datetime.utcnow().isoformat()
-    with _cursor() as cur:
+    with _cursor_write() as cur:
         cur.execute(
             """
             INSERT INTO users (user_id, username, first_name, last_name, language_code, first_seen, last_seen)
@@ -107,39 +161,151 @@ def track_event(
 ) -> None:
     """Записывает событие."""
     now = datetime.utcnow().isoformat()
-    with _cursor() as cur:
+    with _cursor_write() as cur:
         cur.execute(
             "INSERT INTO events (user_id, event, platform, url, metadata, ts) VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, event, platform, url, metadata, now),
         )
 
 
+# ── CSI (Customer Satisfaction Index) ───────────────────────────
+
+
+def get_users_for_csi(days_since_last: int = 7, min_active_days: int = 1) -> list[int]:
+    """
+    Возвращает ID пользователей, которым пора отправить CSI-опрос.
+
+    Условия:
+    - Пользователь активен за последние min_active_days дней
+    - CSI не отправлялся ранее ИЛИ прошло более days_since_last дней
+    """
+    active_since = (datetime.utcnow() - timedelta(days=min_active_days)).isoformat()
+    last_csi_since = (datetime.utcnow() - timedelta(days=days_since_last)).isoformat()
+    with _cursor_read() as cur:
+        cur.execute(
+            """
+            SELECT user_id FROM users
+            WHERE last_seen >= ?
+              AND (last_csi_sent IS NULL OR last_csi_sent < ?)
+            ORDER BY last_seen DESC
+            """,
+            (active_since, last_csi_since),
+        )
+        return [int(row["user_id"]) for row in cur.fetchall()]
+
+
+def update_last_csi_sent(user_id: int) -> None:
+    """Обновляет время последней отправки CSI для пользователя."""
+    now = datetime.utcnow().isoformat()
+    with _cursor_write() as cur:
+        cur.execute(
+            "UPDATE users SET last_csi_sent = ? WHERE user_id = ?",
+            (now, user_id),
+        )
+
+
+def save_csi_rating(user_id: int, rating: int) -> int:
+    """
+    Сохраняет оценку CSI.
+
+    Returns:
+        ID созданной записи
+    """
+    now = datetime.utcnow().isoformat()
+    with _cursor_write() as cur:
+        cur.execute(
+            "INSERT INTO csi_responses (user_id, rating, created_at) VALUES (?, ?, ?)",
+            (user_id, rating, now),
+        )
+        return cur.lastrowid
+
+
+def update_csi_feedback(csi_id: int, feedback: str) -> None:
+    """Добавляет текстовый отзыв к существующей записи CSI."""
+    with _cursor_write() as cur:
+        cur.execute(
+            "UPDATE csi_responses SET feedback = ? WHERE id = ?",
+            (feedback, csi_id),
+        )
+
+
+def get_csi_metrics() -> dict:
+    """
+    Возвращает метрики CSI.
+
+    Returns:
+        dict с avg_rating, total_responses, distribution, recent_low_feedback
+    """
+    with _cursor_read() as cur:
+        cur.execute("SELECT COUNT(*) FROM csi_responses")
+        total = cur.fetchone()[0]
+
+        if total == 0:
+            return {
+                "avg_rating": 0.0,
+                "total_responses": 0,
+                "distribution": {},
+                "recent_low_feedback": [],
+            }
+
+        cur.execute("SELECT AVG(rating) FROM csi_responses")
+        avg = round(cur.fetchone()[0] or 0, 1)
+
+        cur.execute(
+            """
+            SELECT rating, COUNT(*) as cnt
+            FROM csi_responses
+            GROUP BY rating
+            ORDER BY rating
+            """
+        )
+        distribution = {int(row["rating"]): row["cnt"] for row in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT id, user_id, rating, feedback, created_at
+            FROM csi_responses
+            WHERE rating < 7 AND feedback IS NOT NULL AND feedback != ''
+            ORDER BY created_at DESC
+            LIMIT 10
+            """
+        )
+        recent_low = [dict(row) for row in cur.fetchall()]
+
+        return {
+            "avg_rating": avg,
+            "total_responses": total,
+            "distribution": distribution,
+            "recent_low_feedback": recent_low,
+        }
+
+
 # ── метрики ─────────────────────────────────────────────────────
 
 
 def total_users() -> int:
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         return cur.fetchone()[0]
 
 
 def new_users(days: int = 1) -> int:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users WHERE first_seen >= ?", (since,))
         return cur.fetchone()[0]
 
 
 def active_users(days: int = 1) -> int:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?", (since,))
         return cur.fetchone()[0]
 
 
 def retention(day: int) -> float:
     """Retention на N-й день: % пользователей, вернувшихся ровно через day дней после first_seen."""
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
         if total == 0:
@@ -168,7 +334,7 @@ def retention(day: int) -> float:
 def churn_rate(days: int = 30) -> float:
     """Churn: % пользователей, которые были активны ранее, но не активны за последние days дней."""
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
         if total == 0:
@@ -182,7 +348,7 @@ def churn_rate(days: int = 30) -> float:
 
 
 def downloads_by_platform() -> dict[str, int]:
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute(
             """
             SELECT COALESCE(platform, 'unknown') as p, COUNT(*) as c
@@ -196,13 +362,13 @@ def downloads_by_platform() -> dict[str, int]:
 
 
 def total_downloads() -> int:
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM events WHERE event = 'download'")
         return cur.fetchone()[0]
 
 
 def popular_videos(limit: int = 20) -> list[dict]:
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute(
             """
             SELECT url, platform, COUNT(*) as cnt, MAX(ts) as last_download
@@ -219,7 +385,7 @@ def popular_videos(limit: int = 20) -> list[dict]:
 
 def downloads_per_day(days: int = 30) -> list[dict]:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute(
             """
             SELECT DATE(ts) as day, COUNT(*) as cnt
@@ -235,7 +401,7 @@ def downloads_per_day(days: int = 30) -> list[dict]:
 
 def new_users_per_day(days: int = 30) -> list[dict]:
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute(
             """
             SELECT DATE(first_seen) as day, COUNT(*) as cnt
@@ -250,7 +416,7 @@ def new_users_per_day(days: int = 30) -> list[dict]:
 
 
 def get_all_users(limit: int = 100, offset: int = 0) -> list[dict]:
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute(
             """
             SELECT u.user_id, u.username, u.first_name, u.last_name,
@@ -270,13 +436,13 @@ def get_all_users(limit: int = 100, offset: int = 0) -> list[dict]:
 
 def get_all_user_ids() -> list[int]:
     """Возвращает ID всех известных пользователей для админской рассылки."""
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT user_id FROM users ORDER BY last_seen DESC")
         return [int(row["user_id"]) for row in cur.fetchall()]
 
 
 def get_user_detail(user_id: int) -> dict | None:
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         row = cur.fetchone()
         if not row:
@@ -317,7 +483,7 @@ def get_user_detail(user_id: int) -> dict | None:
 
 def avg_downloads_per_user() -> float:
     """Среднее количество скачиваний на пользователя."""
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
         if total == 0:
@@ -329,7 +495,7 @@ def avg_downloads_per_user() -> float:
 
 def repeat_users_rate() -> float:
     """% пользователей с более чем 1 скачиванием."""
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
         if total == 0:
@@ -358,7 +524,7 @@ def cohort_retention(weeks: int = 8) -> list[dict]:
 
     Возвращает список: [{week: "2026-W10", size: 15, w0: 100, w1: 60, w2: 40, ...}, ...]
     """
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         # Получаем когорты (неделя регистрации)
         cur.execute(f"""
             SELECT strftime('%Y-W%W', first_seen) as cohort_week,
@@ -395,7 +561,7 @@ def engagement_per_day(days: int = 30) -> list[dict]:
     Возвращает: [{day: "2026-03-22", dau: 5, stickiness: 25.0}, ...]
     """
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         # MAU для каждого дня = уникальные пользователи за 30 дней до этого дня
         cur.execute("""
             SELECT DATE(ts) as day, COUNT(DISTINCT user_id) as dau
@@ -420,7 +586,7 @@ def engagement_per_day(days: int = 30) -> list[dict]:
 
 def platform_conversion() -> dict[str, dict]:
     """Конверсия по платформам: сколько уникальных пользователей скачивали с каждой."""
-    with _cursor() as cur:
+    with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
         if total == 0:
@@ -469,4 +635,6 @@ def dashboard_summary() -> dict:
         "engagement_per_day": engagement_per_day(30),
         "cohorts": cohort_retention(8),
         "platform_conversion": platform_conversion(),
+        # CSI метрики
+        "csi": get_csi_metrics(),
     }

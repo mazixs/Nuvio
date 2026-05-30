@@ -348,6 +348,7 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
 .dot-primary { background: var(--primary); }
 .dot-accent { background: var(--accent); }
 .dot-warn { background: var(--warn); }
+.dot-danger { background: var(--danger); }
 
 .chart-box.full-width { grid-column: 1 / -1; }
 .charts-grid.split { grid-template-columns: 1fr 2fr; }
@@ -472,6 +473,7 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
 .badge-tiktok { background: rgba(105, 201, 208, 0.12); color: var(--tiktok); }
 .badge-instagram { background: rgba(225, 48, 108, 0.12); color: var(--instagram); }
 .badge-unknown { background: rgba(99, 107, 133, 0.15); color: var(--text-muted); }
+.badge-danger { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
 
 .badge-dot {
     width: 6px;

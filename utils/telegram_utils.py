@@ -15,7 +15,10 @@ from telegram.ext import ContextTypes
 
 from config import DOWNLOAD_WORKERS, BLOCKING_TASK_TIMEOUT, ADMIN_IDS
 from utils.logger import setup_logger
-from utils.analytics_db import init_db as _init_analytics, track_user, track_event
+from utils.analytics_db import (
+    init_db as _init_analytics, track_user, track_event,
+    update_last_csi_sent, save_csi_rating, update_csi_feedback,
+)
 from utils.youtube_utils import (
     is_valid_youtube_url, get_video_info, get_available_formats,
     download_video, download_audio, download_audio_native, download_subtitles
@@ -34,6 +37,7 @@ from messages import (
     BTN_DOWNLOAD_VIDEO, BTN_DOWNLOAD_POST, BTN_AUDIO_ONLY, BTN_SUBTITLES, ERROR_FALLBACK, ERROR_NETWORK, ERROR_FILE_TOO_LARGE_TELEGRAM,
     SUBTITLE_CAPTION, MP3_MIN_LABEL, SPAM_WARNING, LARGE_FILE_DELIVERY_UNAVAILABLE,
     USER_ERROR_WITH_CODE, USER_NETWORK_ERROR_WITH_CODE, USER_FILE_ERROR_WITH_CODE, USER_TELEGRAM_ERROR_WITH_CODE,
+    CSI_REQUEST_MESSAGE, CSI_THANKS_MESSAGE, CSI_FEEDBACK_REQUEST, CSI_FEEDBACK_THANKS,
 )
 from utils.tiktok_instagram_utils import (
     is_valid_tiktok_url, is_valid_instagram_url, is_instagram_story_url,
@@ -65,6 +69,22 @@ def set_bot_instance(bot: telegram.Bot) -> None:
     """Устанавливает ссылку на бота для отправки краш-репортов."""
     global _bot_instance
     _bot_instance = bot
+
+
+async def send_csi_request(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет пользователю inline-клавиатуру с оценками 0–10 для CSI."""
+    keyboard = []
+    row = []
+    for i in range(11):
+        row.append(InlineKeyboardButton(str(i), callback_data=f"csi|{i}"))
+        if len(row) == 6:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=user_id, text=CSI_REQUEST_MESSAGE, reply_markup=reply_markup)
+    update_last_csi_sent(user_id)
 
 
 def _format_exception_traceback(exc: BaseException) -> str:
@@ -883,6 +903,25 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: s
         context (ContextTypes.DEFAULT_TYPE): Контекст.
     """
     user_id = update.effective_user.id
+
+    # Перехват текстового отзыва CSI (если пользователь не прислал ссылку)
+    if url is None and update.message and update.message.text:
+        awaiting_id = context.user_data.get('awaiting_csi_feedback_id')
+        if awaiting_id:
+            text = update.message.text
+            # Если прислана ссылка — сбрасываем ожидание отзыва и обрабатываем как URL
+            if 'http://' in text or 'https://' in text:
+                context.user_data.pop('awaiting_csi_feedback_id', None)
+            else:
+                try:
+                    update_csi_feedback(awaiting_id, text)
+                    await update.message.reply_text(CSI_FEEDBACK_THANKS)
+                except Exception as e:
+                    logger.error(f"Ошибка сохранения CSI отзыва: {e}")
+                finally:
+                    context.user_data.pop('awaiting_csi_feedback_id', None)
+                return
+
     if url is None:
         from utils.cookie_manager import handle_admin_text_input
         if await handle_admin_text_input(update, context):
@@ -1915,6 +1954,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await _handle_main_callback(query, context, user_id, session_token, action)
             case ["s", session_token, "format", content_type, format_id]:
                 await _handle_format_callback(query, context, user_id, session_token, content_type, format_id)
+            case ["csi", rating_str]:
+                try:
+                    rating = int(rating_str)
+                    if 0 <= rating <= 10:
+                        csi_id = save_csi_rating(user_id, rating)
+                        await query.edit_message_text(CSI_THANKS_MESSAGE)
+                        if rating < 7:
+                            context.user_data['awaiting_csi_feedback_id'] = csi_id
+                            await context.bot.send_message(chat_id=user_id, text=CSI_FEEDBACK_REQUEST)
+                    else:
+                        await query.answer("Оценка должна быть от 0 до 10")
+                except ValueError:
+                    await query.answer("Некорректная оценка")
             case _:
                 await query.edit_message_text(SESSION_EXPIRED)
     except Exception as e:

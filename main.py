@@ -28,6 +28,7 @@ from utils.cache_commands import stats_command, cleanup_cache_command, search_ca
 from utils.video_cache import telegram_cache  # noqa: E402
 from utils.cookie_manager import admin_command, handle_admin_callback, handle_document_upload  # noqa: E402
 from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version  # noqa: E402
+from utils.analytics_db import get_users_for_csi  # noqa: E402
 
 # Настройка логирования
 logger = setup_logger(__name__, level=LOG_LEVEL)
@@ -107,6 +108,22 @@ async def scheduled_cache_vacuum(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при оптимизации кэша: {e}")
 
+
+async def scheduled_csi_dispatch(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневная рассылка CSI-опросов активным пользователям."""
+    try:
+        from utils.telegram_utils import send_csi_request
+        user_ids = get_users_for_csi(days_since_last=7, min_active_days=1)
+        for user_id in user_ids:
+            try:
+                await send_csi_request(user_id, context)
+            except Exception as e:
+                logger.error(f"Ошибка отправки CSI пользователю {user_id}: {e}")
+        if user_ids:
+            logger.info(f"📊 Разослано {len(user_ids)} CSI-опросов")
+    except Exception as e:
+        logger.error(f"Ошибка при рассылке CSI: {e}")
+
 def _build_application() -> Application:
     """Создаёт и конфигурирует экземпляр Application."""
     from utils.telegram_utils import (
@@ -169,7 +186,8 @@ def _build_application() -> Application:
     if application.job_queue:
         application.job_queue.run_repeating(scheduled_cache_cleanup, interval=86400, first=60)
         application.job_queue.run_repeating(scheduled_cache_vacuum, interval=604800, first=600)
-        logger.info("🕒 Планировщик задач инициализирован (автоочистка кэша активна)")
+        application.job_queue.run_repeating(scheduled_csi_dispatch, interval=86400, first=3600)
+        logger.info("🕒 Планировщик задач инициализирован (автоочистка кэша + CSI активны)")
 
     return application
 

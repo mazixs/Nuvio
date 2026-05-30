@@ -64,7 +64,11 @@ class TelegramVideoCache:
     - 1-й запрос: скачивание + загрузка (5-10 мин)
     - 2+ запросы: мгновенная отправка (0 сек)
     
-    Использует SQLite для персистентности.
+    Использует SQLite в WAL-режиме с оптимизациями для конкурентного доступа:
+    - timeout=30.0 (терпеливое ожидание при блокировке)
+    - synchronous=NORMAL (ускорение записи без потери целостности в WAL)
+    - cache_size=-64000 (64 МБ кэш страниц)
+    - BEGIN IMMEDIATE для всех транзакций записи (защита от upgrade deadlock)
     """
     
     def __init__(self, db_path: Path | None = None):
@@ -84,20 +88,45 @@ class TelegramVideoCache:
         self._init_db()
         logger.info(f"Telegram video cache инициализирован: {self.db_path}")
     
+    def _configure_connection(self, conn: sqlite3.Connection) -> None:
+        """Применяет оптимальные PRAGMA к свежему соединению."""
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-64000")
+    
     @contextmanager
     def _get_connection(self):
-        """Context manager для безопасной работы с БД."""
-        conn = sqlite3.connect(str(self.db_path))
+        """Context manager для безопасного чтения из БД."""
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
+            self._configure_connection(conn)
             yield conn
+        finally:
+            conn.close()
+    
+    @contextmanager
+    def _write_transaction(self):
+        """
+        Context manager для транзакций записи.
+        
+        Использует isolation_level=None и BEGIN IMMEDIATE для защиты
+        от upgrade deadlock при конкурентной записи.
+        """
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0, isolation_level=None)
+        try:
+            self._configure_connection(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
     
     def _init_db(self):
         """Инициализирует схему базы данных."""
-        with self._get_connection() as conn:
+        with self._write_transaction() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS video_cache (
                     url TEXT NOT NULL,
@@ -118,8 +147,6 @@ class TelegramVideoCache:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_file_id ON video_cache(file_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_platform ON video_cache(platform)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cached_at ON video_cache(cached_at)")
-            
-            conn.commit()
     
     def get(
         self, 
@@ -177,7 +204,7 @@ class TelegramVideoCache:
         Args:
             cached: Объект CachedVideo для сохранения
         """
-        with self._get_connection() as conn:
+        with self._write_transaction() as conn:
             try:
                 conn.execute("""
                     INSERT OR REPLACE INTO video_cache 
@@ -193,7 +220,6 @@ class TelegramVideoCache:
                     cached.duration,
                     cached.title
                 ))
-                conn.commit()
                 logger.info(f"💾 Сохранен в кэш: {cached.url} -> {cached.file_id}")
             except sqlite3.IntegrityError as e:
                 logger.error(f"Ошибка сохранения в кэш: {e}")
@@ -206,12 +232,11 @@ class TelegramVideoCache:
             url: URL видео
             format_id: ID формата
         """
-        with self._get_connection() as conn:
+        with self._write_transaction() as conn:
             conn.execute(
                 "DELETE FROM video_cache WHERE url = ? AND format_id = ?",
                 (url, format_id)
             )
-            conn.commit()
             logger.debug(f"Удалено из кэша: {url} (format: {format_id})")
     
     def delete_by_file_id(self, file_id: str):
@@ -221,9 +246,8 @@ class TelegramVideoCache:
         Args:
             file_id: file_id для удаления
         """
-        with self._get_connection() as conn:
+        with self._write_transaction() as conn:
             conn.execute("DELETE FROM video_cache WHERE file_id = ?", (file_id,))
-            conn.commit()
             logger.debug(f"Удалено из кэша по file_id: {file_id}")
     
     def cleanup_expired(self, ttl_days: int = 90):
@@ -235,13 +259,12 @@ class TelegramVideoCache:
         """
         cutoff = (datetime.now() - timedelta(days=ttl_days)).isoformat()
         
-        with self._get_connection() as conn:
+        with self._write_transaction() as conn:
             cursor = conn.execute(
                 "DELETE FROM video_cache WHERE cached_at < ?",
                 (cutoff,)
             )
             deleted = cursor.rowcount
-            conn.commit()
         
         if deleted > 0:
             logger.info(f"🗑️ Очищено {deleted} устаревших записей из кэша")
@@ -250,6 +273,8 @@ class TelegramVideoCache:
     
     def vacuum(self) -> None:
         """Выполняет VACUUM и checkpoint для базы кэша."""
+        # VACUUM и wal_checkpoint нельзя выполнять внутри явной транзакции,
+        # поэтому используем обычное соединение (без BEGIN IMMEDIATE).
         with self._get_connection() as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.execute("VACUUM")

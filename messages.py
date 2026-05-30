@@ -113,3 +113,9 @@ BEST_AUDIO_LABEL = "🎵 Лучшее аудио"
 FILE_TOO_LARGE_LINK = "📦 Файл слишком большой для Telegram (больше 50 МБ).\n\n✅ Файл загружен на сервер!\n🔗 Скачать: {file_path}\n\n⚠️ Ссылка действительна для 1 скачивания"
 FILE_PREPARING = "Файл готовится к отправке..."
 FILE_SENT = "✅ Файл успешно отправлен!"
+
+# === CSI (Customer Satisfaction Index) ===
+CSI_REQUEST_MESSAGE = "📊 Насколько вы довольны работой бота? Оцените от 0 до 10:"
+CSI_THANKS_MESSAGE = "🙏 Спасибо за оценку!"
+CSI_FEEDBACK_REQUEST = "📝 Расскажите, пожалуйста, что можно улучшить?"
+CSI_FEEDBACK_THANKS = "🙏 Спасибо за обратную связь! Мы учтём ваши замечания."
