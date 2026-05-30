@@ -20,7 +20,8 @@
 - Файлы >50MB загружаются на Gokapi и отправляются ссылкой
 - Защита от спама (4 запроса за 5 секунд = cooldown 10 секунд)
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin` (управление cookies)
-- WebUI-дашборд аналитики (FastAPI + Jinja2)
+- **CSI (Customer Satisfaction Index)** — автоматические опросы удовлетворённости (шкала 0–10) с текстовой обратной связью для оценок <7; метрики NPS/CSI на дашборде
+- WebUI-дашборд аналитики (FastAPI + Jinja2 + Chart.js)
 - Автообновление yt-dlp (rolling-release, nightly channel)
 - Готовность к headless/systemd-развертыванию (`init_env.sh` в качестве `ExecStartPre`)
 - Поддержка Docker
@@ -210,6 +211,7 @@ Nuvio/
 ├── tests/
 ├── docs/
 ├── .secrets/
+├── pyproject.toml              # конфигурация ruff (per-file-ignores и т.д.)
 ├── .github/workflows/       # CI/CD (тесты, линтинг, релиз, GHCR)
 ├── Dockerfile
 ├── docker-compose.yml       # для локальной разработки
@@ -248,9 +250,10 @@ pytest tests/test_youtube_smoke.py -v  # один файл с подробным
 pytest --run-slow                   # включить медленные тесты
 pytest --run-network                # включить сетевые тесты
 pytest -k "test_name"               # запуск конкретного теста
+pytest -m "syntax or unit"          # как в CI (быстро)
 ```
 
-Маркеры: `syntax`, `unit`, `integration`, `slow`. Тесты YouTube используют мокированный YoutubeDL (без сетевых запросов). Системные зависимости для тестов: FFmpeg, git.
+Маркеры: `syntax`, `unit`, `integration`, `slow`, `network`. Тесты YouTube используют мокированный YoutubeDL (без сетевых запросов). Системные зависимости для тестов: FFmpeg, git.
 
 ---
 
@@ -258,7 +261,7 @@ pytest -k "test_name"               # запуск конкретного тес
 
 Подробная документация находится в директории [`docs/`](docs/):
 
-- Архитектура проекта
+- Архитектура проекта (включая FSM-анализ pipeline и ICE-приоритизацию)
 - Руководство по развертыванию
 - Справочник по конфигурации
 - Устранение неполадок

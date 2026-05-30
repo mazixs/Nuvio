@@ -14,9 +14,10 @@ pip install -r requirements.txt
 
 ## Структура кодовой базы
 
-- `main.py` — точка входа, регистрация хэндлеров, event loop
+- `main.py` — точка входа, регистрация хэндлеров, event loop, scheduled tasks
 - `config.py` — парсинг конфигурации из env
 - `messages.py` — все пользовательские тексты (централизовано)
+- `pyproject.toml` — конфигурация ruff (per-file-ignores, правила линтинга)
 - `utils/` — основная бизнес-логика
 - `web/` — FastAPI WebUI дашборд
 - `tests/` — pytest тесты
@@ -43,10 +44,11 @@ pytest --run-network
 
 ### Маркеры pytest
 
-- `syntax` — синтаксическая корректность и импорты
+- `syntax` — синтаксическая корректность, импорты и линтинг (ruff)
 - `unit` — юнит-тесты с моками
-- `integration` — интеграционные (SQLite кэш)
+- `integration` — интеграционные (SQLite кэш, CSI)
 - `slow` — медленные тесты (пропускаются без `--run-slow`)
+- `network` — тесты, требующие интернет (пропускаются без `--run-network`)
 
 ### Принципы тестирования
 
@@ -63,7 +65,7 @@ pytest --run-network
 ### Обработка ошибок
 
 - Коды ошибок: формат `PREFIX-CATEGORY-RANDOM` (например `YT-ACCESS-A1B2C3`)
-- Prefixes: `YT`, `TT`, `IG`, `TG`, `FILE`, `BOT`
+- Prefixes: `YT` (YouTube), `TT` (TikTok), `IG` (Instagram), `RU` (Rutube), `VK` (VK Video), `TG` (Telegram), `FILE`, `BOT`
 - Пользователю показывается только код, traceback уходит в логи
 - Используется `Exception.add_note()` для контекста
 
@@ -75,9 +77,10 @@ pytest --run-network
 
 ### Базы данных
 
-- SQLite с WAL mode для конкурентного доступа
+- SQLite с WAL mode для конкурентного доступа (`PRAGMA journal_mode=WAL`, `synchronous=NORMAL`, `cache_size=-64000`)
+- Ручные транзакции: `_cursor_read()` для SELECT, `_cursor_write()` с `BEGIN IMMEDIATE` для записи
 - `video_cache.db` — кэш file_id
-- `analytics.db` — аналитика пользователей
+- `analytics.db` — аналитика: пользователи, события, CSI-ответы
 
 ### Логирование
 

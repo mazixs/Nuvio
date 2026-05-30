@@ -82,6 +82,8 @@ FFmpeg необходим для обработки аудио и видео (и
 - `YT` — YouTube
 - `TT` — TikTok
 - `IG` — Instagram
+- `RU` — Rutube
+- `VK` — VK Video
 - `TG` — Telegram
 - `FILE` — файловая система
 - `BOT` — внутренние ошибки бота

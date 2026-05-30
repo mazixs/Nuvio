@@ -19,6 +19,8 @@
 - `YT` - YouTube extractor, metadata, download or merge pipeline
 - `TT` - TikTok extractor or download pipeline
 - `IG` - Instagram extractor or download pipeline
+- `RU` - Rutube extractor or download pipeline
+- `VK` - VK Video extractor or download pipeline
 - `TG` - Telegram API, delivery or network path
 - `FILE` - local filesystem, temp files, permissions, missing file
 - `BOT` - internal bot orchestration, callback handling, generic runtime flow
