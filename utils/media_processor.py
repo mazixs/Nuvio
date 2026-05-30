@@ -32,6 +32,58 @@ def check_ffmpeg_installed() -> bool:
         return False
 
 
+def get_video_codec(file_path: Path) -> str | None:
+    """
+    Возвращает имя видеокодека для указанного файла с помощью ffprobe.
+
+    Args:
+        file_path (Path): Путь к медиафайлу.
+
+    Returns:
+        str | None: Имя кодека (например, 'h264', 'hevc') или None в случае ошибки.
+    """
+    if not check_ffmpeg_installed():
+        return None
+
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-print_format",
+            "json",
+            str(file_path),
+        ]
+
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise Exception("FFprobe процесс превысил лимит времени в 15 секунд.")
+
+        if process.returncode != 0:
+            logger.error(f"Ошибка FFprobe при определении кодека: {stderr}")
+            return None
+
+        data = json.loads(stdout)
+        streams = data.get("streams", [])
+        if streams:
+            return streams[0].get("codec_name")
+
+    except Exception as e:
+        logger.error(f"Ошибка при получении видеокодека файла {file_path}: {e}", exc_info=True)
+
+    return None
+
+
 def convert_to_format(
     input_path: Path,
     output_format: str,

@@ -1594,3 +1594,88 @@ def test_build_yt_dlp_upgrade_command_uses_release_channel():
     assert stable[-1] == "yt-dlp[default]"
     assert "--pre" in nightly
     assert "master.tar.gz" in master[-1]
+
+
+def test_create_tiktok_ytdl_modifies_formats():
+    # Создаем фиктивный класс ytdlp.YoutubeDL для тестирования, чтобы не зависеть от реальной сети
+    class DummyYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+    # Подменим yt_dlp.YoutubeDL на DummyYDL
+    original_ydl = tiktok_instagram_utils.yt_dlp.YoutubeDL
+    tiktok_instagram_utils.yt_dlp.YoutubeDL = DummyYDL
+    try:
+        ydl = tiktok_instagram_utils.create_tiktok_ytdl({})
+
+        info = {
+            "extractor": "TikTok",
+            "id": "12345",
+            "formats": [
+                {
+                    "format_id": "bytevc1_1080p",
+                    "vcodec": "h265",
+                    "acodec": "aac",
+                    "url": "https://example.com/media-video-hvc1/1.mp4",
+                },
+                {
+                    "format_id": "h264_540p",
+                    "vcodec": "h264",
+                    "acodec": "aac",
+                    "url": "https://example.com/1.mp4",
+                }
+            ]
+        }
+
+        # Вызовем _modify_formats
+        ydl._modify_formats(info)
+
+        # Проверяем, что HEVC формат изменен
+        hevc_fmt = next(f for f in info["formats"] if f["format_id"] == "bytevc1_1080p")
+        assert hevc_fmt["acodec"] == "none"
+        assert hevc_fmt["audio_ext"] == "none"
+
+        # Проверяем, что добавлен виртуальный аудио-формат
+        virt_audio = next(f for f in info["formats"] if f["format_id"] == "virtual_audio_from_muxed")
+        assert virt_audio["vcodec"] == "none"
+        assert virt_audio["ext"] == "m4a"
+
+    finally:
+        tiktok_instagram_utils.yt_dlp.YoutubeDL = original_ydl
+
+
+def test_hevc_video_conversion_triggered(monkeypatch, tmp_path):
+    # Мокаем get_video_codec, чтобы он возвращал 'hevc'
+    monkeypatch.setattr(tiktok_instagram_utils, "get_video_codec", lambda path: "hevc")
+
+    # Списки вызовов
+    converted_files = []
+
+    def mock_convert_to_format(input_path, output_format, session_id):
+        converted_files.append(input_path)
+        # Возвращаем путь к новому файлу
+        out_file = input_path.parent / f"converted_{input_path.name}"
+        out_file.write_bytes(b"converted_data")
+        return out_file
+
+    monkeypatch.setattr(tiktok_instagram_utils, "convert_to_format", mock_convert_to_format)
+
+    # Создадим временный файл, имитирующий скачанный hevc файл
+    hevc_file = tmp_path / "hevc_video.mp4"
+    hevc_file.write_bytes(b"hevc_data")
+
+    downloaded_file = hevc_file
+    session_id = "test_sess"
+
+    codec = tiktok_instagram_utils.get_video_codec(downloaded_file)
+    if codec in ("hevc", "h265"):
+        converted_file = tiktok_instagram_utils.convert_to_format(downloaded_file, "mp4", session_id)
+        if downloaded_file.exists() and downloaded_file != converted_file:
+            downloaded_file.unlink()
+        downloaded_file = converted_file
+
+    assert downloaded_file.name == "converted_hevc_video.mp4"
+    assert not hevc_file.exists()
+    assert downloaded_file.read_bytes() == b"converted_data"
+    assert converted_files == [hevc_file]
+

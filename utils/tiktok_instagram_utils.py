@@ -12,6 +12,7 @@ from collections.abc import Callable, Generator
 from typing import Any
 from urllib.parse import urlparse
 
+import copy
 import httpx
 import yt_dlp
 from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
@@ -20,7 +21,7 @@ from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.gokapi_utils import is_gokapi_configured
 from utils.ytdlp_common import finalize_downloaded_file
-from utils.media_processor import convert_webm_to_mp4
+from utils.media_processor import convert_webm_to_mp4, convert_to_format, get_video_codec
 from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
 
 logger = setup_logger(__name__)
@@ -46,6 +47,76 @@ INSTAGRAM_PUBLIC_PAGE_USER_AGENT = HTTP_USER_AGENT
 TIKWM_API_URL = "https://www.tikwm.com/api/"
 INSTAGRAM_GRAPHQL_URL = "https://www.instagram.com/graphql/query/"
 INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID = "26072308439129654"
+
+
+def create_tiktok_ytdl(opts: dict) -> yt_dlp.YoutubeDL:
+    """
+    Создает экземпляр YoutubeDL с модифицированным поведением для TikTok.
+    Использует динамическое наследование от yt_dlp.YoutubeDL,
+    чтобы корректно работать с моками в интеграционных тестах.
+    """
+    class NuvioTikTokYoutubeDL(yt_dlp.YoutubeDL):
+        def process_video_result(self, info_dict, download=True):
+            self._modify_formats(info_dict)
+            return super().process_video_result(info_dict, download)
+
+        def process_info(self, info_dict):
+            self._modify_formats(info_dict)
+            return super().process_info(info_dict)
+
+        def _modify_formats(self, info_dict):
+            if not info_dict:
+                return
+
+            if info_dict.get('_type') == 'playlist':
+                for entry in info_dict.get('entries', []):
+                    self._modify_formats(entry)
+                return
+
+            # Нам нужно модифицировать только форматы TikTok
+            extractor = info_dict.get("extractor", "").lower() if info_dict.get("extractor") else ""
+            if "tiktok" not in extractor:
+                return
+
+            formats = info_dict.get("formats", [])
+            if not formats:
+                return
+
+            # 1. Ищем формат H264 со звуком (обычно 540p), чтобы сделать из него виртуальный аудио-формат
+            audio_fmt = None
+            for fmt in formats:
+                if "h264" in fmt.get("vcodec", "") and fmt.get("acodec") != "none":
+                    audio_fmt = fmt
+                    break
+            if not audio_fmt:
+                for fmt in formats:
+                    if fmt.get("acodec") != "none" and "media-video" not in fmt.get("url", ""):
+                        audio_fmt = fmt
+                        break
+
+            # 2. Устанавливаем acodec = 'none' для HEVC форматов, так как звука в них на самом деле нет
+            for fmt in formats:
+                url_str = fmt.get("url", "")
+                if "media-video" in url_str or fmt.get("vcodec") == "h265" or "bytevc1" in fmt.get("format_id", ""):
+                    fmt["acodec"] = "none"
+                    fmt["audio_ext"] = "none"
+
+            # 3. Добавляем виртуальный аудио-формат, чтобы заставить yt-dlp склеить потоки
+            if audio_fmt:
+                has_virtual = any(f.get("format_id") == "virtual_audio_from_muxed" for f in formats)
+                if not has_virtual:
+                    virt_audio = copy.deepcopy(audio_fmt)
+                    virt_audio["format_id"] = "virtual_audio_from_muxed"
+                    virt_audio["vcodec"] = "none"
+                    virt_audio["video_ext"] = "none"
+                    virt_audio["ext"] = "m4a"
+                    virt_audio["resolution"] = "multiple"
+                    virt_audio.pop("width", None)
+                    virt_audio.pop("height", None)
+                    formats.append(virt_audio)
+                    logger.info(f"Добавлен виртуальный аудиоформат для TikTok видео {info_dict.get('id')} на основе {audio_fmt.get('format_id')}")
+
+    return NuvioTikTokYoutubeDL(opts)
 
 
 class PhotoPostAudioMissingError(Exception):
@@ -928,7 +999,7 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
             opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
             logger.info(f"Использование cookies: {TIKTOK_COOKIES_FILE}")
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with create_tiktok_ytdl(opts) as ydl:
             return ydl.extract_info(resolved_url, download=False)
 
     # Получаем оптимизированные конфигурации
@@ -1226,7 +1297,7 @@ def download_tiktok_video(
             opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
             logger.info(f"Использование cookies для скачивания: {TIKTOK_COOKIES_FILE}")
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with create_tiktok_ytdl(opts) as ydl:
             info = ydl.extract_info(resolved_url, download=True)
             downloaded_file = Path(ydl.prepare_filename(info))
 
@@ -1248,6 +1319,24 @@ def download_tiktok_video(
                         f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.",
                         exc_info=True,
                     )
+
+            # Проверяем видеокодек. Если это HEVC/H.265, конвертируем его в H.264 для лучшей совместимости с iOS (Telegram iOS)
+            try:
+                codec = get_video_codec(downloaded_file)
+                if codec in ("hevc", "h265"):
+                    logger.info(
+                        f"Обнаружен HEVC/H.265 видеофайл, конвертируем в H.264 для совместимости с iOS: {downloaded_file}"
+                    )
+                    converted_file = convert_to_format(downloaded_file, "mp4", session_id)
+                    if downloaded_file.exists() and downloaded_file != converted_file:
+                        downloaded_file.unlink()
+                    downloaded_file = converted_file
+                    logger.info(f"Конвертация HEVC в H.264 завершена: {downloaded_file}")
+            except Exception as e:
+                logger.warning(
+                    f"Не удалось проверить или конвертировать HEVC в H.264: {e}. Используем исходный файл.",
+                    exc_info=True,
+                )
 
             return finalize_downloaded_file(downloaded_file, force_local)
 
@@ -1405,6 +1494,24 @@ def download_instagram_video(
                     raise Exception(
                         "Файл не был загружен, хотя ydl.extract_info завершился."
                     )
+
+            # Проверяем видеокодек. Если это HEVC/H.265, конвертируем его в H.264 для лучшей совместимости с iOS (Telegram iOS)
+            try:
+                codec = get_video_codec(downloaded_file)
+                if codec in ("hevc", "h265"):
+                    logger.info(
+                        f"Обнаружен HEVC/H.265 видеофайл Instagram, конвертируем в H.264 для совместимости с iOS: {downloaded_file}"
+                    )
+                    converted_file = convert_to_format(downloaded_file, "mp4", session_id)
+                    if downloaded_file.exists() and downloaded_file != converted_file:
+                        downloaded_file.unlink()
+                    downloaded_file = converted_file
+                    logger.info(f"Конвертация HEVC в H.264 завершена: {downloaded_file}")
+            except Exception as e:
+                logger.warning(
+                    f"Не удалось проверить или конвертировать HEVC в H.264 для Instagram: {e}. Используем исходный файл.",
+                    exc_info=True,
+                )
 
             return finalize_downloaded_file(downloaded_file, force_local)
 
