@@ -84,6 +84,58 @@ def get_video_codec(file_path: Path) -> str | None:
     return None
 
 
+def has_audio_stream(file_path: Path) -> bool:
+    """
+    Проверяет наличие аудиопотока в медиафайле с помощью ffprobe.
+
+    Args:
+        file_path (Path): Путь к медиафайлу.
+
+    Returns:
+        bool: True, если аудиопоток присутствует, иначе False.
+    """
+    if not check_ffmpeg_installed():
+        return False
+
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-print_format",
+            "json",
+            str(file_path),
+        ]
+
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise Exception("FFprobe процесс превысил лимит времени в 15 секунд.")
+
+        if process.returncode != 0:
+            logger.error(f"Ошибка FFprobe при проверке аудиопотока: {stderr}")
+            return False
+
+        data = json.loads(stdout)
+        streams = data.get("streams", [])
+        return len(streams) > 0
+
+    except Exception as e:
+        logger.error(f"Ошибка при проверке аудиопотока файла {file_path}: {e}", exc_info=True)
+
+    return False
+
+
+
 def convert_to_format(
     input_path: Path,
     output_format: str,

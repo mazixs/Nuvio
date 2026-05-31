@@ -21,7 +21,7 @@ from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.gokapi_utils import is_gokapi_configured
 from utils.ytdlp_common import finalize_downloaded_file
-from utils.media_processor import convert_webm_to_mp4, convert_to_format, get_video_codec
+from utils.media_processor import convert_webm_to_mp4, convert_to_format, get_video_codec, has_audio_stream
 from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
 
 logger = setup_logger(__name__)
@@ -1286,59 +1286,120 @@ def download_tiktok_video(
 
     def _download_with_config(use_cookies: bool, config: dict) -> Path | str:
         """Внутренняя функция для скачивания"""
-        opts = config.copy()
-        opts["outtmpl"] = str(output_path_template)
-        opts["quiet"] = False
-        opts["no_warnings"] = True
-        opts["format"] = "bestvideo+bestaudio/best"
-        opts["merge_output_format"] = "mp4"
-
+        # Сначала получаем метаданные без скачивания
+        meta_opts = config.copy()
+        meta_opts["quiet"] = True
+        meta_opts["no_warnings"] = True
         if use_cookies and TIKTOK_COOKIES_FILE.exists():
-            opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
-            logger.info(f"Использование cookies для скачивания: {TIKTOK_COOKIES_FILE}")
+            meta_opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
 
-        with create_tiktok_ytdl(opts) as ydl:
-            info = ydl.extract_info(resolved_url, download=True)
-            downloaded_file = Path(ydl.prepare_filename(info))
+        with create_tiktok_ytdl(meta_opts) as ydl:
+            info = ydl.extract_info(resolved_url, download=False)
 
-            if not downloaded_file.exists():
-                raise Exception("Файл не был загружен.")
+        formats = info.get("formats", [])
+        # Для видео берем форматы, содержащие видеодорожку
+        video_formats = [
+            f for f in formats
+            if f.get("vcodec") != "none" and f.get("format_id")
+        ]
 
-            logger.info(f"Видео успешно скачано: {downloaded_file}")
+        # Сортируем форматы по высоте разрешения (height), tbr и filesize
+        def format_sort_key(f):
+            return (
+                f.get("height") or 0,
+                f.get("tbr") or 0,
+                f.get("filesize") or 0
+            )
 
-            # Конвертация webm → mp4 для совместимости Telegram
-            if downloaded_file.suffix.lower() == ".webm":
-                logger.info(
-                    f"Обнаружен webm файл, конвертируем в mp4: {downloaded_file}"
-                )
-                try:
-                    downloaded_file = convert_webm_to_mp4(downloaded_file, session_id)
-                    logger.info(f"Конвертация webm в mp4 завершена: {downloaded_file}")
-                except Exception as e:
-                    logger.warning(
-                        f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.",
-                        exc_info=True,
-                    )
+        video_formats.sort(key=format_sort_key, reverse=True)
 
-            # Проверяем видеокодек. Если это HEVC/H.265, конвертируем его в H.264 для лучшей совместимости с iOS (Telegram iOS)
+        if not video_formats:
+            video_formats = [{"format_id": "bestvideo+bestaudio/best"}]
+
+        last_err = None
+        for fmt in video_formats:
+            fmt_id = fmt["format_id"]
+            logger.info(f"Попытка скачать TikTok видео формат: {fmt_id}")
+
+            opts = config.copy()
+            opts["outtmpl"] = str(output_path_template)
+            opts["format"] = fmt_id
+            opts["overwrites"] = True
+            opts["merge_output_format"] = "mp4"
+            opts["quiet"] = False
+            opts["no_warnings"] = True
+
+            if use_cookies and TIKTOK_COOKIES_FILE.exists():
+                opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
+
+            downloaded_file = None
             try:
-                codec = get_video_codec(downloaded_file)
-                if codec in ("hevc", "h265"):
-                    logger.info(
-                        f"Обнаружен HEVC/H.265 видеофайл, конвертируем в H.264 для совместимости с iOS: {downloaded_file}"
-                    )
-                    converted_file = convert_to_format(downloaded_file, "mp4", session_id)
-                    if downloaded_file.exists() and downloaded_file != converted_file:
-                        downloaded_file.unlink()
-                    downloaded_file = converted_file
-                    logger.info(f"Конвертация HEVC в H.264 завершена: {downloaded_file}")
-            except Exception as e:
-                logger.warning(
-                    f"Не удалось проверить или конвертировать HEVC в H.264: {e}. Используем исходный файл.",
-                    exc_info=True,
-                )
+                with create_tiktok_ytdl(opts) as ydl:
+                    info_download = ydl.extract_info(resolved_url, download=True)
+                    downloaded_file = Path(ydl.prepare_filename(info_download))
 
-            return finalize_downloaded_file(downloaded_file, force_local)
+                    if not downloaded_file.exists():
+                        raise Exception("Файл не был загружен.")
+
+                    # Проверяем наличие аудиодорожки с помощью ffprobe
+                    if not has_audio_stream(downloaded_file):
+                        logger.warning(
+                            f"Формат {fmt_id} скачался без аудиопотока! Пробуем альтернативный формат."
+                        )
+                        raise Exception("Скачанный файл не содержит аудиодорожки.")
+
+                    logger.info(f"Видео успешно скачано и проверено: {downloaded_file}")
+
+                    # Конвертация webm → mp4 для совместимости Telegram
+                    if downloaded_file.suffix.lower() == ".webm":
+                        logger.info(
+                            f"Обнаружен webm файл, конвертируем в mp4: {downloaded_file}"
+                        )
+                        try:
+                            downloaded_file = convert_webm_to_mp4(downloaded_file, session_id)
+                            logger.info(f"Конвертация webm в mp4 завершена: {downloaded_file}")
+                        except Exception as e:
+                            logger.warning(
+                                f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.",
+                                exc_info=True,
+                            )
+
+                    # Проверяем видеокодек. Если это HEVC/H.265, конвертируем его в H.264 для лучшей совместимости с iOS (Telegram iOS)
+                    try:
+                        codec = get_video_codec(downloaded_file)
+                        if codec in ("hevc", "h265"):
+                            logger.info(
+                                f"Обнаружен HEVC/H.265 видеофайл, конвертируем в H.264 для совместимости с iOS: {downloaded_file}"
+                            )
+                            converted_file = convert_to_format(downloaded_file, "mp4", session_id)
+                            if downloaded_file.exists() and downloaded_file != converted_file:
+                                downloaded_file.unlink()
+                            downloaded_file = converted_file
+                            logger.info(f"Конвертация HEVC в H.264 завершена: {downloaded_file}")
+                    except Exception as e:
+                        logger.warning(
+                            f"Не удалось проверить или конвертировать HEVC в H.264: {e}. Используем исходный файл.",
+                            exc_info=True,
+                        )
+
+                    return finalize_downloaded_file(downloaded_file, force_local)
+
+            except Exception as e:
+                if "не содержит аудиодорожки" in str(e):
+                    last_err = e
+                    if downloaded_file and downloaded_file.exists():
+                        try:
+                            downloaded_file.unlink()
+                        except Exception as ue:
+                            logger.warning(f"Не удалось удалить временный файл {downloaded_file}: {ue}")
+                    continue
+                else:
+                    raise
+
+        if last_err:
+            raise last_err
+        raise Exception("Не удалось скачать видео с рабочим аудиопотоком.")
+
 
     # Получаем оптимизированные конфигурации
     configurations = _get_tiktok_base_configs()
@@ -1693,34 +1754,94 @@ def download_tiktok_audio(
 
     def _download_audio_with_config(use_cookies: bool, config: dict) -> Path | str:
         """Скачивание аудио с указанной конфигурацией"""
-        opts = config.copy()
-        opts["outtmpl"] = str(output_path_template)
-        # TikTok обычно не имеет отдельного audio-only формата, используем best
-        opts["format"] = "bestaudio/best"
-        opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",  # M4A для нативного AAC
-                "preferredquality": "192",
-            }
-        ]
-        opts["quiet"] = False
-        opts["no_warnings"] = True
-
+        # Сначала получаем метаданные без скачивания для анализа форматов
+        meta_opts = config.copy()
+        meta_opts["quiet"] = True
+        meta_opts["no_warnings"] = True
         if use_cookies and TIKTOK_COOKIES_FILE.exists():
-            opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
-            logger.info(f"Использование cookies для аудио: {TIKTOK_COOKIES_FILE}")
+            meta_opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(resolved_url, download=True)
-            # После postprocessor файл будет иметь расширение .m4a
-            base_filename = Path(ydl.prepare_filename(info))
-            downloaded_file = base_filename.with_suffix(".m4a")
+        with yt_dlp.YoutubeDL(meta_opts) as ydl:
+            info = ydl.extract_info(resolved_url, download=False)
 
-            if not downloaded_file.exists():
-                raise Exception("Аудио файл не был создан.")
+        formats = info.get("formats", [])
+        audio_formats = [
+            f for f in formats
+            if f.get("acodec") != "none" and f.get("format_id")
+        ]
 
-            return finalize_downloaded_file(downloaded_file, force_local)
+        # Сортируем форматы по tbr (битрейту) и размеру файла
+        def format_sort_key(f):
+            return (
+                f.get("tbr") or 0,
+                f.get("filesize") or 0,
+                1 if f.get("vcodec") != "none" else 0
+            )
+
+        audio_formats.sort(key=format_sort_key, reverse=True)
+
+        # Если форматы не обнаружены, используем дефолтный bestaudio/best
+        if not audio_formats:
+            audio_formats = [{"format_id": "bestaudio/best"}]
+
+        last_err = None
+        for fmt in audio_formats:
+            fmt_id = fmt["format_id"]
+            logger.info(f"Попытка скачать TikTok аудио формат: {fmt_id}")
+
+            opts = config.copy()
+            opts["outtmpl"] = str(output_path_template)
+            opts["format"] = fmt_id
+            opts["overwrites"] = True
+            opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "m4a",  # M4A для нативного AAC
+                    "preferredquality": "192",
+                }
+            ]
+            opts["quiet"] = False
+            opts["no_warnings"] = True
+
+            if use_cookies and TIKTOK_COOKIES_FILE.exists():
+                opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
+
+            downloaded_file = None
+            base_filename = None
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info_download = ydl.extract_info(resolved_url, download=True)
+                    base_filename = Path(ydl.prepare_filename(info_download))
+                    downloaded_file = base_filename.with_suffix(".m4a")
+
+                    if not downloaded_file.exists():
+                        raise Exception("Аудио файл не был создан.")
+
+                    return finalize_downloaded_file(downloaded_file, force_local)
+            except Exception as e:
+                err_str = str(e)
+                if "unable to obtain file audio codec" in err_str or "Postprocessing" in err_str:
+                    logger.warning(
+                        f"Формат {fmt_id} не содержит аудио или вызвал ошибку постпроцессора: {e}. "
+                        "Пробуем следующий формат."
+                    )
+                    last_err = e
+                    # Очищаем временные файлы
+                    if base_filename:
+                        for ext in (".mp4", ".webm", ".m4a", ".temp", ".part"):
+                            p = base_filename.with_suffix(ext)
+                            if p.exists():
+                                try:
+                                    p.unlink()
+                                except Exception as ue:
+                                    logger.warning(f"Не удалось удалить временный файл {p}: {ue}")
+                    continue
+                else:
+                    raise
+
+        if last_err:
+            raise last_err
+        raise Exception("Не найдено подходящих аудио форматов для скачивания.")
 
     # Получаем конфигурации и пробуем скачать
     configurations = _get_tiktok_base_configs()
