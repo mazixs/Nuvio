@@ -1260,7 +1260,7 @@ def test_admin_callback_arms_specific_cookie_upload(monkeypatch):
         context.user_data[cookie_manager.ADMIN_UPLOAD_TARGET_KEY]
         == "www.youtube.com_cookies.txt"
     )
-    assert "Expected file: www.youtube.com_cookies.txt" in query.edits[-1][0]
+    assert "Ожидаемый файл: www.youtube.com_cookies.txt" in query.edits[-1][0]
 
 
 def test_admin_command_shows_cookie_panel(monkeypatch):
@@ -1278,7 +1278,7 @@ def test_admin_command_shows_cookie_panel(monkeypatch):
     asyncio.run(cookie_manager.admin_command(update, context))
 
     assert cookie_manager.ADMIN_UPLOAD_TARGET_KEY not in context.user_data
-    assert "Cookie status:" in message.reply_calls[-1][0]
+    assert "Статус файлов cookies:" in message.reply_calls[-1][0]
     assert "reply_markup" in message.reply_calls[-1][1]
 
 
@@ -1335,8 +1335,8 @@ def test_admin_callback_runs_cookie_health_check(monkeypatch):
 
     asyncio.run(cookie_manager.handle_admin_callback(update, context))
 
-    assert "Cookie health check" in query.edits[-1][0]
-    assert "YouTube: valid - probe ok" in query.edits[-1][0]
+    assert "Проверка здоровья cookies" in query.edits[-1][0]
+    assert "YouTube: активны — probe ok" in query.edits[-1][0]
 
 
 def test_admin_broadcast_sends_text_to_all_known_users(monkeypatch):

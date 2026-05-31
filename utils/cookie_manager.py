@@ -65,7 +65,7 @@ def is_admin(user_id: int | None) -> bool:
 def build_admin_entry_markup() -> InlineKeyboardMarkup:
     """Small entry point shown to admins on /start."""
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Admin Panel", callback_data="admin|cookies|panel")]]
+        [[InlineKeyboardButton("Админ-панель", callback_data="admin|cookies|panel")]]
     )
 
 
@@ -85,16 +85,16 @@ def _build_admin_panel_markup(
         ],
         [
             InlineKeyboardButton("TikTok", callback_data="admin|cookies|upload|tiktok"),
-            InlineKeyboardButton("Check Cookies", callback_data="admin|cookies|check"),
+            InlineKeyboardButton("Проверить cookies", callback_data="admin|cookies|check"),
         ],
         [InlineKeyboardButton("Сообщить всем", callback_data="admin|broadcast|start")],
-        [InlineKeyboardButton("Refresh", callback_data="admin|cookies|panel")],
+        [InlineKeyboardButton("Обновить", callback_data="admin|cookies|panel")],
     ]
     if expected_file_name:
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "Cancel Upload Mode", callback_data="admin|cookies|cancel"
+                    "Отменить загрузку", callback_data="admin|cookies|cancel"
                 )
             ]
         )
@@ -112,17 +112,17 @@ def _build_admin_panel_markup(
 def _format_cookie_status(file_name: str) -> str:
     file_path = SECRETS_DIR / file_name
     if not file_path.exists():
-        return f"missing - {file_name}"
+        return f"отсутствует — {file_name}"
 
     size_kib = max(1, round(file_path.stat().st_size / 1024))
-    return f"configured - {file_name} ({size_kib} KiB)"
+    return f"настроен — {file_name} ({size_kib} КБ)"
 
 
 def _build_admin_panel_text(expected_file_name: str | None = None) -> str:
     lines = [
-        "Admin panel",
+        "🔐 Админ-панель",
         "",
-        "Cookie status:",
+        "Статус файлов cookies:",
         f"- YouTube: {_format_cookie_status(COOKIE_TARGETS['youtube'])}",
         f"- Instagram: {_format_cookie_status(COOKIE_TARGETS['instagram'])}",
         f"- TikTok: {_format_cookie_status(COOKIE_TARGETS['tiktok'])}",
@@ -131,16 +131,16 @@ def _build_admin_panel_text(expected_file_name: str | None = None) -> str:
         lines.extend(
             [
                 "",
-                f"Upload mode enabled for: {expected_file_name}",
-                "Send any .txt Netscape cookies file as a Telegram document.",
-                "The bot will save it with the required canonical filename automatically.",
+                f"Режим загрузки включен для: {expected_file_name}",
+                "Отправьте любой .txt файл Netscape cookies как Telegram-документ.",
+                "Бот автоматически сохранит его под нужным именем.",
             ]
         )
     else:
         lines.extend(
             [
                 "",
-                "Choose a platform below to arm cookie upload mode.",
+                "Выберите платформу ниже, чтобы включить режим загрузки cookies.",
             ]
         )
     return "\n".join(lines)
@@ -149,12 +149,12 @@ def _build_admin_panel_text(expected_file_name: str | None = None) -> str:
 def _build_upload_instruction(file_name: str) -> str:
     return "\n".join(
         [
-            "Upload mode enabled.",
+            "📥 Режим загрузки включен.",
             "",
-            f"Expected file: {file_name}",
-            "Send any .txt Netscape cookies file as a Telegram document.",
-            f"It will be saved as {file_name}.",
-            "Only .txt Netscape cookies are accepted.",
+            f"Ожидаемый файл: {file_name}",
+            "Отправьте любой .txt файл Netscape cookies как Telegram-документ.",
+            f"Он будет сохранен как {file_name}.",
+            "Принимаются только .txt файлы Netscape cookies.",
         ]
     )
 
@@ -187,28 +187,54 @@ def _build_cookie_health_text(
     expected_file_name: str | None = None,
 ) -> str:
     lines = [
-        "Cookie health check",
+        "🔍 Проверка здоровья cookies",
         "",
     ]
+
+    STATUS_TRANSLATIONS = {
+        "valid": "активны",
+        "stale": "устарели (неавторизован)",
+        "rate_limited": "ограничение запросов",
+        "expired": "истёк срок",
+        "missing": "отсутствуют",
+        "invalid_format": "неверный формат",
+        "probe_failed": "ошибка проверки",
+        "not_supported": "без проверки",
+    }
+
+    SUMMARY_TRANSLATIONS = {
+        "file not found": "файл cookies не найден",
+        "no cookie records found": "записи cookies не найдены в файле",
+        "required auth cookies are missing": "отсутствуют сессионные cookies",
+        "all auth cookies are expired": "срок действия всех сессионных cookies истёк",
+        "auth cookies are active and probe succeeded": "cookies активны, тест авторизации пройден",
+        "auth cookies exist but authenticated probe failed": "cookies есть, но тест авторизации не прошёл",
+        "platform temporarily rate-limited the validation probe": "платформа временно ограничила запросы проверки",
+        "auth cookies are active; live probe is not available for this platform": "cookies активны; автопроверка недоступна для платформы",
+        "auth cookies are active but live probe could not complete": "cookies активны, но сетевой тест не завершился",
+    }
+
     for platform in ("youtube", "instagram", "tiktok"):
         result = results[platform]
         label = COOKIE_LABELS[platform]
+        status_ru = STATUS_TRANSLATIONS.get(result.status, result.status)
+        summary_ru = SUMMARY_TRANSLATIONS.get(result.summary, result.summary)
         lines.append(
-            f"{_format_health_icon(result.status)} {label}: {result.status} - {result.summary}"
+            f"{_format_health_icon(result.status)} {label}: {status_ru} — {summary_ru}"
         )
 
     if expected_file_name:
         lines.extend(
             [
                 "",
-                f"Upload mode is still enabled for: {expected_file_name}",
+                f"Режим загрузки всё ещё включен для: {expected_file_name}",
             ]
         )
 
     lines.extend(
         [
             "",
-            "Use Refresh to return to the normal admin panel.",
+            "Используйте кнопку «Обновить», чтобы вернуться в панель управления.",
         ]
     )
     return "\n".join(lines)
@@ -259,7 +285,7 @@ async def handle_admin_callback(
         expected_file_name = context.user_data.get(ADMIN_UPLOAD_TARGET_KEY)
         await _safe_edit(
             query,
-            "Checking cookie health...",
+            "Проверяю состояние файлов cookies...",
             reply_markup=_build_admin_panel_markup(expected_file_name),
         )
         results = await asyncio.to_thread(check_all_cookie_health)
