@@ -1317,8 +1317,14 @@ def download_tiktok_video(
             video_formats = [{"format_id": "bestvideo+bestaudio/best"}]
 
         last_err = None
+        failed_heights = set()
         for fmt in video_formats:
             fmt_id = fmt["format_id"]
+            height = fmt.get("height")
+            if height and height in failed_heights:
+                logger.info(f"Пропускаем формат {fmt_id}, так как разрешение {height}p уже признано беззвучным.")
+                continue
+
             logger.info(f"Попытка скачать TikTok видео формат: {fmt_id}")
 
             opts = config.copy()
@@ -1387,6 +1393,8 @@ def download_tiktok_video(
             except Exception as e:
                 if "не содержит аудиодорожки" in str(e):
                     last_err = e
+                    if height:
+                        failed_heights.add(height)
                     if downloaded_file and downloaded_file.exists():
                         try:
                             downloaded_file.unlink()
@@ -1770,11 +1778,12 @@ def download_tiktok_audio(
             if f.get("acodec") != "none" and f.get("format_id")
         ]
 
-        # Сортируем форматы по tbr (битрейту) и размеру файла
+        # Сортируем форматы: более легкие файлы (меньший tbr / filesize) должны идти первыми,
+        # так как при извлечении аудио видеодорожка выбрасывается, а меньший файл скачивается быстрее.
         def format_sort_key(f):
             return (
-                f.get("tbr") or 0,
-                f.get("filesize") or 0,
+                -(f.get("tbr") or 999999),
+                -(f.get("filesize") or 999999999),
                 1 if f.get("vcodec") != "none" else 0
             )
 
@@ -1785,8 +1794,14 @@ def download_tiktok_audio(
             audio_formats = [{"format_id": "bestaudio/best"}]
 
         last_err = None
+        failed_tbrs = set()
         for fmt in audio_formats:
             fmt_id = fmt["format_id"]
+            tbr = fmt.get("tbr")
+            if tbr and tbr in failed_tbrs:
+                logger.info(f"Пропускаем дубликат формата TikTok аудио {fmt_id} с битрейтом {tbr}, так как он уже признан беззвучным.")
+                continue
+
             logger.info(f"Попытка скачать TikTok аудио формат: {fmt_id}")
 
             opts = config.copy()
@@ -1826,6 +1841,8 @@ def download_tiktok_audio(
                         "Пробуем следующий формат."
                     )
                     last_err = e
+                    if tbr:
+                        failed_tbrs.add(tbr)
                     # Очищаем временные файлы
                     if base_filename:
                         for ext in (".mp4", ".webm", ".m4a", ".temp", ".part"):
