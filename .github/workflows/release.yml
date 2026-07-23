@@ -160,6 +160,27 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Локальная сборка образа для smoke-проверки
+        run: docker build -t nuvio:release-test .
+
+      - name: Smoke-проверка WebUI
+        run: |
+          docker run --detach --name nuvio-release-smoke \
+            --publish 127.0.0.1:18080:8080 \
+            nuvio:release-test python -m web
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:18080/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs nuvio-release-smoke
+          exit 1
+
+      - name: Остановка release smoke-контейнера
+        if: always()
+        run: docker rm --force nuvio-release-smoke || true
+
       - name: Авторизация в GHCR
         uses: docker/login-action@v4
         with:

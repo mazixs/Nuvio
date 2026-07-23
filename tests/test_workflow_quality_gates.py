@@ -50,3 +50,23 @@ def test_release_validates_semver_tag():
 
     assert "VALID_TAG_REGEX" in workflow
     assert "GITHUB_REF_NAME" in test_job
+
+
+def test_ci_smoke_tests_built_images():
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "docker run --detach --name nuvio-web-smoke" in workflow
+    assert "http://127.0.0.1:18080/health" in workflow
+    assert "docker rm --force nuvio-web-smoke" in workflow
+    assert "if: always()" in workflow
+    assert "nuvio-telegram-bot-api:test --version" in workflow
+
+
+def test_release_smoke_tests_application_before_push():
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    docker_job = _job_body(workflow, "docker")
+
+    assert "docker build -t nuvio:release-test ." in docker_job
+    assert "docker run --detach --name nuvio-release-smoke" in docker_job
+    assert "http://127.0.0.1:18080/health" in docker_job
+    assert "docker rm --force nuvio-release-smoke" in docker_job

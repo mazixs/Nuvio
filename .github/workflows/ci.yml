@@ -66,3 +66,24 @@ jobs:
 
       - name: Сборка локального Telegram Bot API
         run: docker build -f Dockerfile.telegram-bot-api -t nuvio-telegram-bot-api:test .
+
+      - name: Проверка исполняемого файла Telegram Bot API
+        run: docker run --rm nuvio-telegram-bot-api:test --version
+
+      - name: Запуск WebUI из собранного образа
+        run: |
+          docker run --detach --name nuvio-web-smoke \
+            --publish 127.0.0.1:18080:8080 \
+            nuvio:test python -m web
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:18080/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs nuvio-web-smoke
+          exit 1
+
+      - name: Остановка WebUI smoke-контейнера
+        if: always()
+        run: docker rm --force nuvio-web-smoke || true
