@@ -1,7 +1,7 @@
 # Nuvio — Product Requirements Document
 
-**Версия:** 1.0
-**Дата:** 2026-03-22
+**Версия:** 1.1
+**Дата актуализации:** 2026-07-23
 **Лицензия:** Apache 2.0
 **Репозиторий:** [github.com/mazixs/Nuvio](https://github.com/mazixs/Nuvio)
 
@@ -11,7 +11,10 @@
 
 ### 1.1 Что такое Nuvio
 
-Nuvio — open-source Telegram-бот для скачивания видео и аудио с YouTube, TikTok и Instagram. Бот предоставляет удобный интерфейс с inline-кнопками для выбора формата, автоматически кэширует отправленные файлы для мгновенной повторной доставки и включает аналитический веб-дашборд для мониторинга использования.
+Nuvio — open-source Telegram-бот для скачивания видео, фото-постов и аудио с
+YouTube, TikTok, Instagram, Rutube и VK Video. Бот предоставляет кнопки выбора
+формата, кэширует `file_id` для повторной доставки и включает аналитический
+веб-дашборд.
 
 ### 1.2 Для кого
 
@@ -43,7 +46,7 @@ Apache License 2.0 — свободное использование, модиф
 | **Выбор качества** | От 360p до максимального доступного |
 | **Аудио** | Нативный m4a, конвертация в m4a через FFmpeg |
 | **Субтитры** | SRT-формат (автосгенерированные и ручные) |
-| **Умная оптимизация** | Автоподбор формата ≤50MB для Telegram |
+| **Умная оптимизация** | Автоподбор формата под текущий предел доставки |
 | **Cookies** | Поддержка для возрастных/региональных ограничений |
 
 ### 2.2 TikTok
@@ -88,7 +91,7 @@ Apache License 2.0 — свободное использование, модиф
 
 ### 3.2 Меню для YouTube
 
-- **📹 Скачать видео для ТГ** — лучшее качество, умещающееся в 50MB
+- **📹 Скачать видео для ТГ** — лучшее качество в пределах текущего режима
 - **🎵 Скачать только звук** — нативный m4a или конвертация
 - **➕ Дополнительно** — расширенное меню:
   - До 3 комбинированных форматов с указанием разрешения
@@ -187,7 +190,7 @@ URL → get_tiktok_info (3 API-конфига, exponential backoff) →
 
 **Instagram:**
 ```
-URL → валидация (отсечение Stories, Audio) →
+URL → валидация (отсечение неподдерживаемых Stories и страниц Audio) →
   → get_instagram_info (без cookies → с cookies при ограничении) →
   → формат-меню → выбор → проверка кэша →
   → download (playlist handling) → проверка размера →
@@ -332,16 +335,20 @@ URL → валидация (отсечение Stories, Audio) →
 ### 8.1 Docker (рекомендуется)
 
 ```bash
-cp .env.example .env
-# Заполнить TELEGRAM_TOKEN, ADMIN_IDS, WEB_PASSWORD
-docker compose up --build
+mkdir -p .secrets
+cp .env.example .secrets/.env
+# Заполнить TELEGRAM_TOKEN, ADMIN_IDS, TELEGRAM_API_ID,
+# TELEGRAM_API_HASH и сменить WEB_PASSWORD
+docker compose --env-file .secrets/.env up -d
 ```
 
-Два контейнера:
-- `nuvio-bot` — Telegram-бот
-- `nuvio-web` — WebUI-дашборд (порт `WEB_PORT`, по умолчанию 8080)
+Три сервиса:
+- `bot` — Telegram-бот;
+- `web` — WebUI-дашборд (порт `WEB_PORT`, по умолчанию 8080);
+- `telegram-bot-api` — локальный API, доступный только внутри Compose.
 
-Общий volume `bot-data` для SQLite-баз данных.
+Том `bot-data` хранит SQLite-базы, а `shared-media` служит временным общим
+каталогом для бота и локального API. Медиа удаляются после отправки или ошибки.
 
 ### 8.2 Bare metal
 
@@ -349,10 +356,11 @@ docker compose up --build
 pip install -r requirements.txt
 # Настроить .secrets/.env
 python main.py           # бот
-python -m web.app        # дашборд (отдельный процесс)
+python -m web            # дашборд (отдельный процесс)
 ```
 
 **Системные зависимости:** Python 3.14+, FFmpeg, git.
+При таком запуске используется облачный Bot API с лимитом 50 МБ.
 
 ### 8.3 Production (GHCR)
 
@@ -371,7 +379,7 @@ TAG=1.0.0 docker compose --env-file .secrets/.env up -d
 ```
 Push/PR → CI:
   ├── Lint (ruff)
-  ├── Tests (Python 3.13 + 3.14)
+  ├── Tests (Python 3.14)
   └── Docker build check
 
 Tag v* → Release:
@@ -458,16 +466,17 @@ Nuvio/
 
 | Пакет | Назначение |
 |---|---|
-| `python-telegram-bot[job-queue]` ≥22.0 | Telegram Bot API (async) |
-| `yt-dlp[default]` ≥2025.11.12 | Загрузка видео с платформ |
+| `python-telegram-bot[job-queue]` 22.8 | Telegram Bot API (async) |
+| `yt-dlp[default]` 2026.7.4 | Загрузка видео с платформ |
+| `curl_cffi` 0.15.0 | Имперсонация браузерных HTTP-запросов |
 | `httpx` 0.28.1 | HTTP-клиент |
-| `python-dotenv` ≥1.0.1 | Загрузка .env файлов |
-| `fastapi` ≥0.115.0 | WebUI framework |
-| `uvicorn[standard]` ≥0.34.0 | ASGI-сервер для WebUI |
-| `jinja2` ≥3.1.0 | Шаблонизатор |
-| `itsdangerous` ≥2.2.0 | Подпись сессий |
-| `python-multipart` ≥0.0.18 | Обработка форм (логин) |
-| `pytest` ≥8.0 | Тестирование |
+| `python-dotenv` 1.2.2 | Загрузка настроек окружения |
+| `fastapi` 0.139.2 | WebUI |
+| `uvicorn[standard]` 0.51.0 | ASGI-сервер для WebUI |
+| `jinja2` 3.1.6 | Шаблонизатор |
+| `itsdangerous` 2.2.0 | Подпись сессий |
+| `python-multipart` 0.0.32 | Обработка форм |
+| `pytest` 9.1.1 | Тестирование |
 
 **Системные:** Python 3.14+, FFmpeg, git.
 
@@ -493,7 +502,7 @@ Nuvio/
 Nuvio — open-source проект под лицензией Apache 2.0. Contributions приветствуются:
 
 1. Fork → ветка → PR в `main`
-2. CI автоматически прогоняет lint (ruff) и тесты (Python 3.13 + 3.14)
+2. CI автоматически прогоняет линтер ruff и тесты на Python 3.14
 3. Стиль коммитов: `feat:`, `fix:`, `ci:`, `docs:` — используется для авто-changelog
 4. Issues для баг-репортов и предложений
 

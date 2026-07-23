@@ -25,18 +25,15 @@ jobs:
         run: ruff check --output-format=github .
 
   test:
-    name: Тесты (Python ${{ matrix.python-version }})
+    name: Тесты (Python 3.14)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.14"
           cache: 'pip'
 
       - name: Установка зависимостей

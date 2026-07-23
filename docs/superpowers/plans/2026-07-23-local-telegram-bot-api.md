@@ -1,5 +1,9 @@
 # Local Telegram Bot API Implementation Plan
 
+> Архивный план реализации. Работа завершена 2026-07-23; команды, версии и
+> незакрытые чекбоксы ниже сохранены как история разработки. Для установки и
+> эксплуатации используйте `README.md` и `docs/guides/deployment.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Подключить Nuvio к локальному Telegram Bot API внутри одного Compose-проекта, отправлять файлы до 2000 МБ по общему локальному пути и полностью удалить зависимость от Gokapi.

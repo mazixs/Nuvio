@@ -133,7 +133,7 @@ jobs:
             mkdir -p .secrets
             cp .env.example .secrets/.env  # настроить переменные
             pip install -r requirements.txt
-            python main.py
+            python main.py  # облачный Bot API, лимит отправки 50 МБ
             ```
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}

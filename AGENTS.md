@@ -115,7 +115,7 @@ pip install -r requirements.txt
 # Настройка окружения
 mkdir -p .secrets
 cp .env.example .secrets/.env
-# Отредактируйте .secrets/.env — заполните TELEGRAM_TOKEN и ADMIN_IDS
+# Для прямого запуска заполните TELEGRAM_TOKEN и ADMIN_IDS
 
 # Запуск бота
 python main.py
@@ -123,6 +123,9 @@ python main.py
 # Запуск WebUI дашборда (в отдельном терминале)
 python -m web
 ```
+
+Прямой запуск использует облачный Telegram Bot API и ограничивает отправку
+размером 50 МБ. Для файлов до 2 ГБ запускайте полный Docker-стек.
 
 ### Docker
 
@@ -204,7 +207,9 @@ ruff check --output-format=github .
 - **Коды ошибок**: формат `PREFIX-CATEGORY-RANDOM` (например, `YT-ACCESS-A1B2C3`).
   - Префиксы: `YT` (YouTube), `TT` (TikTok), `IG` (Instagram), `RU` (Rutube), `VK` (VK), `TG` (Telegram), `FILE`, `BOT`.
   - Категории: `ACCESS`, `NETWORK`, `TIMEOUT`, `FORMAT_UNAVAILABLE`, `FFMPEG_MISSING`, `EXTRACTOR_RUNTIME`, `UNKNOWN`.
-- Пользователю показывается только код ошибки; traceback уходит в логи.
+- Пользователь видит безопасное описание для своей платформы и код ошибки.
+  Cookies, внутренние адреса, состояние контейнеров и traceback доступны только
+  в административных журналах.
 - Используется `Exception.add_note()` для обогащения исключений контекстом.
 
 ### Асинхронность
@@ -256,7 +261,7 @@ ruff check --output-format=github .
 
 Запускается на push/PR в `main` и `develop`:
 1. **Линтинг** — `ruff check --output-format=github .`
-2. **Тесты** — `pytest tests/ -v -m "syntax or unit" --tb=short` на Python 3.13 и 3.14
+2. **Тесты** — `pytest tests/ -v -m "syntax or unit" --tb=short` на Python 3.14
 3. **Docker build** — проверка сборки образа (зависит от lint и test)
 
 ### Release (`.github/workflows/release.yml`)

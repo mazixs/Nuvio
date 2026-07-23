@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nuvio — Telegram-бот для скачивания видео с YouTube, TikTok и Instagram. Python 3.14+, async-архитектура на python-telegram-bot. Включает WebUI-дашборд аналитики (FastAPI) и локальный Telegram Bot API.
+Nuvio — Telegram-бот для скачивания медиа с YouTube, TikTok, Instagram,
+Rutube и VK Video. Python 3.14+, async-архитектура на python-telegram-bot.
+Включает WebUI-дашборд аналитики и локальный Telegram Bot API.
 
 ## Commands
 
@@ -26,9 +28,15 @@ pytest --run-network                # включить сетевые тесты
 pip install -r requirements.txt
 ```
 
+Прямой запуск использует облачный Bot API с лимитом 50 МБ. Полный
+Docker-стек отправляет файлы до 2 ГБ через локальный Bot API.
+
 ## Architecture
 
-**Точка входа**: `main.py` — async event-loop, graceful shutdown (SIGINT/SIGTERM), загрузка `.env` по цепочке `.secrets/.env` → `.env.local` → `.env`, scheduled tasks (daily cache cleanup, weekly VACUUM).
+**Точка входа**: `main.py` — async event-loop, graceful shutdown
+(SIGINT/SIGTERM), настройки из `.secrets/.env`, периодические задачи очистки
+кэша и `VACUUM`. `.env.local` и корневой `.env` поддерживаются только для
+обратной совместимости.
 
 **Конфигурация**: `config.py` — парсинг env-переменных с типизацией, пути к секретам в `.secrets/` (fallback на корень).
 
