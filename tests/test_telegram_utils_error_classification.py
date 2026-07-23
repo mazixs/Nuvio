@@ -1,6 +1,10 @@
-"""Unit tests for YouTube error classification in telegram_utils."""
+"""Unit tests for public error classification in telegram_utils."""
 
-from utils.telegram_utils import _classify_youtube_error, _youtube_error_code
+from utils.telegram_utils import (
+    _build_public_error_message,
+    _classify_youtube_error,
+    _youtube_error_code,
+)
 
 
 def test_classify_requested_format_not_available():
@@ -58,3 +62,29 @@ def test_youtube_error_code_extractor_runtime():
 
 def test_youtube_error_code_unknown():
     assert _youtube_error_code("totally unrelated message") == "UNKNOWN"
+
+
+def test_instagram_access_error_is_platform_specific_and_user_actionable():
+    message = _build_public_error_message(
+        "instagram",
+        "IG-ACCESS-ABC123",
+        "login required",
+    )
+
+    assert "материал из Instagram" in message
+    assert "ссылка требует авторизации" in message
+    assert "удалён" in message
+    assert "cookies" not in message.lower()
+    assert "подписан" not in message.lower()
+
+
+def test_tiktok_unknown_error_does_not_expose_internal_state():
+    message = _build_public_error_message(
+        "tiktok",
+        "TT-UNKNOWN-ABC123",
+        "cookie expired; bot is not subscribed",
+    )
+
+    assert "материал из TikTok" in message
+    assert "cookie" not in message.lower()
+    assert "подписан" not in message.lower()

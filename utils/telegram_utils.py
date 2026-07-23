@@ -79,6 +79,7 @@ from messages import (
     MP3_MIN_LABEL,
     SPAM_WARNING,
     USER_ERROR_WITH_CODE,
+    USER_PLATFORM_ERROR_WITH_CODE,
     USER_NETWORK_ERROR_WITH_CODE,
     USER_FILE_ERROR_WITH_CODE,
     USER_TELEGRAM_ERROR_WITH_CODE,
@@ -853,6 +854,18 @@ def _build_public_error_message(platform: str, error_code: str, error_msg: str) 
             "Stories — это временный контент (24 часа), и Instagram "
             "ограничивает их загрузку через API.\n\n"
             "Попробуйте скачать обычный пост, Reel или видео из IGTV."
+        )
+    platform_name = {
+        "youtube": "YouTube",
+        "tiktok": "TikTok",
+        "instagram": "Instagram",
+        "rutube": "Rutube",
+        "vk": "VK Video",
+    }.get(platform)
+    if platform_name:
+        return USER_PLATFORM_ERROR_WITH_CODE.format(
+            platform=platform_name,
+            error_code=error_code,
         )
     return USER_ERROR_WITH_CODE.format(error_code=error_code)
 
