@@ -302,7 +302,7 @@ ruff check --output-format=github .
 | `LOG_LEVEL` | нет | `INFO` | Уровень логирования |
 | `DOWNLOAD_WORKERS` | нет | `8` | Потоков в ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (сек) |
-| `YTDLP_AUTO_UPDATE` | нет | `true` | Автообновление yt-dlp при старте |
+| `YTDLP_AUTO_UPDATE` | нет | `false` | Явно разрешить обновление yt-dlp при старте |
 | `YTDLP_RELEASE_CHANNEL` | нет | `nightly` | Канал: `stable`, `nightly`, `master` |
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут обновления yt-dlp (сек) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | CLI fallback при сбое API |

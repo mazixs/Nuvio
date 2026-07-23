@@ -138,7 +138,7 @@ git push origin v1.0.0
 | `LOG_LEVEL` | нет | `INFO` | Уровень логирования |
 | `DOWNLOAD_WORKERS` | нет | `8` | Количество потоков в ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (секунды) |
-| `YTDLP_AUTO_UPDATE` | нет | `true` | Автообновление yt-dlp при старте |
+| `YTDLP_AUTO_UPDATE` | нет | `false` | Явно разрешить обновление yt-dlp при старте |
 | `YTDLP_RELEASE_CHANNEL` | нет | `nightly` | Канал обновлений yt-dlp (`stable`, `nightly`, `master`) |
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут операции обновления yt-dlp (секунды) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | Использовать CLI-режим yt-dlp как запасной путь |

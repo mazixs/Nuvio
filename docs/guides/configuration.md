@@ -49,7 +49,7 @@ tools** на [my.telegram.org](https://my.telegram.org). Это учётные �
 | `LOG_LEVEL` | `INFO` | Уровень логирования |
 | `DOWNLOAD_WORKERS` | `8` | Потоки блокирующих задач |
 | `BLOCKING_TASK_TIMEOUT` | `600` | Тайм-аут задачи, секунд |
-| `YTDLP_AUTO_UPDATE` | `true` | Обновлять yt-dlp при старте |
+| `YTDLP_AUTO_UPDATE` | `false` | Явно разрешить обновление yt-dlp при старте |
 | `YTDLP_RELEASE_CHANNEL` | `nightly` | `stable`, `nightly` или `master` |
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | `240` | Тайм-аут обновления |
 | `YTDLP_CLI_FALLBACK` | `true` | Использовать CLI как запасной путь |

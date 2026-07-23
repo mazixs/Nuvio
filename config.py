@@ -98,7 +98,7 @@ DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "8"))
 BLOCKING_TASK_TIMEOUT = int(os.environ.get("BLOCKING_TASK_TIMEOUT", "600"))  # сек
 
 # Rolling-release стратегия для yt-dlp
-YTDLP_AUTO_UPDATE = _parse_bool(os.environ.get("YTDLP_AUTO_UPDATE"), default=True)
+YTDLP_AUTO_UPDATE = _parse_bool(os.environ.get("YTDLP_AUTO_UPDATE"), default=False)
 YTDLP_RELEASE_CHANNEL = _parse_ytdlp_release_channel(
     os.environ.get("YTDLP_RELEASE_CHANNEL")
 )

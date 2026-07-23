@@ -409,7 +409,7 @@ Tag v* → Release:
 | `DOWNLOAD_WORKERS` | `8` | Размер ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | `600` | Таймаут блокирующих операций (сек) |
 | `LOG_LEVEL` | `INFO` | Уровень логирования |
-| `YTDLP_AUTO_UPDATE` | `true` | Авто-обновление yt-dlp при старте |
+| `YTDLP_AUTO_UPDATE` | `false` | Явно разрешить обновление yt-dlp при старте |
 | `YTDLP_RELEASE_CHANNEL` | `nightly` | Канал обновлений yt-dlp |
 | `YTDLP_CLI_FALLBACK` | `true` | CLI fallback при сбое API |
 

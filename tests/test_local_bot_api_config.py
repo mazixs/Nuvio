@@ -18,6 +18,7 @@ def _load_config(monkeypatch: pytest.MonkeyPatch, **env: str):
         "TELEGRAM_BOT_API_FILE_URL",
         "TELEGRAM_MAX_FILE_SIZE_MB",
         "TEMP_DIR",
+        "YTDLP_AUTO_UPDATE",
     ):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
@@ -28,6 +29,13 @@ def _load_config(monkeypatch: pytest.MonkeyPatch, **env: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.unit
+def test_ytdlp_auto_update_is_opt_in(monkeypatch, tmp_path):
+    config = _load_config(monkeypatch, TEMP_DIR=str(tmp_path))
+
+    assert config.YTDLP_AUTO_UPDATE is False
 
 
 @pytest.mark.unit

@@ -18,6 +18,7 @@ def test_environment_template_contains_local_bot_api_credentials():
     assert "ADMIN_IDS=" in template
     assert "GOKAPI" not in template
     assert "python-dotenv" not in template
+    assert "YTDLP_AUTO_UPDATE=false" in template
 
 
 @pytest.mark.unit
