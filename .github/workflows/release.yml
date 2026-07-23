@@ -32,8 +32,13 @@ jobs:
           pip install -r requirements.txt
           pip install pytest ruff
 
-      - name: Запуск тестов
-        run: pytest tests/ -v -m "syntax or unit" --tb=short
+      - name: Проверка стиля
+        run: ruff check --output-format=github .
+
+      - name: Полный набор тестов с покрытием
+        run: |
+          coverage run --branch -m pytest tests/
+          coverage report --fail-under=40
 
   # ── Changelog + GitHub Release ────────────────────────
   release:

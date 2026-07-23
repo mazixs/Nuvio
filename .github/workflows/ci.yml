@@ -42,8 +42,10 @@ jobs:
           pip install -r requirements.txt
           pip install pytest ruff
 
-      - name: Синтаксис и юнит-тесты
-        run: pytest tests/ -v -m "syntax or unit" --tb=short
+      - name: Полный набор тестов с покрытием
+        run: |
+          coverage run --branch -m pytest tests/
+          coverage report --fail-under=40
 
   docker-build:
     name: Проверка Docker-сборки
