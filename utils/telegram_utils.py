@@ -40,6 +40,18 @@ from utils.youtube_utils import (
 )
 from utils.media_processor import convert_to_mp3_with_compression
 from utils.temp_file_manager import create_temp_dir, cleanup_temp_files
+from utils.callback_fsm import CallbackEvent, SessionStore
+from utils.file_delivery import media_kind_for_suffix
+from utils.platform_actions import (
+    DIRECT_VIDEO_CACHE_KEY,
+    cache_key_for_format_selection,
+    cache_key_for_main_action,
+)
+from utils.public_errors import (
+    build_public_error_message,
+    classify_internal_error_category,
+    youtube_error_code,
+)
 import yt_dlp
 from messages import (
     WELCOME_MESSAGE,
@@ -79,7 +91,6 @@ from messages import (
     MP3_MIN_LABEL,
     SPAM_WARNING,
     USER_ERROR_WITH_CODE,
-    USER_PLATFORM_ERROR_WITH_CODE,
     USER_NETWORK_ERROR_WITH_CODE,
     USER_FILE_ERROR_WITH_CODE,
     USER_TELEGRAM_ERROR_WITH_CODE,
@@ -207,7 +218,7 @@ _SPAM_TIMEOUT_SECONDS = 10
 _MAX_ACTIVE_SESSIONS = 5
 _ANTISPAM_STATE_KEYS = ("recent_requests", "spam_blocked_until")
 _SESSION_STORE_KEY = "sessions"
-_DIRECT_VIDEO_CACHE_KEY = "direct_video"
+_DIRECT_VIDEO_CACHE_KEY = DIRECT_VIDEO_CACHE_KEY
 
 
 def _track_tg_user(update: Update) -> None:
@@ -265,11 +276,12 @@ def _check_spam(user_id: int, context: ContextTypes.DEFAULT_TYPE, now: float) ->
 
 def _get_session_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
     """Возвращает хранилище активных сессий пользователя."""
-    store = context.user_data.get(_SESSION_STORE_KEY)
-    if not isinstance(store, dict):
-        store = {}
-        context.user_data[_SESSION_STORE_KEY] = store
-    return store
+    return SessionStore(
+        context.user_data,
+        key=_SESSION_STORE_KEY,
+        max_active=_MAX_ACTIVE_SESSIONS,
+        cleanup_session=cleanup_temp_files,
+    ).data
 
 
 def _store_session(
@@ -282,36 +294,18 @@ def _store_session(
     formats: dict,
 ) -> str:
     """Сохраняет новую сессию и возвращает короткий токен для callback_data."""
-    store = _get_session_store(context)
-    session_token = uuid.uuid4().hex[:8]
-    while session_token in store:
-        session_token = uuid.uuid4().hex[:8]
-
-    store[session_token] = {
-        "url": url,
-        "video_info": video_info,
-        "session_id": session_id,
-        "platform": platform,
-        "formats": formats,
-        "created_at": datetime.now().timestamp(),
-    }
-
-    while len(store) > _MAX_ACTIVE_SESSIONS:
-        oldest_token = min(
-            store,
-            key=lambda token: float(store[token].get("created_at", 0.0)),
-        )
-        if oldest_token == session_token:
-            break
-        old_session = store.pop(oldest_token, None)
-        old_session_id = old_session.get("session_id") if old_session else None
-        if old_session_id:
-            cleanup_temp_files(old_session_id)
-            logger.info(
-                "Старая сессия %s удалена из-за лимита активных меню", oldest_token
-            )
-
-    return session_token
+    return SessionStore(
+        context.user_data,
+        key=_SESSION_STORE_KEY,
+        max_active=_MAX_ACTIVE_SESSIONS,
+        cleanup_session=cleanup_temp_files,
+    ).create(
+        url=url,
+        video_info=video_info,
+        session_id=session_id,
+        platform=platform,
+        formats=formats,
+    )
 
 
 def _get_session(context: ContextTypes.DEFAULT_TYPE, session_token: str) -> dict | None:
@@ -703,61 +697,7 @@ def _classify_youtube_error(error_msg: str) -> str | None:
 
 def _youtube_error_code(error_msg: str) -> str:
     """Возвращает короткий код YouTube/yt-dlp ошибки для структурированного логирования."""
-    msg_lower = error_msg.lower()
-
-    if "requested format is not available" in msg_lower:
-        return "FORMAT_UNAVAILABLE"
-
-    if any(
-        signature in msg_lower
-        for signature in (
-            "http error 403",
-            "forbidden",
-            "sign in to confirm your age",
-            "login required",
-            "this video is unavailable",
-            "private video",
-        )
-    ):
-        return "ACCESS_RESTRICTED"
-
-    if any(
-        signature in msg_lower
-        for signature in (
-            "read timed out",
-            "connection timed out",
-            "timed out",
-            "connection reset by peer",
-            "unexpected_eof_while_reading",
-            "eof occurred in violation of protocol",
-            "network is unreachable",
-        )
-    ):
-        return "NETWORK_TIMEOUT"
-
-    if "ffmpeg" in msg_lower and any(
-        signature in msg_lower
-        for signature in (
-            "not found",
-            "is not installed",
-            "ffprobe",
-        )
-    ):
-        return "FFMPEG_MISSING"
-
-    if any(
-        signature in msg_lower
-        for signature in (
-            "requires a javascript runtime",
-            "nsig extraction failed",
-            "signature extraction failed",
-            "unable to extract initial player response",
-            "remote components",
-        )
-    ):
-        return "EXTRACTOR_RUNTIME"
-
-    return "UNKNOWN"
+    return youtube_error_code(error_msg)
 
 
 def _make_error_code(platform: str, category: str) -> str:
@@ -776,98 +716,11 @@ def _make_error_code(platform: str, category: str) -> str:
 
 
 def _classify_internal_error_category(platform: str, error_msg: str) -> str:
-    msg_lower = error_msg.lower()
-    if platform == "youtube":
-        return _youtube_error_code(error_msg)
-
-    if platform in ("rutube", "vk"):
-        if any(
-            signature in msg_lower
-            for signature in ("timed out", "network", "connection reset", "ssl", "eof")
-        ):
-            return "NETWORK"
-        if any(
-            signature in msg_lower
-            for signature in ("rate-limit", "too many requests", "лимит запросов")
-        ):
-            return "RATE_LIMIT"
-        if any(
-            signature in msg_lower
-            for signature in (
-                "login required",
-                "sign in",
-                "private",
-                "forbidden",
-                "blocked",
-                "unavailable",
-                "ограничил доступ",
-                "ограничения",
-                "блокировки",
-                "авторизац",
-                "недоступ",
-            )
-        ):
-            return "ACCESS"
-        return "UNKNOWN"
-
-    if any(
-        signature in msg_lower
-        for signature in ("timed out", "network", "connection reset", "ssl", "eof")
-    ):
-        return "NETWORK"
-    if any(
-        signature in msg_lower
-        for signature in ("rate-limit", "too many requests", "лимит запросов")
-    ):
-        return "RATE_LIMIT"
-    if any(
-        signature in msg_lower
-        for signature in (
-            "login required",
-            "sign in",
-            "private",
-            "forbidden",
-            "blocked",
-            "unavailable",
-            "ограничил доступ",
-            "ограничения",
-            "блокировки",
-            "авторизац",
-            "недоступ",
-        )
-    ):
-        return "ACCESS"
-    if "story" in msg_lower and "не поддерживается" in msg_lower:
-        return "STORY_UNSUPPORTED"
-    return "UNKNOWN"
+    return classify_internal_error_category(platform, error_msg)
 
 
 def _build_public_error_message(platform: str, error_code: str, error_msg: str) -> str:
-    internal_category = _classify_internal_error_category(platform, error_msg)
-    if platform == "youtube" and internal_category == "FORMAT_UNAVAILABLE":
-        return CHOOSE_ANOTHER_FORMAT.format(error="Выбранный формат сейчас недоступен.")
-    if internal_category in {"NETWORK", "NETWORK_TIMEOUT"}:
-        return USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code)
-    if internal_category == "STORY_UNSUPPORTED":
-        return (
-            "📛 Скачивание Instagram Stories не поддерживается.\n\n"
-            "Stories — это временный контент (24 часа), и Instagram "
-            "ограничивает их загрузку через API.\n\n"
-            "Попробуйте скачать обычный пост, Reel или видео из IGTV."
-        )
-    platform_name = {
-        "youtube": "YouTube",
-        "tiktok": "TikTok",
-        "instagram": "Instagram",
-        "rutube": "Rutube",
-        "vk": "VK Video",
-    }.get(platform)
-    if platform_name:
-        return USER_PLATFORM_ERROR_WITH_CODE.format(
-            platform=platform_name,
-            error_code=error_code,
-        )
-    return USER_ERROR_WITH_CODE.format(error_code=error_code)
+    return build_public_error_message(platform, error_code, error_msg)
 
 
 def _should_notify_admins_platform_failure(
@@ -959,24 +812,14 @@ def _schedule_platform_failure_log(
 
 def _cache_format_id_for_main_action(platform: str, action: str) -> str | None:
     """Возвращает cache-key для прямых пользовательских действий."""
-    if platform in {"tiktok", "instagram"} and action.endswith("_download"):
-        return _DIRECT_VIDEO_CACHE_KEY
-    if platform == "youtube" and action == "tg_video":
-        return "tg_video"
-    return None
+    return cache_key_for_main_action(platform, action)
 
 
 def _cache_format_id_for_format_selection(
     content_type: str, format_id: str
 ) -> str | None:
     """Возвращает cache-key для выбранного формата."""
-    if content_type == "combined":
-        return f"combined:{format_id}"
-    if content_type == "video_only":
-        return f"video_only:{format_id}"
-    if content_type == "best":
-        return "best"
-    return None
+    return cache_key_for_format_selection(content_type, format_id)
 
 
 async def _cleanup_user_session(
@@ -2304,33 +2147,53 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"Получен колбэк от пользователя {user_id}: {query.data}")
 
     try:
-        data = query.data.split("|")
-        match data:
-            case ["s", session_token, "main", action]:
-                await _handle_main_callback(
-                    query, context, user_id, session_token, action
+        event = CallbackEvent.parse(query.data)
+        if event and event.scope == "main" and event.session_token:
+            session_token = event.session_token
+            await _handle_main_callback(
+                query,
+                context,
+                user_id,
+                session_token,
+                event.action,
+            )
+        elif (
+            event
+            and event.scope == "format"
+            and event.session_token
+            and event.value
+        ):
+            session_token = event.session_token
+            await _handle_format_callback(
+                query,
+                context,
+                user_id,
+                session_token,
+                event.action,
+                event.value,
+            )
+        elif event and event.scope == "csi" and event.value:
+            rating = int(event.value)
+            csi_id = save_csi_rating(user_id, rating)
+            await query.edit_message_text(CSI_THANKS_MESSAGE)
+            if rating < 7:
+                context.user_data["awaiting_csi_feedback_id"] = csi_id
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=CSI_FEEDBACK_REQUEST,
                 )
-            case ["s", session_token, "format", content_type, format_id]:
-                await _handle_format_callback(
-                    query, context, user_id, session_token, content_type, format_id
+        elif query.data.startswith("csi|"):
+            try:
+                rating = int(query.data.split("|", maxsplit=1)[1])
+                await query.answer(
+                    "Оценка должна быть от 0 до 10"
+                    if not 0 <= rating <= 10
+                    else "Некорректная оценка"
                 )
-            case ["csi", rating_str]:
-                try:
-                    rating = int(rating_str)
-                    if 0 <= rating <= 10:
-                        csi_id = save_csi_rating(user_id, rating)
-                        await query.edit_message_text(CSI_THANKS_MESSAGE)
-                        if rating < 7:
-                            context.user_data["awaiting_csi_feedback_id"] = csi_id
-                            await context.bot.send_message(
-                                chat_id=user_id, text=CSI_FEEDBACK_REQUEST
-                            )
-                    else:
-                        await query.answer("Оценка должна быть от 0 до 10")
-                except ValueError:
-                    await query.answer("Некорректная оценка")
-            case _:
-                await query.edit_message_text(SESSION_EXPIRED)
+            except ValueError:
+                await query.answer("Некорректная оценка")
+        else:
+            await query.edit_message_text(SESSION_EXPIRED)
     except Exception as e:
         logger.error(f"Ошибка в button_callback: {e}", exc_info=True)
         error_msg = str(e)
@@ -2697,6 +2560,7 @@ async def send_single_file(
     for attempt in range(1, max_retries + 1):
         try:
             file_ext = file_path.suffix.lower()
+            media_kind = media_kind_for_suffix(file_ext)
             message = None
             telegram_file = (
                 file_path.resolve()
@@ -2705,7 +2569,7 @@ async def send_single_file(
             )
 
             try:
-                if file_ext in [".mp4", ".webm", ".mkv", ".avi", ".mov"]:
+                if media_kind == "video":
                     message = await query.message.reply_video(
                         video=telegram_file,
                         caption=None,
@@ -2713,7 +2577,7 @@ async def send_single_file(
                         write_timeout=1800,
                         read_timeout=1800,
                     )
-                elif file_ext in [".mp3", ".m4a", ".wav", ".ogg"]:
+                elif media_kind == "audio":
                     message = await query.message.reply_audio(
                         audio=telegram_file,
                         caption=None,
