@@ -2507,6 +2507,7 @@ async def send_file(
     back_markup = _build_back_markup(session_token)
     platform = session_data.get("platform", "bot")
     url = session_data.get("url")
+    success = False
     try:
         await query.edit_message_text(FILE_PREPARING)
         await asyncio.sleep(1)
@@ -2576,7 +2577,10 @@ async def send_file(
             reply_markup=back_markup,
         )
     finally:
-        await _cleanup_user_session(user_id, context, session_token)
+        if success:
+            await _cleanup_user_session(user_id, context, session_token)
+        elif session_id := session_data.get("session_id"):
+            cleanup_temp_files(session_id)
 
 
 async def _send_photo_post_assets(
@@ -2663,7 +2667,7 @@ async def _send_photo_post_assets(
             USER_FILE_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
-        await _cleanup_user_session(user_id, context, session_token)
+        cleanup_temp_files(session_id)
     except telegram.error.NetworkError as e:
         error_code = _make_error_code("telegram", "NETWORK")
         _schedule_platform_failure_log(
@@ -2678,7 +2682,7 @@ async def _send_photo_post_assets(
             USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
-        await _cleanup_user_session(user_id, context, session_token)
+        cleanup_temp_files(session_id)
     except telegram.error.TelegramError as e:
         error_code = _make_error_code("telegram", "API")
         _schedule_platform_failure_log(
@@ -2693,7 +2697,7 @@ async def _send_photo_post_assets(
             USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
-        await _cleanup_user_session(user_id, context, session_token)
+        cleanup_temp_files(session_id)
     except Exception as e:
         error_code = _make_error_code(
             platform_for_errors,
@@ -2711,7 +2715,7 @@ async def _send_photo_post_assets(
             _build_public_error_message(platform_for_errors, error_code, str(e)),
             reply_markup=back_markup,
         )
-        await _cleanup_user_session(user_id, context, session_token)
+        cleanup_temp_files(session_id)
 
 
 async def send_single_file(

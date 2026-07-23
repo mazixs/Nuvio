@@ -945,6 +945,49 @@ def test_handle_main_callback_routes_instagram_photo_to_asset_sender(monkeypatch
     assert called
 
 
+def test_photo_post_failure_keeps_session_for_back_button(monkeypatch):
+    context = SimpleNamespace(user_data={})
+    cleaned_session_ids = []
+    session_token = telegram_utils._store_session(
+        context,
+        url="https://www.instagram.com/p/photo/",
+        video_info={"_nuvio_instagram_photo_post": True, "title": "Фото-пост"},
+        session_id="session-photo",
+        platform="instagram",
+        formats={},
+    )
+    session_data = telegram_utils._get_session(context, session_token)
+    query = _DummyQuery()
+
+    async def fake_run_blocking(*args, **kwargs):
+        return {"images": [], "audio": None}
+
+    monkeypatch.setattr(telegram_utils, "run_blocking", fake_run_blocking)
+    monkeypatch.setattr(
+        telegram_utils,
+        "cleanup_temp_files",
+        lambda session_id: cleaned_session_ids.append(session_id),
+    )
+    monkeypatch.setattr(
+        telegram_utils,
+        "_schedule_platform_failure_log",
+        lambda **kwargs: None,
+    )
+
+    asyncio.run(
+        telegram_utils._send_photo_post_assets(
+            query,
+            session_token,
+            session_data,
+            context,
+        )
+    )
+
+    assert telegram_utils._get_session(context, session_token) is session_data
+    assert cleaned_session_ids == ["session-photo"]
+    assert query.edits[-1][1]["reply_markup"] is not None
+
+
 def test_handle_main_callback_reroutes_instagram_photo_exception_to_asset_sender(
     monkeypatch,
 ):
@@ -1409,7 +1452,7 @@ def test_search_cache_escapes_markdown(monkeypatch):
     assert r"Title\_\[1\]" in text
 
 
-def test_send_file_cleans_session_and_media_on_send_failure(monkeypatch):
+def test_send_file_keeps_session_but_cleans_media_on_send_failure(monkeypatch):
     query = _DummyQuery()
     context = SimpleNamespace(user_data={})
     cleaned_session_ids = []
@@ -1425,6 +1468,44 @@ def test_send_file_cleans_session_and_media_on_send_failure(monkeypatch):
 
     async def fake_send_single_file(*args, **kwargs):
         return False
+
+    monkeypatch.setattr(telegram_utils, "send_single_file", fake_send_single_file)
+    monkeypatch.setattr(
+        telegram_utils,
+        "cleanup_temp_files",
+        lambda session_id: cleaned_session_ids.append(session_id),
+    )
+
+    asyncio.run(
+        telegram_utils.send_file(
+            query,
+            Path("fake.mp4"),
+            session_token,
+            session_data,
+            context,
+        )
+    )
+
+    assert telegram_utils._get_session(context, session_token) is session_data
+    assert cleaned_session_ids == ["session-1"]
+
+
+def test_send_file_cleans_session_and_media_on_success(monkeypatch):
+    query = _DummyQuery()
+    context = SimpleNamespace(user_data={})
+    cleaned_session_ids = []
+    session_token = telegram_utils._store_session(
+        context,
+        url="https://example.com/1",
+        video_info={"title": "One"},
+        session_id="session-1",
+        platform="youtube",
+        formats={"combined": []},
+    )
+    session_data = telegram_utils._get_session(context, session_token)
+
+    async def fake_send_single_file(*args, **kwargs):
+        return True
 
     monkeypatch.setattr(telegram_utils, "send_single_file", fake_send_single_file)
     monkeypatch.setattr(
