@@ -12,6 +12,7 @@ import telegram
 from dotenv import load_dotenv
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -29,7 +30,14 @@ for _dotenv_path in (
     if _dotenv_path.exists():
         load_dotenv(dotenv_path=_dotenv_path, override=False)
 
-from config import TELEGRAM_TOKEN, LOG_LEVEL, validate_config  # noqa: E402
+from config import (  # noqa: E402
+    LOG_LEVEL,
+    TELEGRAM_BOT_API_BASE_URL,
+    TELEGRAM_BOT_API_FILE_URL,
+    TELEGRAM_LOCAL_MODE,
+    TELEGRAM_TOKEN,
+    validate_config,
+)
 from utils.logger import setup_logger  # noqa: E402
 from utils.temp_file_manager import cleanup_temp_files  # noqa: E402
 from utils.cache_commands import (
@@ -148,6 +156,32 @@ async def scheduled_csi_dispatch(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при рассылке CSI: {e}")
 
 
+def _configure_application_builder(
+    builder: ApplicationBuilder,
+) -> ApplicationBuilder:
+    """Настраивает клиент облачного или локального Telegram Bot API."""
+    builder = (
+        builder.token(TELEGRAM_TOKEN)
+        .connect_timeout(10.0)
+        .read_timeout(120.0)
+        .write_timeout(120.0)
+        .media_write_timeout(1800.0)
+        .get_updates_connect_timeout(10.0)
+        .get_updates_read_timeout(120.0)
+        .get_updates_write_timeout(30.0)
+        .get_updates_pool_timeout(5.0)
+        .http_version("1.1")
+        .get_updates_http_version("1.1")
+    )
+    if TELEGRAM_LOCAL_MODE:
+        builder = (
+            builder.base_url(TELEGRAM_BOT_API_BASE_URL)
+            .base_file_url(TELEGRAM_BOT_API_FILE_URL)
+            .local_mode(True)
+        )
+    return builder
+
+
 def _build_application() -> Application:
     """Создаёт и конфигурирует экземпляр Application."""
     from utils.telegram_utils import (
@@ -160,20 +194,7 @@ def _build_application() -> Application:
         _notify_admins_crash,
     )
 
-    application = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .connect_timeout(10.0)
-        .read_timeout(120.0)
-        .write_timeout(120.0)
-        .get_updates_connect_timeout(10.0)
-        .get_updates_read_timeout(120.0)
-        .get_updates_write_timeout(30.0)
-        .get_updates_pool_timeout(5.0)
-        .http_version("1.1")
-        .get_updates_http_version("1.1")
-        .build()
-    )
+    application = _configure_application_builder(Application.builder()).build()
 
     set_bot_instance(application.bot)
 
