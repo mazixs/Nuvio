@@ -106,13 +106,6 @@ YTDLP_AUTO_UPDATE_TIMEOUT = int(os.environ.get("YTDLP_AUTO_UPDATE_TIMEOUT", "240
 YTDLP_CLI_FALLBACK = _parse_bool(os.environ.get("YTDLP_CLI_FALLBACK"), default=True)
 YTDLP_CLI_TIMEOUT = int(os.environ.get("YTDLP_CLI_TIMEOUT", "900"))
 
-# Ключ для доступа к Gokapi API
-# Опционально: используется только для выгрузки файлов, которые превышают лимит Telegram
-GOKAPI_API_KEY = os.environ.get("GOKAPI_API_KEY")
-
-# URL для Gokapi API (по умолчанию можно оставить пустым)
-GOKAPI_BASE_URL = os.environ.get("GOKAPI_BASE_URL", "")
-
 # Список ID администраторов (через запятую)
 # Пример: ADMIN_IDS = 123456789,987654321
 ADMIN_IDS = _parse_admin_ids(os.environ.get("ADMIN_IDS"))
@@ -122,8 +115,6 @@ ADMIN_IDS = _parse_admin_ids(os.environ.get("ADMIN_IDS"))
 def validate_config():
     """Проверяет наличие всех необходимых переменных окружения."""
     missing_vars = []
-    gokapi_api_key = (GOKAPI_API_KEY or "").strip()
-    gokapi_base_url = (GOKAPI_BASE_URL or "").strip()
 
     if not TELEGRAM_TOKEN:
         missing_vars.append("TELEGRAM_TOKEN")
@@ -146,15 +137,6 @@ def validate_config():
             raise ValueError(
                 "TELEGRAM_BOT_API_FILE_URL локального сервера должен использовать http://"
             )
-
-    if gokapi_api_key and not gokapi_base_url:
-        logging.warning(
-            "GOKAPI_API_KEY задан без GOKAPI_BASE_URL. Выгрузка больших файлов будет недоступна."
-        )
-    elif gokapi_base_url and not gokapi_api_key:
-        logging.warning(
-            "GOKAPI_BASE_URL задан без GOKAPI_API_KEY. Выгрузка больших файлов будет недоступна."
-        )
 
     return True
 

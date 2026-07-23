@@ -262,10 +262,8 @@ def test_navigation_callbacks_are_not_rate_limited():
     assert telegram_utils._should_rate_limit_callback("s|sess1234|format|best|best")
 
 
-def test_validate_config_allows_missing_gokapi(monkeypatch):
+def test_validate_config_accepts_required_bot_token(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_TOKEN", "telegram-token")
-    monkeypatch.setattr(config, "GOKAPI_API_KEY", None)
-    monkeypatch.setattr(config, "GOKAPI_BASE_URL", "")
 
     assert config.validate_config() is True
 
@@ -292,15 +290,6 @@ def test_resolve_secret_path_prefers_canonical_location(monkeypatch, tmp_path, c
 
     assert resolved == canonical
     assert "Используем" in caplog.text
-
-
-def test_classify_large_file_delivery_error():
-    assert (
-        telegram_utils._classify_large_file_delivery_error(
-            "Сервер загрузки недоступен: Сервер загрузки больших файлов не настроен"
-        )
-        == telegram_utils.LARGE_FILE_DELIVERY_UNAVAILABLE
-    )
 
 
 def test_classify_tiktok_russian_access_error():
@@ -1420,9 +1409,10 @@ def test_search_cache_escapes_markdown(monkeypatch):
     assert r"Title\_\[1\]" in text
 
 
-def test_send_file_keeps_session_on_send_failure(monkeypatch):
+def test_send_file_cleans_session_and_media_on_send_failure(monkeypatch):
     query = _DummyQuery()
     context = SimpleNamespace(user_data={})
+    cleaned_session_ids = []
     session_token = telegram_utils._store_session(
         context,
         url="https://example.com/1",
@@ -1437,6 +1427,11 @@ def test_send_file_keeps_session_on_send_failure(monkeypatch):
         return False
 
     monkeypatch.setattr(telegram_utils, "send_single_file", fake_send_single_file)
+    monkeypatch.setattr(
+        telegram_utils,
+        "cleanup_temp_files",
+        lambda session_id: cleaned_session_ids.append(session_id),
+    )
 
     asyncio.run(
         telegram_utils.send_file(
@@ -1448,7 +1443,8 @@ def test_send_file_keeps_session_on_send_failure(monkeypatch):
         )
     )
 
-    assert telegram_utils._get_session(context, session_token) is not None
+    assert telegram_utils._get_session(context, session_token) is None
+    assert cleaned_session_ids == ["session-1"]
 
 
 def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
@@ -1678,4 +1674,3 @@ def test_hevc_video_conversion_triggered(monkeypatch, tmp_path):
     assert not hevc_file.exists()
     assert downloaded_file.read_bytes() == b"converted_data"
     assert converted_files == [hevc_file]
-

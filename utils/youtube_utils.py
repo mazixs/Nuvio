@@ -530,7 +530,7 @@ def download_audio_native(
         output_dir: Директория для сохранения
 
     Returns:
-        Path к аудио файлу или ссылка на Gokapi
+        Путь к локальному аудиофайлу.
     """
     logger.info(f"Скачивание нативного аудио: {url}, формат: {format_id}")
     output_path_template = _resolve_output_template(session_id, output_dir)
@@ -686,7 +686,7 @@ def download_audio(
         preferred_codec: Выходной аудио-кодек (по умолчанию 'mp3')
 
     Returns:
-        Path к MP3 файлу или ссылка на Gokapi
+        Путь к локальному MP3-файлу.
     """
     logger.info(f"Скачивание аудио с конвертацией в MP3: {url}, формат: {format_id}")
     output_path_template = _resolve_output_template(session_id, output_dir)

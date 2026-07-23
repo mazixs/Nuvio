@@ -14,7 +14,12 @@ import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import DOWNLOAD_WORKERS, BLOCKING_TASK_TIMEOUT, ADMIN_IDS
+from config import (
+    ADMIN_IDS,
+    BLOCKING_TASK_TIMEOUT,
+    DOWNLOAD_WORKERS,
+    TELEGRAM_LOCAL_MODE,
+)
 from utils.logger import setup_logger
 from utils.analytics_db import (
     init_db as _init_analytics,
@@ -49,7 +54,6 @@ from messages import (
     TOO_LONG_VIDEO_MESSAGE,
     NO_URL_AFTER_COMMAND,
     SESSION_EXPIRED,
-    FILE_TOO_LARGE_LINK,
     FILE_PREPARING,
     FILE_SENT,
     DOWNLOAD_FORMAT_PROMPT,
@@ -74,7 +78,6 @@ from messages import (
     SUBTITLE_CAPTION,
     MP3_MIN_LABEL,
     SPAM_WARNING,
-    LARGE_FILE_DELIVERY_UNAVAILABLE,
     USER_ERROR_WITH_CODE,
     USER_NETWORK_ERROR_WITH_CODE,
     USER_FILE_ERROR_WITH_CODE,
@@ -107,7 +110,6 @@ from utils.rutube_vk_utils import (
     download_vk_audio,
 )
 from utils.video_cache import telegram_cache, CachedVideo
-from utils.gokapi_utils import is_gokapi_configured
 from utils.cookie_health import check_cookie_health
 from datetime import datetime
 
@@ -594,11 +596,7 @@ def _build_youtube_more_menu(formats: dict, session_token: str) -> InlineKeyboar
                 ]
             )
 
-    best_label = (
-        BEST_QUALITY_LABEL
-        if is_gokapi_configured()
-        else BEST_QUALITY_LABEL + " (может не влезть в ТГ)"
-    )
+    best_label = BEST_QUALITY_LABEL
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -667,22 +665,6 @@ async def safe_edit_message_text(
             logger.debug("edit_message_text пропущен: текст и разметка без изменений")
             return False
         raise
-
-
-def _classify_large_file_delivery_error(error_msg: str) -> str | None:
-    """Возвращает понятное сообщение, если недоступна выдача больших файлов."""
-    msg_lower = error_msg.lower()
-    if any(
-        signature in msg_lower
-        for signature in (
-            "сервер загрузки больших файлов не настроен",
-            "сервер загрузки недоступен",
-            "ошибка gokapi",
-            "gokapi",
-        )
-    ):
-        return LARGE_FILE_DELIVERY_UNAVAILABLE
-    return None
 
 
 def _classify_youtube_error(error_msg: str) -> str | None:
@@ -793,9 +775,6 @@ def _make_error_code(platform: str, category: str) -> str:
 
 
 def _classify_internal_error_category(platform: str, error_msg: str) -> str:
-    if _classify_large_file_delivery_error(error_msg):
-        return "LARGE"
-
     msg_lower = error_msg.lower()
     if platform == "youtube":
         return _youtube_error_code(error_msg)
@@ -863,9 +842,6 @@ def _classify_internal_error_category(platform: str, error_msg: str) -> str:
 
 
 def _build_public_error_message(platform: str, error_code: str, error_msg: str) -> str:
-    if large_file_message := _classify_large_file_delivery_error(error_msg):
-        return large_file_message
-
     internal_category = _classify_internal_error_category(platform, error_msg)
     if platform == "youtube" and internal_category == "FORMAT_UNAVAILABLE":
         return CHOOSE_ANOTHER_FORMAT.format(error="Выбранный формат сейчас недоступен.")
@@ -2393,10 +2369,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
             except Exception:
                 await query.edit_message_text(ERROR_FALLBACK)
-        elif classified := (
-            _classify_youtube_error(error_msg)
-            or _classify_large_file_delivery_error(error_msg)
-        ):
+        elif classified := _classify_youtube_error(error_msg):
             try:
                 await query.edit_message_text(classified, parse_mode="Markdown")
             except Exception:
@@ -2510,7 +2483,7 @@ async def download_content(
 
 async def send_file(
     query: telegram.CallbackQuery,
-    file_path: Path | str,
+    file_path: Path,
     session_token: str,
     session_data: dict,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2522,30 +2495,17 @@ async def send_file(
     platform = session_data.get("platform", "bot")
     url = session_data.get("url")
     try:
-        if isinstance(file_path, str) and file_path.startswith("http"):
-            await query.edit_message_text(
-                FILE_TOO_LARGE_LINK.format(file_path=file_path)
-            )
-            await _cleanup_user_session(user_id, context, session_token)
-            return
-
-        if isinstance(file_path, Path):
-            await query.edit_message_text(FILE_PREPARING)
-            await asyncio.sleep(1)
-            success = await send_single_file(
-                query,
-                file_path,
-                session_token,
-                session_data,
-                cache_format_id=cache_format_id,
-            )
-            if success:
-                await query.edit_message_text(FILE_SENT)
-                await _cleanup_user_session(user_id, context, session_token)
-            return
-
-        logger.error(f"Неожиданный тип file_path в send_file: {type(file_path)}")
-        await query.edit_message_text(ERROR_MESSAGE, reply_markup=back_markup)
+        await query.edit_message_text(FILE_PREPARING)
+        await asyncio.sleep(1)
+        success = await send_single_file(
+            query,
+            file_path,
+            session_token,
+            session_data,
+            cache_format_id=cache_format_id,
+        )
+        if success:
+            await query.edit_message_text(FILE_SENT)
     except (FileNotFoundError, PermissionError) as e:
         error_code = _make_error_code("file", "ACCESS")
         _schedule_platform_failure_log(
@@ -2602,6 +2562,8 @@ async def send_file(
             USER_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
+    finally:
+        await _cleanup_user_session(user_id, context, session_token)
 
 
 async def _send_photo_post_assets(
@@ -2757,26 +2719,38 @@ async def send_single_file(
         try:
             file_ext = file_path.suffix.lower()
             message = None
+            telegram_file = (
+                file_path.resolve()
+                if TELEGRAM_LOCAL_MODE
+                else file_path.open("rb")
+            )
 
-            if file_ext in [".mp4", ".webm", ".mkv", ".avi", ".mov"]:
-                with open(file_path, "rb") as video_file:
+            try:
+                if file_ext in [".mp4", ".webm", ".mkv", ".avi", ".mov"]:
                     message = await query.message.reply_video(
-                        video=video_file,
+                        video=telegram_file,
                         caption=None,
                         supports_streaming=True,
-                        write_timeout=300,
-                        read_timeout=300,
+                        write_timeout=1800,
+                        read_timeout=1800,
                     )
-            elif file_ext in [".mp3", ".m4a", ".wav", ".ogg"]:
-                with open(file_path, "rb") as audio_file:
+                elif file_ext in [".mp3", ".m4a", ".wav", ".ogg"]:
                     message = await query.message.reply_audio(
-                        audio=audio_file, caption=None
+                        audio=telegram_file,
+                        caption=None,
+                        write_timeout=1800,
+                        read_timeout=1800,
                     )
-            else:
-                with open(file_path, "rb") as document_file:
+                else:
                     message = await query.message.reply_document(
-                        document=document_file, caption=None
+                        document=telegram_file,
+                        caption=None,
+                        write_timeout=1800,
+                        read_timeout=1800,
                     )
+            finally:
+                if not TELEGRAM_LOCAL_MODE:
+                    telegram_file.close()
 
             # Кэширование file_id для видео, аудио и документов
             if message and url and cache_format_id:

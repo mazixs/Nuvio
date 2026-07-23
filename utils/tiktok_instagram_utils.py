@@ -19,8 +19,7 @@ from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
 from yt_dlp.networking.impersonate import ImpersonateTarget
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
-from utils.gokapi_utils import is_gokapi_configured
-from utils.ytdlp_common import finalize_downloaded_file
+from utils.ytdlp_common import FileSizeLimitError, finalize_downloaded_file
 from utils.media_processor import convert_webm_to_mp4, convert_to_format, get_video_codec, has_audio_stream
 from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
 
@@ -1260,7 +1259,7 @@ def download_tiktok_video(
         cached_info: Кэшированные метаданные (для пропуска повторного запроса)
 
     Returns:
-        Path к файлу или ссылка на Gokapi
+        Путь к локальному файлу.
     """
     logger.info(f"Скачивание TikTok видео: {url}")
 
@@ -1270,13 +1269,13 @@ def download_tiktok_video(
             "TikTok фото-пост нужно отправлять как набор изображений и отдельное аудио."
         )
 
-    # Предварительная проверка: если размер файла известен и превышает лимит, а Gokapi не настроен — отказ
+    # Предварительная проверка известного размера до скачивания.
     if cached_info and not force_local:
         filesize = cached_info.get("filesize") or cached_info.get("filesize_approx", 0)
-        if filesize and filesize > MAX_FILE_SIZE and not is_gokapi_configured():
-            raise Exception(
-                "Файл превышает лимит Telegram (50 МБ). "
-                "Выберите формат с меньшим размером."
+        if filesize and filesize > MAX_FILE_SIZE:
+            raise FileSizeLimitError(
+                f"Файл превышает допустимый размер "
+                f"{MAX_FILE_SIZE // 1024 // 1024} МБ"
             )
 
     if output_dir is None:
@@ -1744,7 +1743,7 @@ def download_tiktok_audio(
         cached_info: Кэшированные метаданные
 
     Returns:
-        Path к M4A файлу или ссылка на Gokapi
+        Путь к локальному M4A-файлу.
     """
     logger.info(f"Скачивание нативного аудио (M4A) из TikTok: {url}")
 
@@ -1925,7 +1924,7 @@ def download_instagram_audio(
         force_local (bool): Принудительное локальное сохранение.
 
     Returns:
-        Union[Path, str]: Путь к M4A файлу или ссылка на Gokapi.
+        Path: Путь к локальному M4A-файлу.
     """
     import subprocess
 

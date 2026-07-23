@@ -10,7 +10,6 @@ from typing import Any
 import yt_dlp
 from config import MAX_FILE_SIZE
 from utils.logger import setup_logger
-from utils.gokapi_utils import upload_to_gokapi
 
 logger = setup_logger(__name__)
 
@@ -119,29 +118,23 @@ def execute_with_backoff(
             raise
 
 
-def finalize_downloaded_file(downloaded_file: Path, force_local: bool) -> Path | str:
-    """Handles size limits by keeping the file locally or uploading to Gokapi."""
+class FileSizeLimitError(Exception):
+    """Файл превышает предел выбранного Telegram Bot API."""
+
+
+def finalize_downloaded_file(downloaded_file: Path, force_local: bool) -> Path:
+    """Возвращает локальный файл или удаляет его при превышении лимита."""
     file_size = downloaded_file.stat().st_size
     if force_local or file_size <= MAX_FILE_SIZE:
         return downloaded_file
 
     logger.warning(
-        "File size of %s (%s bytes) exceeds Telegram limit. Uploading to Gokapi.",
+        "Файл %s (%s байт) превышает лимит Telegram %s байт.",
         downloaded_file,
         file_size,
+        MAX_FILE_SIZE,
     )
-    try:
-        success, link_or_error = upload_to_gokapi(downloaded_file)
-        if success:
-            logger.info("File uploaded to Gokapi: %s", link_or_error)
-            return link_or_error
-        raise Exception(f"Upload server unavailable: {link_or_error}")
-    finally:
-        try:
-            if downloaded_file.exists():
-                downloaded_file.unlink()
-                logger.info(
-                    "Local file %s deleted after upload attempt.", downloaded_file
-                )
-        except Exception as e_del:
-            logger.error("Error deleting local file %s: %s", downloaded_file, e_del)
+    downloaded_file.unlink(missing_ok=True)
+    raise FileSizeLimitError(
+        f"Файл превышает допустимый размер: {file_size} > {MAX_FILE_SIZE}"
+    )
