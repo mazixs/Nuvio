@@ -1,0 +1,8 @@
+services:
+  bot:
+    build: .
+    image: nuvio:dev
+
+  web:
+    build: .
+    image: nuvio:dev

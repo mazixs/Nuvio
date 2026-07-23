@@ -1,0 +1,93 @@
+name: nuvio
+
+services:
+  telegram-bot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.telegram-bot-api
+    image: nuvio-telegram-bot-api:10.2
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?TELEGRAM_API_ID is required}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?TELEGRAM_API_HASH is required}
+    command:
+      - --local
+      - --http-port=8081
+      - --dir=/var/lib/telegram-bot-api
+      - --temp-dir=/var/lib/telegram-bot-api/temp
+    expose:
+      - "8081"
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+      - shared-media:/app/media
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8081"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  bot:
+    image: ghcr.io/mazixs/nuvio:${TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - ${NUVIO_ENV_FILE:-.secrets/.env}
+    environment:
+      DATA_DIR: /app/data
+      TEMP_DIR: /app/media
+      TELEGRAM_LOCAL_MODE: "true"
+      TELEGRAM_BOT_API_BASE_URL: http://telegram-bot-api:8081/bot
+      TELEGRAM_BOT_API_FILE_URL: http://telegram-bot-api:8081/file/bot
+      TELEGRAM_MAX_FILE_SIZE_MB: "2000"
+    depends_on:
+      telegram-bot-api:
+        condition: service_healthy
+    volumes:
+      - bot-data:/app/data
+      - shared-media:/app/media
+      - ./logs:/app/logs
+      - ./.secrets:/app/.secrets
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    image: ghcr.io/mazixs/nuvio:${TAG:-latest}
+    restart: unless-stopped
+    command: python -m web.app
+    env_file:
+      - ${NUVIO_ENV_FILE:-.secrets/.env}
+    environment:
+      DATA_DIR: /app/data
+      WEB_PORT: "8080"
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    volumes:
+      - bot-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8080/health')
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  bot-data:
+  telegram-bot-api-data:
+  shared-media:
