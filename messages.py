@@ -68,15 +68,6 @@ ERROR_MESSAGE = "❌ Произошла ошибка при обработке �
 TOO_LONG_VIDEO_MESSAGE = (
     "❌ Видео слишком длинное. Максимальная продолжительность: 3 часа."
 )
-TOO_LARGE_FILE_MESSAGE = (
-    "❌ Файл превышает допустимый размер для отправки в Telegram."
-)
-ERROR_YTDLP = (
-    "❌ Не удалось получить этот материал с YouTube. Возможно, ссылка требует "
-    "авторизации, материал удалён или ссылка больше не действует."
-)
-ERROR_GENERIC = "❌ Ошибка: {error}"
-ERROR_SENDING_FILE = "❌ Ошибка при отправке файла: {error}"
 USER_ERROR_WITH_CODE = (
     "❌ Не удалось обработать запрос. Попробуйте позже.\nКод ошибки: {error_code}"
 )
@@ -119,9 +110,6 @@ BTN_AUDIO_ONLY = "Только аудио (MP3)"
 BTN_SUBTITLES = "📝 Скачать субтитры (SRT)"
 
 # === ПОДПИСИ К ФОРМАТАМ ===
-AUDIO_ONLY_LABEL = "🔊 Только аудио - {ext}"
-VIDEO_ONLY_LABEL = "📹 {height}p - {ext} (без звука)"
-COMBINED_LABEL = "📹+🔊 {height}p - {ext}"
 BEST_QUALITY_LABEL = "⭐ Лучшее качество (видео + аудио)"
 BEST_AUDIO_LABEL = "🎵 Лучшее аудио"
 FILE_PREPARING = "Файл готовится к отправке..."

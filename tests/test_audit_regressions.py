@@ -1548,11 +1548,6 @@ def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
     )
     context = SimpleNamespace(user_data={}, args=[])
 
-    async def fail_if_cached(*args, **kwargs):
-        raise AssertionError(
-            "YouTube path must not short-circuit through cached video before format selection"
-        )
-
     async def fake_run_blocking(func, *args, **kwargs):
         return {
             "title": "Stub title",
@@ -1561,7 +1556,6 @@ def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
             "formats": [],
         }
 
-    monkeypatch.setattr(telegram_utils, "_try_send_cached", fail_if_cached)
     monkeypatch.setattr(telegram_utils, "is_valid_youtube_url", lambda url: True)
     monkeypatch.setattr(
         telegram_utils,
@@ -1577,7 +1571,7 @@ def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
     assert "Stub title" in processing_messages[-1].edits[-1][0]
 
 
-def test_process_url_tiktok_shows_menu_not_cache(monkeypatch):
+def test_process_url_tiktok_shows_menu(monkeypatch):
     """TikTok URL должен показывать меню, а не отправлять из кэша напрямую."""
     message = _DummyMessage("https://www.tiktok.com/@user/video/1")
     update = SimpleNamespace(
@@ -1585,23 +1579,12 @@ def test_process_url_tiktok_shows_menu_not_cache(monkeypatch):
         message=message,
     )
     context = SimpleNamespace(user_data={}, args=[])
-    cache_called = False
-
-    async def fake_try_send_cached(
-        update, url, user_id, cache_format_id, platform="video"
-    ):
-        nonlocal cache_called
-        cache_called = True
-        return True
-
-    monkeypatch.setattr(telegram_utils, "_try_send_cached", fake_try_send_cached)
     monkeypatch.setattr(telegram_utils, "is_valid_youtube_url", lambda url: False)
     monkeypatch.setattr(telegram_utils, "is_valid_tiktok_url", lambda url: True)
     monkeypatch.setattr(telegram_utils, "is_instagram_audio_url", lambda url: False)
     monkeypatch.setattr(telegram_utils, "is_valid_instagram_url", lambda url: False)
 
-    # process_url больше не вызывает _try_send_cached для TikTok (кэш перенесён в callback)
-    # Поэтому нужно мокнуть reply_text (показ меню) и get_tiktok_info
+    # Кэш TikTok проверяется после выбора действия, поэтому здесь показывается меню.
     async def fake_reply_text(text, **kwargs):
         return SimpleNamespace(edit_text=fake_edit_text)
 
@@ -1618,9 +1601,7 @@ def test_process_url_tiktok_shows_menu_not_cache(monkeypatch):
 
     asyncio.run(telegram_utils.process_url(update, context, message.text))
 
-    assert not cache_called, (
-        "process_url не должен проверять кэш для TikTok — это делает callback handler"
-    )
+    assert context.user_data["sessions"]
 
 
 def test_send_single_file_persists_explicit_cache_key(monkeypatch, tmp_path):

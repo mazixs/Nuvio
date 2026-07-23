@@ -43,21 +43,6 @@ class CachedVideo:
         age = datetime.now() - self.cached_at
         return age < timedelta(days=cache_ttl_days)
 
-    def to_dict(self) -> dict:
-        """Конвертирует в словарь для сериализации."""
-        return {
-            "url": self.url,
-            "file_id": self.file_id,
-            "file_unique_id": self.file_unique_id,
-            "platform": self.platform,
-            "format_id": self.format_id,
-            "cached_at": self.cached_at.isoformat(),
-            "file_size": self.file_size,
-            "duration": self.duration,
-            "title": self.title,
-        }
-
-
 class TelegramVideoCache:
     """
     Кэш file_id для видео.

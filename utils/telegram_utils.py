@@ -979,44 +979,6 @@ def _cache_format_id_for_format_selection(
     return None
 
 
-async def _try_send_cached(
-    update: Update,
-    url: str,
-    user_id: int,
-    cache_format_id: str,
-    platform: str = "video",
-) -> bool:
-    """Проверяет кэш и отправляет видео из кэша. Возвращает True если отправлено."""
-    if not update.message:
-        return False
-
-    cached = telegram_cache.get(url, format_id=cache_format_id)
-    if not cached:
-        logger.info(
-            "Cache MISS для %s %s (key=%s), скачиваем...",
-            platform,
-            url,
-            cache_format_id,
-        )
-        return False
-    logger.info("Cache HIT для user %s: %s (key=%s)", user_id, url, cache_format_id)
-    try:
-        if "audio" in cache_format_id.lower():
-            await update.message.reply_audio(audio=cached.file_id, caption=None)
-        else:
-            await update.message.reply_video(
-                video=cached.file_id,
-                caption=None,
-                supports_streaming=True,
-            )
-        logger.info("%s файл доставлен из кэша за 0 сек (user %s)", platform, user_id)
-        return True
-    except telegram.error.BadRequest as e:
-        logger.warning("file_id устарел для %s (key=%s): %s", url, cache_format_id, e)
-        telegram_cache.delete_by_file_id(cached.file_id)
-        return False
-
-
 async def _cleanup_user_session(
     user_id: int,
     context: ContextTypes.DEFAULT_TYPE,

@@ -37,10 +37,6 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "syntax: тесты синтаксического анализа кода")
     config.addinivalue_line("markers", "unit: модульные тесты отдельных функций")
     config.addinivalue_line("markers", "integration: интеграционные тесты компонентов")
-    config.addinivalue_line(
-        "markers", "slow: медленные тесты (пропускаются по умолчанию)"
-    )
-    config.addinivalue_line("markers", "network: тесты, требующие интернет-соединения")
 
 
 # === ОБЩИЕ ФИКСТУРЫ ===
@@ -63,44 +59,3 @@ def tests_dir(project_root: Path) -> Path:
     """Директория с тестами."""
     return project_root / "tests"
 
-
-# === ХУКИ ===
-
-
-def pytest_collection_modifyitems(config, items):
-    """Модификация собранных тестов.
-
-    Добавляет маркер 'slow' для тестов, которые могут выполняться долго.
-    """
-    for item in items:
-        # Автоматически помечаем network тесты как slow
-        if "network" in item.keywords:
-            item.add_marker(pytest.mark.slow)
-
-
-def pytest_addoption(parser):
-    """Добавление пользовательских опций командной строки."""
-    parser.addoption(
-        "--run-slow",
-        action="store_true",
-        default=False,
-        help="Запустить медленные тесты",
-    )
-    parser.addoption(
-        "--run-network",
-        action="store_true",
-        default=False,
-        help="Запустить тесты, требующие интернет-соединения",
-    )
-
-
-def pytest_runtest_setup(item):
-    """Настройка перед запуском каждого теста.
-
-    Пропускает тесты с определенными маркерами, если не указаны флаги.
-    """
-    if "slow" in item.keywords and not item.config.getoption("--run-slow"):
-        pytest.skip("Пропускаем медленный тест (используйте --run-slow)")
-
-    if "network" in item.keywords and not item.config.getoption("--run-network"):
-        pytest.skip("Пропускаем сетевой тест (используйте --run-network)")
