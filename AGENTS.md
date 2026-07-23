@@ -17,7 +17,7 @@
 - Защита от спама (4 запроса за 5 секунд → cooldown 10 секунд)
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin`
 - WebUI-дашборд аналитики (FastAPI + Jinja2)
-- Автообновление yt-dlp (канал nightly по умолчанию)
+- Опциональное автообновление yt-dlp (канал nightly по умолчанию)
 
 ---
 
@@ -95,7 +95,7 @@ Nuvio/
 │
 └── .github/workflows/           # CI/CD
     ├── ci.yml                   # Линтинг (ruff), тесты, проверка Docker-сборки
-    └── release.yml              # Релиз: тесты → changelog → GitHub Release → GHCR
+    └── release.yml              # Релиз: тесты → GHCR → changelog → GitHub Release
 ```
 
 ---
@@ -155,13 +155,12 @@ docker compose --env-file .secrets/.env up -d
 ### Команды
 
 ```bash
-pytest                              # Все тесты (кроме slow/network)
+pytest                              # Все тесты
 pytest -v                          # Подробный вывод
 pytest -k "test_name"              # Запуск конкретного теста
 pytest tests/test_youtube_smoke.py -v  # Один файл
-pytest --run-slow                  # Включить медленные тесты
-pytest --run-network               # Включить сетевые тесты
-pytest -m "syntax or unit"         # Только syntax и unit (как в CI)
+coverage run --branch -m pytest tests/
+coverage report --fail-under=40    # Та же граница, что в CI
 ```
 
 ### Маркеры pytest
@@ -171,10 +170,6 @@ pytest -m "syntax or unit"         # Только syntax и unit (как в CI)
 | `syntax` | Синтаксическая корректность и импорты всех .py файлов | Нет |
 | `unit` | Модульные тесты с моками | Нет |
 | `integration` | Интеграционные тесты (SQLite) | Нет |
-| `slow` | Медленные тесты | `--run-slow` |
-| `network` | Тесты, требующие интернет | `--run-network` |
-
-> Автоматически `network` тесты также помечаются как `slow`.
 
 ### Принципы тестирования
 
@@ -261,15 +256,15 @@ ruff check --output-format=github .
 
 Запускается на push/PR в `main` и `develop`:
 1. **Линтинг** — `ruff check --output-format=github .`
-2. **Тесты** — `pytest tests/ -v -m "syntax or unit" --tb=short` на Python 3.14
-3. **Docker build** — проверка сборки образа (зависит от lint и test)
+2. **Тесты** — полный `pytest tests/` на Python 3.14 с покрытием не ниже 40%.
+3. **Docker build** — сборка и smoke-проверка Nuvio и локального Bot API.
 
 ### Release (`.github/workflows/release.yml`)
 
 Запускается на push тега `v*`:
-1. **Тесты** — прогон syntax и unit тестов.
-2. **GitHub Release** — генерация changelog из коммитов по категориям (feat/add, fix/исправл, остальное), создание релиза с инструкцией по установке.
-3. **Docker → GHCR** — сборка и пуш образа с тегами версий (`latest`, `major.minor`, `major`).
+1. **Тесты** — полный набор, ruff и порог покрытия.
+2. **Docker → GHCR** — smoke-проверка, сборка и пуш образа с тегами версий (`latest`, `major.minor`, `major`).
+3. **GitHub Release** — генерация changelog и создание релиза только после успешной публикации образа.
 
 ---
 
@@ -281,7 +276,8 @@ ruff check --output-format=github .
 4. **Smart retry**: экспоненциальный backoff при сетевых таймаутах yt-dlp; fallback на CLI (`python -m yt_dlp`) при сбоях встроенного API.
 5. **Cookies-first**: для YouTube сначала пробуем с cookies, затем без них; для TikTok/Instagram — аналогично.
 6. **Фото-посты**: TikTok-ссылки вида `/photo/` и Instagram карусели скачиваются как набор изображений; аудио отправляется отдельным сообщением, если есть.
-7. **Rolling-release yt-dlp**: бот автоматически обновляет yt-dlp при старте через `pip install --upgrade --pre yt-dlp[default]` (канал nightly).
+7. **Rolling-release yt-dlp**: по умолчанию используется зафиксированная версия;
+   обновление при старте включается явно через `YTDLP_AUTO_UPDATE=true`.
 
 ---
 
@@ -314,7 +310,9 @@ ruff check --output-format=github .
 
 - **`messages.py`**: при изменении сообщений проверяйте, что они не превышают лимиты Telegram (4096 символов для обычных сообщений).
 - **`config.py`**: добавление новых env-переменных требует обновления `.env.example` и `README.md`.
-- **`utils/telegram_utils.py`**: файл ~120KB, содержит всю логику взаимодействия с пользователем. Изменения в callback_data могут сломать существующие сессии.
+- **`utils/telegram_utils.py` и `utils/callback_fsm.py`**: изменения формата
+  `callback_data` должны сопровождаться тестами разбора событий и переходов
+  существующих сессий.
 - **`utils/youtube_utils.py`**: логика fallback (cookies → без cookies → CLI) чувствительна к порядку операций. Любые изменения должны сохранять стратегию отката.
 - **`tests/conftest.py`**: заглушка yt_dlp используется многими тестами. Изменения здесь могут повлиять на весь тестовый набор.
 - **SQLite схемы**: при изменении схем `video_cache.db` или `analytics.db` учитывайте WAL mode и необходимость миграций для существующих установок.

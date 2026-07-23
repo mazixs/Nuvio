@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+DEPENDABOT_CONFIG = ROOT / ".github" / "dependabot.yml"
 
 
 def _job_body(workflow: str, job_name: str) -> str:
@@ -70,3 +71,11 @@ def test_release_smoke_tests_application_before_push():
     assert "docker run --detach --name nuvio-release-smoke" in docker_job
     assert "http://127.0.0.1:18080/health" in docker_job
     assert "docker rm --force nuvio-release-smoke" in docker_job
+
+
+def test_dependabot_groups_minor_and_patch_updates_per_ecosystem():
+    config = DEPENDABOT_CONFIG.read_text(encoding="utf-8")
+
+    assert config.count("applies-to: version-updates") == 3
+    assert config.count('- "minor"') == 3
+    assert config.count('- "patch"') == 3

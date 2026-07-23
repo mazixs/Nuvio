@@ -1,6 +1,5 @@
 """Модульные тесты границы FFmpeg/FFprobe."""
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest

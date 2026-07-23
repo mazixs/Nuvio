@@ -23,7 +23,7 @@
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin` (управление cookies)
 - **CSI (Customer Satisfaction Index)** — автоматические опросы удовлетворённости (шкала 0–10) с текстовой обратной связью для оценок <7; метрики NPS/CSI на дашборде
 - WebUI-дашборд аналитики (FastAPI + Jinja2 + Chart.js)
-- Автообновление yt-dlp (rolling-release, nightly channel)
+- Опциональное автообновление yt-dlp (rolling-release, nightly channel)
 - Готовность к headless/systemd-развертыванию (`init_env.sh` в качестве `ExecStartPre`)
 - Поддержка Docker
 
@@ -105,12 +105,13 @@ docker compose --env-file .secrets/.env up -d
 
 ## CI/CD
 
-- **CI** — автоматические тесты и линтинг на каждый push/PR в `main`
+- **CI** — полный набор тестов, покрытие не ниже 40%, линтинг и Docker
+  smoke-проверки на каждый push/PR в `main`
 - **Релиз** — при пуше тега `v*` автоматически:
   - Прогоняются тесты
-  - Генерируется changelog из коммитов
-  - Создаётся GitHub Release с инструкцией по установке
   - Собирается Docker-образ и пушится в GHCR с тегами версий
+  - Генерируется changelog из коммитов
+  - Создаётся GitHub Release только после успешной публикации образа
 
 Создание нового релиза:
 
@@ -253,13 +254,13 @@ Nuvio/
 ```bash
 pytest                              # все тесты
 pytest tests/test_youtube_smoke.py -v  # один файл с подробным выводом
-pytest --run-slow                   # включить медленные тесты
-pytest --run-network                # включить сетевые тесты
 pytest -k "test_name"               # запуск конкретного теста
-pytest -m "syntax or unit"          # как в CI (быстро)
+coverage run --branch -m pytest tests/
+coverage report --fail-under=40     # та же граница, что в CI
 ```
 
-Маркеры: `syntax`, `unit`, `integration`, `slow`, `network`. Тесты YouTube используют мокированный YoutubeDL (без сетевых запросов). Системные зависимости для тестов: FFmpeg, git.
+Маркеры: `syntax`, `unit`, `integration`. Тесты не обращаются к платформам по
+сети: внешние границы yt-dlp, FFmpeg и Telegram подменяются.
 
 ---
 

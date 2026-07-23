@@ -35,11 +35,9 @@ pytest tests/test_youtube_smoke.py -v
 # По имени
 pytest -k "test_name"
 
-# С медленными тестами
-pytest --run-slow
-
-# С сетевыми тестами
-pytest --run-network
+# Полный набор с покрытием, как в CI
+coverage run --branch -m pytest tests/
+coverage report --fail-under=40
 ```
 
 ### Маркеры pytest
@@ -47,8 +45,6 @@ pytest --run-network
 - `syntax` — синтаксическая корректность, импорты и линтинг (ruff)
 - `unit` — юнит-тесты с моками
 - `integration` — интеграционные (SQLite кэш, CSI)
-- `slow` — медленные тесты (пропускаются без `--run-slow`)
-- `network` — тесты, требующие интернет (пропускаются без `--run-network`)
 
 ### Принципы тестирования
 

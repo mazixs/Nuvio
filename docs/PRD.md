@@ -129,7 +129,7 @@ Apache License 2.0 — свободное использование, модиф
 |---|---|
 | **Язык** | Python 3.14+ |
 | **Telegram API** | python-telegram-bot 22+ (async) |
-| **Загрузка видео** | yt-dlp (rolling-release, nightly) |
+| **Загрузка видео** | yt-dlp фиксированной версии; rolling-release включается явно |
 | **Медиа-обработка** | FFmpeg (извлечение аудио, конвертация, мерж) |
 | **WebUI** | FastAPI + Jinja2 + Uvicorn |
 | **База данных** | SQLite (WAL mode) — кэш + аналитика |
@@ -290,7 +290,7 @@ URL → валидация (отсечение неподдерживаемых 
 |---|---|---|
 | Очистка кэша | Каждые 24 часа | Удаление записей старше 90 дней |
 | VACUUM базы данных | Каждые 7 дней | Оптимизация размера SQLite-файлов |
-| Обновление yt-dlp | При старте | `pip install --upgrade` из nightly-канала |
+| Обновление yt-dlp | При старте, если включено | `pip install --upgrade` из выбранного канала |
 
 ### 6.4 Crash-репорты
 
@@ -365,10 +365,10 @@ python -m web            # дашборд (отдельный процесс)
 ### 8.3 Production (GHCR)
 
 При пуше тега `v*` GitHub Actions автоматически:
-1. Прогоняет тесты
-2. Генерирует changelog
-3. Создаёт GitHub Release
-4. Собирает Docker-образ → GHCR с тегами `latest`, `X.Y.Z`, `X.Y`, `X`
+1. Проверяет тег, стиль, полный набор тестов и покрытие
+2. Собирает и smoke-проверяет Docker-образ
+3. Публикует образ в GHCR с тегами `latest`, `X.Y.Z`, `X.Y`, `X`
+4. Генерирует changelog и создаёт GitHub Release
 
 ```bash
 TAG=1.0.0 docker compose --env-file .secrets/.env up -d
@@ -379,14 +379,15 @@ TAG=1.0.0 docker compose --env-file .secrets/.env up -d
 ```
 Push/PR → CI:
   ├── Lint (ruff)
-  ├── Tests (Python 3.14)
-  └── Docker build check
+  ├── Full tests + coverage ≥40% (Python 3.14)
+  └── Docker build + smoke checks
 
 Tag v* → Release:
-  ├── Tests
+  ├── Validate semver tag
+  ├── Full tests + lint + coverage
+  ├── Docker → GHCR
   ├── Changelog generation
-  ├── GitHub Release
-  └── Docker → GHCR
+  └── GitHub Release
 ```
 
 ---

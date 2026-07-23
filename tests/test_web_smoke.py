@@ -3,7 +3,7 @@
 import hashlib
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastAPITestClient
 
 from web import app as web_app
 
@@ -13,7 +13,7 @@ def client(monkeypatch):
     monkeypatch.setattr(web_app, "init_db", lambda: None)
     web_app._login_attempts.clear()
     web_app._notified_ips.clear()
-    with TestClient(web_app.app) as test_client:
+    with FastAPITestClient(web_app.app) as test_client:
         yield test_client
 
 

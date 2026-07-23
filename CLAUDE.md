@@ -21,8 +21,8 @@ docker compose --env-file .secrets/.env -f compose.yaml -f compose.dev.yaml up -
 pytest                              # все тесты
 pytest tests/test_youtube_smoke.py  # один файл
 pytest -k "test_name"               # один тест
-pytest --run-slow                   # включить медленные тесты
-pytest --run-network                # включить сетевые тесты
+coverage run --branch -m pytest tests/
+coverage report --fail-under=40
 
 # Зависимости
 pip install -r requirements.txt
@@ -41,7 +41,11 @@ Docker-стек отправляет файлы до 2 ГБ через лока�
 **Конфигурация**: `config.py` — парсинг env-переменных с типизацией, пути к секретам в `.secrets/` (fallback на корень).
 
 **Основные модули в `utils/`**:
-- `telegram_utils.py` (~120KB) — все хэндлеры бота: команды, callback-кнопки, обработка URL, отправка файлов, error handler с крэш-репортами админам
+- `telegram_utils.py` — Telegram-хэндлеры и координация пользовательского потока
+- `callback_fsm.py` — разбор callback-событий и ограниченное хранилище сессий
+- `platform_actions.py` — чистые решения платформенных действий и ключей кэша
+- `file_delivery.py` — выбор способа доставки по виду медиа
+- `public_errors.py` — безопасная классификация пользовательских ошибок
 - `youtube_utils.py` — загрузка YouTube/Shorts через yt-dlp с cookie-поддержкой и smart retry
 - `tiktok_instagram_utils.py` — TikTok (множественные API-хосты, exponential backoff) и Instagram (rate-limit aware, cookies для приватных профилей)
 - `media_processor.py` — FFmpeg: извлечение аудио (MP3 192k), конвертация WebM→MP4, мерж аудио/видео
