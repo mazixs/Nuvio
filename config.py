@@ -64,14 +64,34 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 # Пути для сохранения файлов
 BASE_DIR = Path(__file__).parent
-TEMP_DIR = BASE_DIR / "temp"
-TEMP_DIR.mkdir(exist_ok=True)
+TEMP_DIR = Path(os.environ.get("TEMP_DIR", str(BASE_DIR / "temp"))).resolve()
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 SECRETS_DIR = BASE_DIR / ".secrets"
 SECRETS_DIR.mkdir(exist_ok=True)
 
 # Ограничения
 MAX_VIDEO_DURATION = 3 * 60 * 60  # 3 часа в секундах
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 МБ в байтах
+TELEGRAM_LOCAL_MODE = _parse_bool(
+    os.environ.get("TELEGRAM_LOCAL_MODE"), default=False
+)
+TELEGRAM_BOT_API_BASE_URL = os.environ.get(
+    "TELEGRAM_BOT_API_BASE_URL", "https://api.telegram.org/bot"
+).rstrip("/")
+TELEGRAM_BOT_API_FILE_URL = os.environ.get(
+    "TELEGRAM_BOT_API_FILE_URL", "https://api.telegram.org/file/bot"
+).rstrip("/")
+_configured_max_file_size_mb = int(
+    os.environ.get(
+        "TELEGRAM_MAX_FILE_SIZE_MB",
+        "2000" if TELEGRAM_LOCAL_MODE else "50",
+    )
+)
+_telegram_mode_limit_mb = 2000 if TELEGRAM_LOCAL_MODE else 50
+MAX_FILE_SIZE_MB = min(
+    max(_configured_max_file_size_mb, 1),
+    _telegram_mode_limit_mb,
+)
+MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 
 # Настройки пула исполнителей для блокирующих задач
 DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "8"))
@@ -116,6 +136,16 @@ def validate_config():
             "Пример для Linux/Mac: export TELEGRAM_TOKEN=your_token_here"
         )
         raise ValueError(error_msg)
+
+    if TELEGRAM_LOCAL_MODE:
+        if not TELEGRAM_BOT_API_BASE_URL.startswith("http://"):
+            raise ValueError(
+                "TELEGRAM_BOT_API_BASE_URL локального сервера должен использовать http://"
+            )
+        if not TELEGRAM_BOT_API_FILE_URL.startswith("http://"):
+            raise ValueError(
+                "TELEGRAM_BOT_API_FILE_URL локального сервера должен использовать http://"
+            )
 
     if gokapi_api_key and not gokapi_base_url:
         logging.warning(
