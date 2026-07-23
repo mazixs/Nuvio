@@ -1,119 +1,76 @@
 # Справочник по конфигурации
 
-Полное описание всех переменных окружения и параметров настройки Telegram-бота Nuvio.
+Единственный шаблон настроек — `.env.example`. Рабочую копию храните в
+`.secrets/.env`; она исключена из системы контроля версий.
 
-## Переменные окружения
+## Обязательные переменные
 
-### Обязательные
-
-| Переменная | Описание | Пример |
+| Переменная | Где используется | Описание |
 |---|---|---|
-| `TELEGRAM_TOKEN` | Токен бота, полученный от @BotFather | `1234567890:ABCdef...` |
-| `ADMIN_IDS` | ID администраторов через запятую | `123456789,987654321` |
+| `TELEGRAM_TOKEN` | бот | Токен от @BotFather |
+| `ADMIN_IDS` | бот | ID администраторов через запятую |
+| `TELEGRAM_API_ID` | Docker | ID приложения с my.telegram.org |
+| `TELEGRAM_API_HASH` | Docker | Hash приложения с my.telegram.org |
 
-Без этих переменных бот не запустится. При отсутствии `TELEGRAM_TOKEN` функция `validate_config()` выбросит `ValueError` с инструкциями.
+`TELEGRAM_API_ID` и `TELEGRAM_API_HASH` создаются в разделе **API development
+tools** на [my.telegram.org](https://my.telegram.org). Это учётные данные
+приложения Telegram, а не токен бота и не пароль пользователя.
 
----
+## Локальный Telegram Bot API
 
-### Gokapi (выгрузка больших файлов)
+В `compose.yaml` эти параметры уже заданы и обычно не требуют изменения:
+
+| Переменная | Значение в Compose | Описание |
+|---|---|---|
+| `TELEGRAM_LOCAL_MODE` | `true` | Разрешает отправку по локальному пути |
+| `TELEGRAM_BOT_API_BASE_URL` | `http://telegram-bot-api:8081/bot` | Внутренний адрес API |
+| `TELEGRAM_BOT_API_FILE_URL` | `http://telegram-bot-api:8081/file/bot` | Внутренний адрес файлов |
+| `TELEGRAM_MAX_FILE_SIZE_MB` | `2000` | Максимальный размер отправляемого файла |
+| `TEMP_DIR` | `/app/media` | Общий временный том бота и Bot API |
+
+При прямом запуске Python локальный режим выключен, используются адреса
+`api.telegram.org`, а лимит принудительно ограничен 50 МБ.
+
+## WebUI
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `GOKAPI_API_KEY` | -- | API-ключ Gokapi |
-| `GOKAPI_BASE_URL` | -- | URL API Gokapi (включая `/api/`) |
+| `WEB_USERNAME` | `admin` | Логин |
+| `WEB_PASSWORD` | `changeme` | Пароль, обязательно сменить |
+| `WEB_SECRET_KEY` | случайный | Ключ подписи сессий |
+| `WEB_PORT` | `8080` | Опубликованный порт |
+| `FAIL2BAN_RETRIES` | `5` | Попыток до блокировки |
+| `FAIL2BAN_TIME` | `10m` | Время блокировки |
 
-Обе переменные должны быть заданы для работы выгрузки больших файлов. Если указана только одна из них, в лог записывается предупреждение.
-
----
-
-### WebUI (аналитический дашборд)
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `WEB_USERNAME` | `admin` | Логин для входа в дашборд |
-| `WEB_PASSWORD` | `changeme` | Пароль (обязательно сменить!) |
-| `WEB_SECRET_KEY` | автогенерация | Ключ подписи сессий |
-| `WEB_PORT` | `8080` | Порт дашборда |
-| `FAIL2BAN_RETRIES` | `5` | Попыток логина до блокировки IP |
-| `FAIL2BAN_TIME` | `10m` | Время блокировки (`10m`, `1h`, `300` сек) |
-
----
-
-### Логирование
+## Загрузка и обработка
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `LOG_LEVEL` | `INFO` | Уровень логирования: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LOG_LEVEL` | `INFO` | Уровень логирования |
+| `DOWNLOAD_WORKERS` | `8` | Потоки блокирующих задач |
+| `BLOCKING_TASK_TIMEOUT` | `600` | Тайм-аут задачи, секунд |
+| `YTDLP_AUTO_UPDATE` | `true` | Обновлять yt-dlp при старте |
+| `YTDLP_RELEASE_CHANNEL` | `nightly` | `stable`, `nightly` или `master` |
+| `YTDLP_AUTO_UPDATE_TIMEOUT` | `240` | Тайм-аут обновления |
+| `YTDLP_CLI_FALLBACK` | `true` | Использовать CLI как запасной путь |
+| `YTDLP_CLI_TIMEOUT` | `900` | Тайм-аут CLI |
 
-Логи пишутся через rotating file handler: максимальный размер файла 10MB, 5 резервных копий. Путь: `logs/bot.log`.
+## Cookies
 
----
+| Переменная | Путь по умолчанию |
+|---|---|
+| `YOUTUBE_COOKIES_FILE` | `.secrets/www.youtube.com_cookies.txt` |
+| `INSTAGRAM_COOKIES_FILE` | `.secrets/www.instagram.com_cookies.txt` |
+| `TIKTOK_COOKIES_FILE` | `.secrets/www.tiktok.com_cookies.txt` |
 
-### Пул загрузок
+Cookies необязательны для открытых материалов. Их также можно обновлять через
+административную команду `/admin`.
 
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `DOWNLOAD_WORKERS` | `8` | Размер ThreadPoolExecutor |
-| `BLOCKING_TASK_TIMEOUT` | `600` | Таймаут блокирующих задач (сек) |
+## Хранение
 
----
-
-### yt-dlp
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `YTDLP_AUTO_UPDATE` | `true` | Автообновление yt-dlp при старте бота |
-| `YTDLP_RELEASE_CHANNEL` | `nightly` | Канал обновлений: `stable`, `nightly`, `master` |
-| `YTDLP_AUTO_UPDATE_TIMEOUT` | `240` | Таймаут обновления (сек) |
-| `YTDLP_CLI_FALLBACK` | `true` | Использовать CLI fallback при сбое API |
-| `YTDLP_CLI_TIMEOUT` | `900` | Таймаут CLI-вызовов (сек) |
-
----
-
-### Cookies
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `YOUTUBE_COOKIES_FILE` | `.secrets/www.youtube.com_cookies.txt` | Путь к файлу cookies YouTube |
-| `INSTAGRAM_COOKIES_FILE` | `.secrets/www.instagram.com_cookies.txt` | Путь к файлу cookies Instagram |
-| `TIKTOK_COOKIES_FILE` | `.secrets/www.tiktok.com_cookies.txt` | Путь к файлу cookies TikTok |
-
----
-
-## Цепочка загрузки .env
-
-Файлы окружения загружаются в следующем порядке приоритета (первый найденный файл используется, последующие не перезаписывают уже заданные значения):
-
-1. `.secrets/.env`
-2. `.env.local`
-3. `.env`
-
----
-
-## Структура .secrets/
-
-```
-.secrets/
-├── .env
-├── www.youtube.com_cookies.txt
-├── www.instagram.com_cookies.txt
-└── www.tiktok.com_cookies.txt
-```
-
-Директория `.secrets/` содержит конфиденциальные данные и не должна попадать в систему контроля версий.
-
----
-
-## Ограничения
-
-| Параметр | Значение | Описание |
-|---|---|---|
-| `MAX_VIDEO_DURATION` | 10800 сек (3 часа) | Максимальная длительность видео |
-| `MAX_FILE_SIZE` | 50MB | Лимит Telegram на размер файла |
-| Антиспам | 4 запроса за 5 секунд | После превышения -- блокировка на 10 секунд |
-
----
-
-## Валидация конфигурации
-
-При запуске бота `config.py` выполняет валидацию через функцию `validate_config()`. Если обязательная переменная `TELEGRAM_TOKEN` отсутствует, выбрасывается `ValueError` с инструкциями по настройке.
+- `bot-data` хранит SQLite-базы и переживает перезапуск контейнеров.
+- `telegram-bot-api-data` хранит служебное состояние локального Bot API.
+- `shared-media` используется только для обработки и отправки. Файлы удаляются
+  после успешной или неуспешной отправки; дополнительная очистка выполняется при
+  запуске и остановке бота.
+- `logs/` и `.secrets/` подключаются с хоста.

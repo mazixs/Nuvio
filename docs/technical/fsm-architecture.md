@@ -203,9 +203,8 @@ context.user_data["sessions"] = {
               ┌─────────────────┐
               │finalize_download│  ← sync
               │_file()          │
-              │   >50MB?        │
-              │   → upload_to_  │
-              │       gokapi()  │
+              │   > лимита?     │
+              │   → ошибка      │
               └────────┬────────┘
                        │
                        ▼
@@ -256,9 +255,10 @@ executor = ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)  # default=8
 |----------|-----------------|-----------|
 | 8 пользователей скачивают видео по 5 минут | 8/8 | 9-й пользователь ждёт в очереди |
 | 1 пользователь, MP3 min | 1 (скачивание) + 1 (FFmpeg) | последовательно, не параллельно |
-| Gokapi upload файла 200MB | 1 воркер на 60-120 сек | меньше воркеров для скачивания |
+| Отправка файла 200MB | event loop + локальный API | воркер скачивания свободен |
 
-**Признак:** `run_blocking` использует **один** executor для всего — info extraction, download, FFmpeg, Gokapi upload.
+**Признак:** `run_blocking` использует **один** executor для info extraction,
+download и FFmpeg; передача локального пути выполняется асинхронно.
 
 ### 5.4. Нет кэш-проверки на этапе `process_url`
 
@@ -294,7 +294,7 @@ video_info = await run_blocking(get_video_info, ...)  # всегда выпол�
 **Чего нет:**
 - Отложенной конвертации (скачать сырые фрагменты, конвертировать позже)
 - Background cleanup (temp-файлы чистятся только при сессии)
-- Асинхронного upload в Gokapi (блокирует воркер)
+- Фонового удаления осиротевших файлов во время долгой работы
 
 ### 5.7. FSM state не сохраняется при перезапуске бота
 
@@ -452,20 +452,10 @@ asyncio.create_task(_background_cleanup(session_id))
 
 **Выигрыш:** пользователь видит результат мгновенно, файлы чистятся в фоне.
 
-#### C. Отдельный executor для upload'ов
+#### C. Локальная передача файлов
 
-```python
-_download_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="download")
-_upload_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="upload")
-
-async def run_blocking_download(func, *args):
-    return await asyncio.to_thread(func, *args, executor=_download_executor)
-
-async def run_blocking_upload(func, *args):
-    return await asyncio.to_thread(func, *args, executor=_upload_executor)
-```
-
-**Выигрыш:** Gokapi upload не блокирует скачивание для других пользователей.
+Bot API получает абсолютный путь в общем томе, поэтому отдельный исполнитель
+для внешней загрузки больше не требуется.
 
 ### 7.3. FSM-рефакторинг
 
@@ -553,7 +543,7 @@ class BackgroundDownload:
 | Info extraction | Блокирует ThreadPool | Async с таймаутом 30s | Низкая |
 | SQLite операции | Sync в event loop | `asyncio.to_thread` | Низкая |
 | FFmpeg | Sync в download pipeline | Отложенный postprocess | Средняя |
-| Gokapi upload | Тот же ThreadPool | Отдельный executor | Низкая |
+| Отправка файла | Локальный путь | Локальный Bot API | Низкая |
 | Cleanup | При сессии | Background через 5 мин | Низкая |
 | State persistence | В памяти | SQLite/Redis | Средняя |
 | Chunking | yt-dlp под капотом | Добавить resume/partial | Низкая |
@@ -581,7 +571,7 @@ class BackgroundDownload:
 | 3 | **Async SQLite (to_thread)** | P0 | 8 | 8 | 8 | **8.00** | Стандартный паттерн Python 3.9+. Обернуть `telegram_cache.get/set` и `track_event` в `asyncio.to_thread`. Снимает блокировку event loop для всех пользователей. |
 | 4 | **Background cleanup** | P1 | 6 | 9 | 9 | **8.00** | `asyncio.create_task(asyncio.sleep(300)); cleanup_temp_files()`. Не требует новых зависимостей. UI освобождается мгновенно. |
 | 5 | **Предварительный thumbnail** | P2 | 5 | 8 | 9 | **7.33** | `reply_photo(thumb_url)` до построения меню. Мгновенный UX-выигрыш, почти нулевая сложность. |
-| 6 | **Отдельный executor для upload** | P1 | 6 | 8 | 7 | **7.00** | Создать второй `ThreadPoolExecutor(max_workers=4)` для Gokapi. Стандартный паттерн конкурентности, изолирует загрузки от скачивания. |
+| 6 | **Периодическая очистка сирот** | P1 | 6 | 8 | 7 | **7.00** | Удалять забытые временные файлы старше заданного TTL без остановки бота. |
 | 7 | **Хранение FSM в SQLite** | P1 | 7 | 7 | 5 | **6.33** | Таблица `user_states` + JSON-сериализация `session_data`. Переживает перезапуск, но требует миграции session store и graceful shutdown hook. |
 | 8 | **Явные состояния (enum)** | P2 | 5 | 7 | 6 | **6.00** | `enum.StrEnum` + `_state_handlers` dict. Упрощает поддержку, но требует рефакторинг ~120KB `telegram_utils.py`. |
 | 9 | **Resume download** | P2 | 5 | 6 | 5 | **5.33** | yt-dlp поддерживает `--continue`. Достаточно передать параметр в `ydl_opts`. Низкий выигрыш — обрывы редки. |

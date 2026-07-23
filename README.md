@@ -17,7 +17,8 @@
 - TikTok и Instagram фото-посты: каждая картинка отправляется отдельным сообщением, звук — отдельно, если он есть
 - Извлечение аудио (MP3 192k через FFmpeg для видео и отдельная звуковая дорожка для фото-постов)
 - Кэширование file_id -- мгновенная повторная отправка через Telegram CDN
-- Файлы >50MB загружаются на Gokapi и отправляются ссылкой
+- Файлы до 2 ГБ отправляются через локальный Telegram Bot API
+- Загруженные медиа удаляются после отправки; постоянно хранятся только базы и кэш `file_id`
 - Защита от спама (4 запроса за 5 секунд = cooldown 10 секунд)
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin` (управление cookies)
 - **CSI (Customer Satisfaction Index)** — автоматические опросы удовлетворённости (шкала 0–10) с текстовой обратной связью для оценок <7; метрики NPS/CSI на дашборде
@@ -56,9 +57,10 @@
 
 ### Требования
 
-- Python 3.13+
+- Python 3.14+
 - FFmpeg
 - Токен Telegram-бота ([@BotFather](https://t.me/BotFather))
+- `API_ID` и `API_HASH` приложения с [my.telegram.org](https://my.telegram.org)
 
 ### Установка
 
@@ -68,29 +70,34 @@ cd Nuvio
 pip install -r requirements.txt
 ```
 
-Скопируйте `.env.example` в `.secrets/.env` и заполните `TELEGRAM_TOKEN` и `ADMIN_IDS`:
+Скопируйте `.env.example` в `.secrets/.env`. Для Docker заполните
+`TELEGRAM_TOKEN`, `ADMIN_IDS`, `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`:
 
 ```bash
 mkdir -p .secrets
 cp .env.example .secrets/.env
 # отредактируйте .secrets/.env
-python main.py
 ```
+
+Прямой запуск `python main.py` использует облачный Bot API с лимитом 50 МБ.
+Для больших файлов используйте полный Docker-стек ниже.
 
 ### Docker
 
 ```bash
-cp .env.example .env
-# Отредактируйте .env — укажите TELEGRAM_TOKEN, ADMIN_IDS, WEB_PASSWORD и WEB_PORT
+mkdir -p .secrets
+cp .env.example .secrets/.env
+# Заполните обязательные значения и смените WEB_PASSWORD
 
 # Локальная сборка
-docker compose up --build
+docker compose --env-file .secrets/.env -f compose.yaml -f compose.dev.yaml up -d --build
 
-# Или из GHCR по версии (продакшен)
-TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+# Готовый образ Nuvio из GHCR
+docker compose --env-file .secrets/.env up -d
 ```
 
 Дашборд будет доступен на `http://localhost:<WEB_PORT>` (по умолчанию 8080).
+Порт локального Bot API наружу не публикуется.
 
 Подробная настройка Docker (порты, пароли, volumes, cookies) — в [`docs/guides/deployment.md`](docs/guides/deployment.md#docker).
 
@@ -120,8 +127,8 @@ git push origin v1.0.0
 |---|---|---|---|
 | `TELEGRAM_TOKEN` | да | -- | Токен бота от @BotFather |
 | `ADMIN_IDS` | да | -- | Список ID администраторов через запятую |
-| `GOKAPI_API_KEY` | нет | -- | API-ключ для Gokapi (отправка файлов >50MB) |
-| `GOKAPI_BASE_URL` | нет | -- | Базовый URL сервера Gokapi |
+| `TELEGRAM_API_ID` | да для Docker | -- | ID приложения с my.telegram.org |
+| `TELEGRAM_API_HASH` | да для Docker | -- | Hash приложения с my.telegram.org |
 | `WEB_USERNAME` | нет | `admin` | Логин для WebUI-дашборда |
 | `WEB_PASSWORD` | нет | `changeme` | Пароль для WebUI-дашборда (**сменить!**) |
 | `WEB_SECRET_KEY` | нет | авто | Ключ подписи сессий (см. ниже) |
@@ -147,7 +154,7 @@ git push origin v1.0.0
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Результат (64 hex-символа) вставить в `.env`:
+Результат (64 hex-символа) вставить в `.secrets/.env`:
 
 ```env
 WEB_SECRET_KEY=a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1
@@ -198,7 +205,6 @@ Nuvio/
 │   ├── video_cache.py
 │   ├── analytics_db.py
 │   ├── ytdlp_runtime.py
-│   ├── gokapi_utils.py
 │   ├── cookie_manager.py
 │   ├── cookie_health.py
 │   ├── logger.py
@@ -214,8 +220,9 @@ Nuvio/
 ├── pyproject.toml              # конфигурация ruff (per-file-ignores и т.д.)
 ├── .github/workflows/       # CI/CD (тесты, линтинг, релиз, GHCR)
 ├── Dockerfile
-├── docker-compose.yml       # для локальной разработки
-├── docker-compose.prod.yml  # production — тянет из GHCR
+├── Dockerfile.telegram-bot-api
+├── compose.yaml             # основной стек с локальным Bot API
+├── compose.dev.yaml         # сборка Nuvio из исходников
 └── requirements.txt
 ```
 
@@ -232,7 +239,6 @@ Nuvio/
 | `video_cache.py` | SQLite-кэш file_id для мгновенной повторной отправки (WAL mode, TTL 90 дней) |
 | `analytics_db.py` | SQLite-аналитика: таблицы users, events (WAL mode) |
 | `ytdlp_runtime.py` | Автообновление yt-dlp, CLI fallback |
-| `gokapi_utils.py` | Загрузка файлов >50MB на Gokapi (multipart, API key) |
 | `cookie_manager.py` | Админский интерфейс загрузки cookies |
 | `cookie_health.py` | Валидация и проверка здоровья cookies |
 | `logger.py` | Настройка логирования (rotating file handler, 10MB, 5 backups) |

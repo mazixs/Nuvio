@@ -1,280 +1,173 @@
-# Руководство по развертыванию Nuvio
+# Развёртывание Nuvio
 
 ## Требования
 
-- **Python 3.13+** (протестировано на 3.14)
-- **FFmpeg** (установленный в системе)
-- **Git**
-- **Токен Telegram-бота** -- получить у [@BotFather](https://t.me/BotFather)
+- Docker Engine с Compose v2
+- токен бота от [@BotFather](https://t.me/BotFather)
+- `API_ID` и `API_HASH` приложения с [my.telegram.org](https://my.telegram.org)
+- достаточно свободного места для временной обработки файлов до 2 ГБ
 
-## Локальная установка
+`API_ID` и `API_HASH` создаются в разделе **API development tools**. Они не
+заменяют `TELEGRAM_TOKEN` и не дают боту доступ к пользовательскому аккаунту.
+
+## Подготовка
 
 ```bash
 git clone https://github.com/mazixs/Nuvio.git
 cd Nuvio
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
-pip install -r requirements.txt
-```
-
-## Настройка окружения
-
-Скопируйте файл `.env.example` в `.secrets/.env` и заполните необходимые переменные:
-
-```bash
 mkdir -p .secrets
 cp .env.example .secrets/.env
 ```
 
-**Обязательные переменные:**
+Заполните в `.secrets/.env`:
 
-- `TELEGRAM_TOKEN` -- токен бота от @BotFather
-- `ADMIN_IDS` -- ID администраторов через запятую (узнать свой ID можно у @userinfobot)
+```env
+TELEGRAM_TOKEN=1234567890:ABCdef...
+ADMIN_IDS=123456789
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
+WEB_PASSWORD=replace-me
+WEB_SECRET_KEY=replace-with-a-random-value
+```
 
-**Опциональные переменные:**
+## Первый переход с облачного Bot API
 
-- `GOKAPI_BASE_URL`, `GOKAPI_API_KEY` -- для отправки файлов больше лимита Telegram (50 MB)
-- `WEB_USERNAME`, `WEB_PASSWORD`, `WEB_PORT`, `WEB_SECRET_KEY` -- настройки веб-дашборда
-- `YTDLP_AUTO_UPDATE`, `YTDLP_RELEASE_CHANNEL`, `YTDLP_CLI_FALLBACK` -- управление yt-dlp
+Один токен бота нельзя одновременно использовать через облачный и локальный Bot
+API. Поэтому переход выполняется вручную:
 
-**Цепочка загрузки .env:** `.secrets/.env` -> `.env.local` -> `.env`. Используется первый найденный файл, последующие не перезаписывают уже загруженные значения.
+1. Остановите прежний экземпляр Nuvio.
+2. Отвяжите токен от облачного Bot API:
 
-## Настройка cookies
+   ```bash
+   curl "https://api.telegram.org/bot<TOKEN_БОТА>/logOut"
+   ```
 
-Cookies необходимы для доступа к контенту, требующему авторизации. Файлы должны быть в формате Netscape и размещаться в директории `.secrets/`:
+3. Запустите новый стек:
 
-| Платформа | Путь к файлу | Переменная окружения (альтернатива) |
-|-----------|-------------|--------------------------------------|
-| YouTube   | `.secrets/www.youtube.com_cookies.txt` | `YOUTUBE_COOKIES_FILE` |
-| Instagram | `.secrets/www.instagram.com_cookies.txt` | -- |
-| TikTok    | `.secrets/www.tiktok.com_cookies.txt` | -- |
+   ```bash
+   docker compose --env-file .secrets/.env up -d
+   ```
 
-Администраторы бота также могут загружать и обновлять cookies напрямую через Telegram, используя команду `/admin`.
+Команда `logOut` намеренно не встроена в контейнер: автоматический вызов мог бы
+прервать другой работающий экземпляр бота.
+
+## Сервисы
+
+| Сервис | Назначение | Доступ с хоста |
+|---|---|---|
+| `telegram-bot-api` | Локальный Telegram Bot API в режиме `--local` | не публикуется |
+| `bot` | Загрузка, обработка и отправка материалов | не публикуется |
+| `web` | Аналитический дашборд | `${WEB_PORT:-8080}` |
+
+`bot` и `telegram-bot-api` используют общий том `/app/media`. Бот передаёт
+локальному API абсолютный путь к файлу, поэтому большой файл не загружается во
+внешнее промежуточное хранилище.
 
 ## Запуск
 
-```bash
-python main.py
-```
-
-Бот запустится с async event-loop, graceful shutdown по SIGINT/SIGTERM, а также запланированными задачами (ежедневная очистка кэша, еженедельный VACUUM).
-
-## Docker
-
-### Архитектура
-
-Dockerfile основан на `python:3.13-slim` с установленным FFmpeg. Docker Compose поднимает **два сервиса** из одного образа:
-
-| Сервис | Контейнер | Что делает | Порты |
-|--------|-----------|------------|-------|
-| `bot` | `nuvio-bot` | Telegram-бот (`main.py`) | нет |
-| `web` | `nuvio-web` | WebUI-дашборд (`python -m web.app`) | `WEB_PORT` (8080) |
-
-Оба сервиса используют общий Docker volume `bot-data` для базы данных аналитики — бот пишет данные, дашборд их читает.
-
-### Пошаговая настройка
-
-**1. Создайте `.env` из шаблона:**
+Готовый образ Nuvio из GHCR:
 
 ```bash
-cp .env.example .env
+docker compose --env-file .secrets/.env pull bot web
+docker compose --env-file .secrets/.env up -d
 ```
 
-**2. Отредактируйте `.env` — заполните обязательные и настройте опциональные переменные:**
-
-```env
-# ── ОБЯЗАТЕЛЬНЫЕ ──────────────────────────────────────
-TELEGRAM_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
-ADMIN_IDS=123456789,987654321
-
-# ── WEB UI (дашборд аналитики) ────────────────────────
-WEB_USERNAME=admin          # логин для входа в дашборд
-WEB_PASSWORD=MyStr0ngPass!  # ⚠️ ОБЯЗАТЕЛЬНО сменить!
-WEB_PORT=8080               # внешний порт дашборда на хосте
-# WEB_SECRET_KEY=random_string  # ключ сессий (генерируется автоматически)
-
-# ── GOKAPI (для файлов > 50MB) ───────────────────────
-# GOKAPI_BASE_URL=https://gokapi.example.com/api/
-# GOKAPI_API_KEY=your_api_key
-
-# ── YT-DLP ────────────────────────────────────────────
-# YTDLP_AUTO_UPDATE=true
-# YTDLP_RELEASE_CHANNEL=nightly
-```
-
-**3. (Опционально) Настройте cookies для платформ:**
+Сборка Nuvio из текущих исходников:
 
 ```bash
-mkdir -p .secrets
-# Положите файлы cookies в формате Netscape:
-#   .secrets/www.youtube.com_cookies.txt
-#   .secrets/www.instagram.com_cookies.txt
-#   .secrets/www.tiktok.com_cookies.txt
+docker compose \
+  --env-file .secrets/.env \
+  -f compose.yaml \
+  -f compose.dev.yaml \
+  up -d --build
 ```
 
-**4. Запуск:**
+Проверка состояния:
 
 ```bash
-# Локальная сборка (разработка)
-docker compose up --build
-
-# Или из GHCR по конкретной версии (продакшен)
-TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+docker compose --env-file .secrets/.env ps
+docker compose --env-file .secrets/.env logs -f bot telegram-bot-api
 ```
 
-### Доступ к дашборду
-
-После запуска дашборд доступен по адресу:
-
-```
-http://<ip-сервера>:<WEB_PORT>
-```
-
-Например, `http://localhost:8080`. Логин и пароль — из переменных `WEB_USERNAME` / `WEB_PASSWORD`.
-
-### Смена порта
-
-Порт задаётся переменной `WEB_PORT` в `.env`. В Docker Compose она меняет только порт на хосте; внутри контейнера WebUI всегда слушает `8080`, чтобы healthcheck и проброс портов оставались стабильными.
-
-```env
-WEB_PORT=3000  # дашборд будет на http://localhost:3000
-```
-
-### Volumes
-
-| Volume/Mount | Тип | Описание |
-|--------------|-----|----------|
-| `bot-data` | Docker volume | Общая БД аналитики между bot и web |
-| `./logs` | Bind mount | Логи бота (rotating, 10MB × 5) |
-| `./.secrets` | Bind mount (ro) | Cookies и секреты (read-only) |
-
-### Docker Compose файлы
-
-| Файл | Назначение |
-|------|-----------|
-| `docker-compose.yml` | Локальная разработка — собирает из исходников (`build: .`) |
-| `docker-compose.prod.yml` | Продакшен — тянет готовый образ из `ghcr.io/mazixs/nuvio` |
-
-Для продакшена:
-```bash
-# Скачать только compose-файл
-wget https://raw.githubusercontent.com/mazixs/Nuvio/main/docker-compose.prod.yml
-
-# Настроить .env (см. выше)
-
-# Запустить конкретную версию
-TAG=1.2.0 docker compose -f docker-compose.prod.yml up -d
-
-# Или latest
-docker compose -f docker-compose.prod.yml up -d
-```
-
-### Обновление Docker-контейнеров
-
-```bash
-# Локальная сборка
-git pull
-docker compose up --build -d
-
-# Из GHCR
-TAG=1.3.0 docker compose -f docker-compose.prod.yml pull
-TAG=1.3.0 docker compose -f docker-compose.prod.yml up -d
-```
-
-## Systemd (Linux-сервер)
-
-Для запуска на выделенном сервере рекомендуется использовать systemd. Скрипт `init_env.sh` выполняется как `ExecStartPre` и выполняет следующие действия:
-
-1. Создает необходимые директории (`.secrets`, `downloads`, `logs`, `temp`)
-2. Мигрирует legacy-файлы секретов в `.secrets/`
-3. Выполняет best-effort обновление из git (`git fetch` + `git reset --hard`)
-4. Устанавливает/обновляет зависимости из `requirements.txt`
-5. Валидирует критические импорты (`telegram`, `yt_dlp`)
-
-Пример unit-файла:
-
-```ini
-[Unit]
-Description=Nuvio Telegram Bot
-After=network.target
-
-[Service]
-Type=simple
-User=nuvio
-WorkingDirectory=/opt/nuvio
-ExecStartPre=/opt/nuvio/init_env.sh
-ExecStart=/opt/nuvio/.venv/bin/python main.py
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Установка сервиса:
-
-```bash
-sudo cp nuvio.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now nuvio
-```
-
-## WebUI (дашборд аналитики)
-
-Дашборд доступен по адресу `http://<host>:<WEB_PORT>` (по умолчанию `http://localhost:8080`).
-
-### Переменные окружения для WebUI
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `WEB_USERNAME` | `admin` | Логин для входа |
-| `WEB_PASSWORD` | `changeme` | Пароль для входа (**обязательно сменить!**) |
-| `WEB_PORT` | `8080` | Порт дашборда |
-| `WEB_SECRET_KEY` | авто | Ключ подписи сессий |
-| `FAIL2BAN_RETRIES` | `5` | Попыток логина до блокировки IP |
-| `FAIL2BAN_TIME` | `10m` | Время блокировки (`15m`, `1h`, `300`) |
-
-### WEB_SECRET_KEY
-
-Ключ используется для HMAC-подписи сессионных cookie. Без него невозможно подделать сессию.
-
-- **Не задан** — генерируется случайный при каждом старте. После рестарта все сессии сбрасываются.
-- **Задан** — сессии переживают рестарты контейнера.
-
-Генерация ключа:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Формат: любая строка, рекомендуется 64 hex-символа (32 байта энтропии).
-
-### Безопасность дашборда
-
-- **SQL-инъекции** — невозможны, все запросы параметризованы
-- **Brute-force** — fail2ban: настраивается через `FAIL2BAN_RETRIES` (попыток) и `FAIL2BAN_TIME` (блокировка). Формат времени: `15m`, `1h`, `300`
-- **Timing-атаки** — `hmac.compare_digest` для сравнения логина/пароля
-- **XSS** — Jinja2 автоэкранирование
-- **Длина ввода** — макс. 128 символов на логин/пароль
-- **Swagger/ReDoc** — отключены, API-схема скрыта
-
-> **Важно:** Пароль хранится как SHA256-хеш и проверяется при каждом логине. Если `WEB_SECRET_KEY` не задан, при перезапуске контейнера все сессии сбрасываются.
-
-### Что показывает дашборд
-
-- **Пользователи:** всего, новые/активные за 1/7/30 дней
-- **Удержание и отток:** retention D3/D7/D30, churn 30д
-- **CSI/NPS:** средний балл удовлетворённости, распределение оценок (0–10), NPS, текстовая обратная связь по оценкам <7
-- **Графики:** скачивания и новые пользователи по дням, трафик по платформам, гистограмма CSI
-- **Топ видео:** 10 самых скачиваемых URL
-- **Страница пользователей:** список, поиск, детальная карточка с историей событий
+Дашборд доступен по адресу `http://<адрес-сервера>:<WEB_PORT>`.
 
 ## Обновление
 
-| Метод | Как обновить |
-|-------|-------------|
-| **Docker (GHCR)** | `TAG=1.3.0 docker compose -f docker-compose.prod.yml pull && ... up -d` |
-| **Docker (сборка)** | `git pull && docker compose up --build -d` |
-| **Systemd** | `init_env.sh` при каждом рестарте делает `git fetch` + `git reset --hard` + `pip install` |
-| **yt-dlp** | Автообновление при старте бота (`YTDLP_AUTO_UPDATE=true`) |
+Для готового образа:
+
+```bash
+docker compose --env-file .secrets/.env pull
+docker compose --env-file .secrets/.env up -d
+```
+
+Для сборки из исходников:
+
+```bash
+git pull
+docker compose \
+  --env-file .secrets/.env \
+  -f compose.yaml \
+  -f compose.dev.yaml \
+  up -d --build
+```
+
+## Хранение и очистка
+
+| Том или каталог | Содержимое | Постоянное |
+|---|---|---|
+| `bot-data` | SQLite-базы аналитики и кэша `file_id` | да |
+| `telegram-bot-api-data` | служебное состояние локального API | да |
+| `shared-media` | скачанные и обработанные медиа | нет, очищаются |
+| `./logs` | журналы приложения | да, с ротацией |
+| `./.secrets` | окружение и cookies | да |
+
+Nuvio не создаёт архив всех скачиваний. Медиа удаляются после отправки или
+ошибки. При старте и корректной остановке также выполняется очистка временного
+каталога. Том `shared-media` нужен лишь для обмена путём между двумя
+контейнерами.
+
+## Cookies
+
+Необязательные Netscape-файлы можно положить в `.secrets/`:
+
+```text
+.secrets/www.youtube.com_cookies.txt
+.secrets/www.instagram.com_cookies.txt
+.secrets/www.tiktok.com_cookies.txt
+```
+
+Их также можно обновлять через `/admin`.
+
+## Возврат к облачному Bot API
+
+1. Остановите стек.
+2. Вызовите `logOut` у локального API, пока контейнер ещё доступен:
+
+   ```bash
+   curl \
+     "http://127.0.0.1:8081/bot<TOKEN_БОТА>/logOut"
+   ```
+
+   По умолчанию порт 8081 не опубликован. Для этой операции временно добавьте
+   локальный проброс `127.0.0.1:8081:8081` или выполните запрос внутри сети
+   Compose.
+
+3. Запустите приложение без `TELEGRAM_LOCAL_MODE`; тогда оно использует
+   `https://api.telegram.org` и лимит 50 МБ.
+
+## Запуск без Docker
+
+```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+set -a
+source .secrets/.env
+set +a
+python main.py
+```
+
+Такой запуск по умолчанию работает через облачный Bot API. Для локального API
+вне Compose потребуется самостоятельно обеспечить общий путь к файлам и задать
+`TELEGRAM_LOCAL_MODE`, `TELEGRAM_BOT_API_BASE_URL`,
+`TELEGRAM_BOT_API_FILE_URL`, `TELEGRAM_MAX_FILE_SIZE_MB` и `TEMP_DIR`.

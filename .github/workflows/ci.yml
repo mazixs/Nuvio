@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: 'pip'
 
       - name: Установка ruff
@@ -55,5 +55,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Сборка образа
+      - name: Проверка Compose
+        env:
+          NUVIO_ENV_FILE: /dev/null
+          TELEGRAM_API_ID: "12345"
+          TELEGRAM_API_HASH: test-api-hash
+        run: docker compose -f compose.yaml config --quiet
+
+      - name: Сборка образа Nuvio
         run: docker build -t nuvio:test .
+
+      - name: Сборка локального Telegram Bot API
+        run: docker build -f Dockerfile.telegram-bot-api -t nuvio-telegram-bot-api:test .

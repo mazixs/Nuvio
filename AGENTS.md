@@ -12,7 +12,8 @@
 - YouTube (видео + Shorts), TikTok, Instagram (посты, reels, фото-посты, карусели), Rutube, VK Video
 - Извлечение аудио (MP3 192k через FFmpeg)
 - Кэширование file_id в SQLite (TTL 90 дней)
-- Файлы >50MB выгружаются на Gokapi и отправляются ссылкой
+- Файлы до 2 ГБ отправляются через локальный Telegram Bot API
+- Временные медиа удаляются после отправки или ошибки
 - Защита от спама (4 запроса за 5 секунд → cooldown 10 секунд)
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin`
 - WebUI-дашборд аналитики (FastAPI + Jinja2)
@@ -22,17 +23,17 @@
 
 ## Технологический стек
 
-- **Язык**: Python 3.13+
-- **Бот**: [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) ≥22.0 (async)
-- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) ≥2025.11.12
-- **WebUI**: FastAPI ≥0.115 + Uvicorn + Jinja2
+- **Язык**: Python 3.14+
+- **Бот**: [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) 22.8 (async)
+- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.7.4
+- **WebUI**: FastAPI 0.139.2 + Uvicorn + Jinja2
 - **Базы данных**: SQLite (WAL mode) — две отдельные БД:
   - `video_cache.db` — кэш file_id
   - `analytics.db` — аналитика пользователей и событий
 - **Обработка медиа**: FFmpeg (системная зависимость)
-- **Контейнеризация**: Docker, docker-compose
+- **Контейнеризация**: Docker Compose + локальный Telegram Bot API
 - **Линтер**: ruff
-- **Тестирование**: pytest ≥8.0
+- **Тестирование**: pytest 9.1.1
 
 ---
 
@@ -45,9 +46,10 @@ Nuvio/
 ├── messages.py                  # Все пользовательские тексты (централизовано)
 ├── requirements.txt             # Зависимости Python
 ├── pytest.ini                  # Конфигурация pytest
-├── Dockerfile                  # Сборка образа (python:3.13-slim + ffmpeg)
-├── docker-compose.yml          # Локальная разработка (сборка из исходников)
-├── docker-compose.prod.yml     # Продакшен (образы из GHCR)
+├── Dockerfile                  # Сборка образа (python:3.14-slim + ffmpeg)
+├── Dockerfile.telegram-bot-api # Сборка локального Telegram Bot API
+├── compose.yaml                # Основной стек (GHCR + локальный Bot API)
+├── compose.dev.yaml            # Сборка Nuvio из исходников
 ├── init_env.sh                 # Headless bootstrap для systemd (git pull, pip install, миграция секретов)
 │
 ├── utils/                       # Основная бизнес-логика
@@ -60,7 +62,6 @@ Nuvio/
 │   ├── video_cache.py           # SQLite-кэш file_id (WAL mode, TTL 90 дней)
 │   ├── analytics_db.py          # SQLite-аналитика: таблицы users, events (WAL mode)
 │   ├── ytdlp_runtime.py         # Автообновление yt-dlp, CLI fallback
-│   ├── gokapi_utils.py          # Загрузка файлов >50MB на Gokapi
 │   ├── cookie_manager.py        # Админский интерфейс загрузки cookies через Telegram
 │   ├── cookie_health.py         # Валидация и проверка здоровья cookies
 │   ├── logger.py                # Настройка логирования (rotating file handler, 10MB, 5 backups)
@@ -126,18 +127,21 @@ python -m web
 ### Docker
 
 ```bash
-# Локальная разработка
-cp .env.example .env
-# Заполните TELEGRAM_TOKEN, ADMIN_IDS, WEB_PASSWORD, WEB_PORT
-docker compose up --build
+mkdir -p .secrets
+cp .env.example .secrets/.env
+# Заполните TELEGRAM_TOKEN, ADMIN_IDS, TELEGRAM_API_ID, TELEGRAM_API_HASH
 
-# Продакшен (образ из GHCR)
-TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+# Локальная разработка
+docker compose --env-file .secrets/.env \
+  -f compose.yaml -f compose.dev.yaml up -d --build
+
+# Продакшен (образ Nuvio из GHCR)
+docker compose --env-file .secrets/.env up -d
 ```
 
 ### Системные зависимости
 
-- Python 3.13+
+- Python 3.14+
 - FFmpeg (обязательно для конвертации и извлечения аудио)
 - git (для `init_env.sh` и автообновления yt-dlp)
 
@@ -282,8 +286,8 @@ ruff check --output-format=github .
 |---|---|---|---|
 | `TELEGRAM_TOKEN` | да | — | Токен бота от @BotFather |
 | `ADMIN_IDS` | да | — | Список ID администраторов через запятую |
-| `GOKAPI_API_KEY` | нет | — | API-ключ для Gokapi (>50MB файлы) |
-| `GOKAPI_BASE_URL` | нет | — | Базовый URL сервера Gokapi |
+| `TELEGRAM_API_ID` | да для Docker | — | ID приложения с my.telegram.org |
+| `TELEGRAM_API_HASH` | да для Docker | — | Hash приложения с my.telegram.org |
 | `WEB_USERNAME` | нет | `admin` | Логин для WebUI |
 | `WEB_PASSWORD` | нет | `changeme` | Пароль для WebUI (**сменить!**) |
 | `WEB_SECRET_KEY` | нет | авто | Ключ подписи сессий (64 hex-символа) |

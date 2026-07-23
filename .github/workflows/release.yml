@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: 'pip'
 
       - name: Установка зависимостей
@@ -118,19 +118,20 @@ jobs:
 
             **Docker (рекомендуется):**
             ```bash
-            # Скачать конкретную версию
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
-
-            # Или использовать docker-compose
-            wget https://raw.githubusercontent.com/${{ github.repository }}/v${{ steps.meta.outputs.version }}/docker-compose.prod.yml
-            TAG=${{ steps.meta.outputs.version }} docker compose -f docker-compose.prod.yml up -d
+            git clone --branch v${{ steps.meta.outputs.version }} --depth 1 https://github.com/${{ github.repository }}.git
+            cd Nuvio
+            mkdir -p .secrets
+            cp .env.example .secrets/.env
+            # заполнить TELEGRAM_TOKEN, ADMIN_IDS, TELEGRAM_API_ID и TELEGRAM_API_HASH
+            TAG=${{ steps.meta.outputs.version }} docker compose --env-file .secrets/.env up -d
             ```
 
             **Git:**
             ```bash
             git clone --branch v${{ steps.meta.outputs.version }} --depth 1 https://github.com/${{ github.repository }}.git
             cd Nuvio
-            cp .env.example .env  # настроить переменные
+            mkdir -p .secrets
+            cp .env.example .secrets/.env  # настроить переменные
             pip install -r requirements.txt
             python main.py
             ```

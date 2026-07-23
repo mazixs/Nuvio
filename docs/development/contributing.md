@@ -10,7 +10,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Системные зависимости: FFmpeg, git, Python 3.13+
+Системные зависимости: FFmpeg, git, Python 3.14+
 
 ## Структура кодовой базы
 
@@ -91,7 +91,8 @@ pytest --run-network
 ## Docker
 
 ```bash
-docker-compose up --build
+docker compose --env-file .secrets/.env \
+  -f compose.yaml -f compose.dev.yaml up --build
 ```
 
 Два сервиса: `bot` и `web`. Общий volume `bot-data` для аналитической БД.

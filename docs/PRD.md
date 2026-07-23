@@ -104,16 +104,17 @@ Apache License 2.0 — свободное использование, модиф
 - **Скачать видео** — полное видео с аудио
 - **Только аудио (MP3)** — извлечение аудиодорожки
 
-### 3.4 Обработка больших файлов (>50MB)
+### 3.4 Обработка больших файлов
 
 ```
-Файл >50MB →
-  Gokapi настроен?
-    Да → загрузка на Gokapi → ссылка пользователю (1 скачивание, 7 дней)
-    Нет → сообщение "выберите меньший формат"
+Файл до 2 ГБ →
+  общий временный том →
+  локальный Telegram Bot API →
+  сохранение file_id →
+  удаление временного файла
 ```
 
-Кнопка «Лучшее качество» предупреждает `(может не влезть в ТГ)` если Gokapi не настроен.
+При прямом запуске через облачный Bot API лимит ограничен 50 МБ.
 
 ---
 
@@ -123,15 +124,15 @@ Apache License 2.0 — свободное использование, модиф
 
 | Компонент | Технология |
 |---|---|
-| **Язык** | Python 3.13+ |
+| **Язык** | Python 3.14+ |
 | **Telegram API** | python-telegram-bot 22+ (async) |
 | **Загрузка видео** | yt-dlp (rolling-release, nightly) |
 | **Медиа-обработка** | FFmpeg (извлечение аудио, конвертация, мерж) |
 | **WebUI** | FastAPI + Jinja2 + Uvicorn |
 | **База данных** | SQLite (WAL mode) — кэш + аналитика |
-| **HTTP-клиент** | httpx (async, для Gokapi) |
+| **HTTP-клиент** | httpx |
 | **CI/CD** | GitHub Actions (lint, test, Docker → GHCR) |
-| **Контейнеризация** | Docker (python:3.13-slim + FFmpeg) |
+| **Контейнеризация** | Docker Compose (Nuvio + локальный Bot API) |
 
 ### 4.2 Архитектурные паттерны
 
@@ -173,7 +174,7 @@ Apache License 2.0 — свободное использование, модиф
 URL → get_video_info (cookies-first) → формат-меню → выбор →
   → проверка кэша → [download_content | download_audio_native | download_audio] →
   → FFmpeg (при необходимости) → проверка размера →
-  → [Telegram upload | Gokapi] → сохранение file_id в кэш
+  → локальный Telegram Bot API → сохранение file_id в кэш → очистка
 ```
 
 **TikTok:**
@@ -181,7 +182,7 @@ URL → get_video_info (cookies-first) → формат-меню → выбор 
 URL → get_tiktok_info (3 API-конфига, exponential backoff) →
   → формат-меню → выбор → проверка кэша →
   → download (cookies rotation) → проверка размера →
-  → [Telegram upload | Gokapi] → сохранение file_id в кэш
+  → локальный Telegram Bot API → сохранение file_id в кэш → очистка
 ```
 
 **Instagram:**
@@ -190,7 +191,7 @@ URL → валидация (отсечение Stories, Audio) →
   → get_instagram_info (без cookies → с cookies при ограничении) →
   → формат-меню → выбор → проверка кэша →
   → download (playlist handling) → проверка размера →
-  → [Telegram upload | Gokapi] → сохранение file_id в кэш
+  → локальный Telegram Bot API → сохранение file_id в кэш → очистка
 ```
 
 ### 4.5 Стратегии отказоустойчивости
@@ -312,8 +313,8 @@ URL → валидация (отсечение Stories, Audio) →
 | Ограничение | Значение |
 |---|---|
 | Максимальная длительность видео | 3 часа |
-| Лимит файла Telegram | 50 MB |
-| Файлы >50MB | Gokapi (если настроен) |
+| Лимит локального Bot API | 2 ГБ |
+| Лимит облачного Bot API | 50 МБ |
 | Instagram Stories | Не поддерживаются |
 | Instagram Audio posts | Не поддерживаются |
 
@@ -351,7 +352,7 @@ python main.py           # бот
 python -m web.app        # дашборд (отдельный процесс)
 ```
 
-**Системные зависимости:** Python 3.13+, FFmpeg, git.
+**Системные зависимости:** Python 3.14+, FFmpeg, git.
 
 ### 8.3 Production (GHCR)
 
@@ -362,7 +363,7 @@ python -m web.app        # дашборд (отдельный процесс)
 4. Собирает Docker-образ → GHCR с тегами `latest`, `X.Y.Z`, `X.Y`, `X`
 
 ```bash
-TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+TAG=1.0.0 docker compose --env-file .secrets/.env up -d
 ```
 
 ### 8.4 CI/CD Pipeline
@@ -390,13 +391,13 @@ Tag v* → Release:
 |---|---|
 | `TELEGRAM_TOKEN` | Токен бота от @BotFather |
 | `ADMIN_IDS` | ID администраторов через запятую |
+| `TELEGRAM_API_ID` | ID приложения с my.telegram.org |
+| `TELEGRAM_API_HASH` | Hash приложения с my.telegram.org |
 
 ### 9.2 Опциональные — бот
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `GOKAPI_BASE_URL` | — | URL Gokapi API (для файлов >50MB) |
-| `GOKAPI_API_KEY` | — | API-ключ Gokapi |
 | `DOWNLOAD_WORKERS` | `8` | Размер ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | `600` | Таймаут блокирующих операций (сек) |
 | `LOG_LEVEL` | `INFO` | Уровень логирования |
@@ -431,7 +432,6 @@ Nuvio/
 │   ├── media_processor.py      # FFmpeg: аудио, конвертация, мерж
 │   ├── video_cache.py          # SQLite кэш file_id (WAL, TTL 90 дней)
 │   ├── analytics_db.py         # SQLite аналитика: users, events, метрики
-│   ├── gokapi_utils.py         # Загрузка >50MB на Gokapi
 │   ├── ytdlp_runtime.py        # Авто-обновление yt-dlp
 │   ├── cookie_manager.py       # Админский интерфейс cookies
 │   ├── cookie_health.py        # Валидация cookies
@@ -445,9 +445,10 @@ Nuvio/
 ├── tests/                      # pytest (syntax, unit, integration)
 ├── docs/                       # Документация проекта
 ├── .github/workflows/          # CI (lint + test) и Release (GHCR)
-├── Dockerfile                  # python:3.13-slim + FFmpeg
-├── docker-compose.yml          # Локальная разработка
-├── docker-compose.prod.yml     # Production (GHCR)
+├── Dockerfile                  # python:3.14-slim + FFmpeg
+├── Dockerfile.telegram-bot-api # Сборка локального Bot API
+├── compose.yaml                # Основной стек
+├── compose.dev.yaml            # Сборка Nuvio из исходников
 └── requirements.txt            # Зависимости
 ```
 
@@ -459,7 +460,7 @@ Nuvio/
 |---|---|
 | `python-telegram-bot[job-queue]` ≥22.0 | Telegram Bot API (async) |
 | `yt-dlp[default]` ≥2025.11.12 | Загрузка видео с платформ |
-| `httpx` ≥0.28.0 | HTTP-клиент (Gokapi, health checks) |
+| `httpx` 0.28.1 | HTTP-клиент |
 | `python-dotenv` ≥1.0.1 | Загрузка .env файлов |
 | `fastapi` ≥0.115.0 | WebUI framework |
 | `uvicorn[standard]` ≥0.34.0 | ASGI-сервер для WebUI |
@@ -468,7 +469,7 @@ Nuvio/
 | `python-multipart` ≥0.0.18 | Обработка форм (логин) |
 | `pytest` ≥8.0 | Тестирование |
 
-**Системные:** Python 3.13+, FFmpeg, git.
+**Системные:** Python 3.14+, FFmpeg, git.
 
 ---
 

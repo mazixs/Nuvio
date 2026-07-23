@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nuvio — Telegram-бот для скачивания видео с YouTube, TikTok и Instagram. Python 3.13+, async-архитектура на python-telegram-bot. Включает WebUI-дашборд аналитики (FastAPI).
+Nuvio — Telegram-бот для скачивания видео с YouTube, TikTok и Instagram. Python 3.14+, async-архитектура на python-telegram-bot. Включает WebUI-дашборд аналитики (FastAPI) и локальный Telegram Bot API.
 
 ## Commands
 
@@ -13,7 +13,7 @@ Nuvio — Telegram-бот для скачивания видео с YouTube, Tik
 python main.py
 
 # Docker
-docker-compose up --build
+docker compose --env-file .secrets/.env -f compose.yaml -f compose.dev.yaml up --build
 
 # Тесты
 pytest                              # все тесты
@@ -40,7 +40,6 @@ pip install -r requirements.txt
 - `video_cache.py` — SQLite кэш file_id для мгновенной повторной отправки (WAL mode, TTL 90 дней)
 - `analytics_db.py` — SQLite аналитика: таблицы `users`, `events` (WAL mode)
 - `ytdlp_runtime.py` — авто-обновление yt-dlp, CLI fallback (`python -m yt_dlp`)
-- `gokapi_utils.py` — загрузка файлов >50MB на Gokapi (multipart, API key)
 - `cookie_manager.py` / `cookie_health.py` — админский интерфейс загрузки и валидации cookies
 - `logger.py` — настройка rotating file handler для логирования
 - `cache_commands.py` — команды управления кэшем (очистка, статистика)
@@ -48,7 +47,7 @@ pip install -r requirements.txt
 
 **WebUI** (`web/`): FastAPI + Jinja2 + Uvicorn. Логин, дашборд, список пользователей, детали пользователя. Порт через `WEB_PORT`.
 
-**Поток обработки запроса**: URL → валидация (regex) → получение инфо → кнопки выбора формата → скачивание в ThreadPoolExecutor → проверка кэша (hit → file_id, miss → download & cache) → отправка (<50MB прямая, >50MB → Gokapi).
+**Поток обработки запроса**: URL → валидация (regex) → получение инфо → кнопки выбора формата → скачивание в ThreadPoolExecutor → проверка кэша (hit → file_id, miss → download & cache) → отправка через локальный Telegram Bot API → удаление временного медиа.
 
 ## Key Patterns
 
@@ -66,4 +65,4 @@ pip install -r requirements.txt
 
 ## Environment
 
-Обязательные переменные: `TELEGRAM_TOKEN`, `ADMIN_IDS`. Опциональные: `GOKAPI_BASE_URL`, `GOKAPI_API_KEY`, `WEB_PORT`, `WEB_PASSWORD`, `YTDLP_*`. Шаблон в `.env.example`.
+Обязательные переменные Docker: `TELEGRAM_TOKEN`, `ADMIN_IDS`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`. Опциональные: `WEB_PORT`, `WEB_PASSWORD`, `YTDLP_*`. Шаблон в `.env.example`.
