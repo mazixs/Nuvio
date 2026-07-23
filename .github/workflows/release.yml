@@ -6,39 +6,52 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+  TRIVY_IMAGE: aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
   VALID_TAG_REGEX: '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
 jobs:
-  # ── Тесты перед релизом ──────────────────────────────
   test:
     name: Тесты перед релизом
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Проверка формата тега
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Проверка тега и принадлежности main
         run: |
           if [[ ! "$GITHUB_REF_NAME" =~ $VALID_TAG_REGEX ]]; then
             echo "Некорректный тег релиза: $GITHUB_REF_NAME"
             exit 1
           fi
 
-      - uses: actions/checkout@v6
+          git fetch --no-tags origin main
+          TAG_COMMIT=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "Commit $TAG_COMMIT не входит в origin/main"
+            exit 1
+          fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-          cache: 'pip'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Установка зависимостей
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest ruff
+        run: python -m pip install --requirement requirements-dev.txt
 
       - name: Проверка стиля
         run: ruff check --output-format=github .
@@ -48,130 +61,82 @@ jobs:
           coverage run --branch -m pytest tests/
           coverage report --fail-under=40
 
-  # ── Changelog + GitHub Release ────────────────────────
-  release:
-    name: GitHub Release
-    runs-on: ubuntu-latest
-    needs: [docker]
-    outputs:
-      version: ${{ steps.meta.outputs.version }}
-      changelog: ${{ steps.changelog.outputs.changelog }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Метаданные версии
-        id: meta
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-
-      - name: Генерация changelog
-        id: changelog
-        run: |
-          # Находим предыдущий тег
-          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | head -2 | tail -1)
-          CURRENT_TAG=${GITHUB_REF#refs/tags/}
-
-          if [ "$PREV_TAG" = "$CURRENT_TAG" ] || [ -z "$PREV_TAG" ]; then
-            # Первый релиз — все коммиты
-            RANGE="HEAD"
-          else
-            RANGE="${PREV_TAG}..${CURRENT_TAG}"
-          fi
-
-          echo "Диапазон коммитов: $RANGE"
-
-          # Собираем коммиты по категориям
-          {
-            echo "changelog<<CHANGELOG_EOF"
-
-            # Features
-            FEAT=$(git log "$RANGE" --pretty=format:"- %s" --grep="^feat" --grep="^add" --grep="добавл" -i 2>/dev/null || true)
-            if [ -n "$FEAT" ]; then
-              echo "### ✨ Новое"
-              echo "$FEAT"
-              echo ""
-            fi
-
-            # Fixes
-            FIX=$(git log "$RANGE" --pretty=format:"- %s" --grep="^fix" --grep="исправ" --grep="починк" -i 2>/dev/null || true)
-            if [ -n "$FIX" ]; then
-              echo "### 🐛 Исправления"
-              echo "$FIX"
-              echo ""
-            fi
-
-            # Other changes (all commits not matching above)
-            OTHER=$(git log "$RANGE" --pretty=format:"- %s" 2>/dev/null || true)
-            if [ -n "$OTHER" ]; then
-              echo "### 📦 Все изменения"
-              echo "$OTHER"
-              echo ""
-            fi
-
-            echo "CHANGELOG_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Создание GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          name: "Nuvio v${{ steps.meta.outputs.version }}"
-          tag_name: ${{ steps.meta.outputs.tag }}
-          body: |
-            ## 🚀 Nuvio v${{ steps.meta.outputs.version }}
-
-            ${{ steps.changelog.outputs.changelog }}
-
-            ---
-
-            ### 📥 Установка
-
-            **Docker (рекомендуется):**
-            ```bash
-            git clone --branch v${{ steps.meta.outputs.version }} --depth 1 https://github.com/${{ github.repository }}.git
-            cd Nuvio
-            mkdir -p .secrets
-            cp .env.example .secrets/.env
-            # заполнить TELEGRAM_TOKEN, ADMIN_IDS, TELEGRAM_API_ID и TELEGRAM_API_HASH
-            TAG=${{ steps.meta.outputs.version }} docker compose --env-file .secrets/.env up -d
-            ```
-
-            **Git:**
-            ```bash
-            git clone --branch v${{ steps.meta.outputs.version }} --depth 1 https://github.com/${{ github.repository }}.git
-            cd Nuvio
-            mkdir -p .secrets
-            cp .env.example .secrets/.env  # настроить переменные
-            pip install -r requirements.txt
-            python main.py  # облачный Bot API, лимит отправки 50 МБ
-            ```
-          draft: false
-          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
-          generate_release_notes: true
-
-  # ── Docker → GHCR ────────────────────────────────────
   docker:
     name: Docker → GHCR
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [test]
+    permissions:
+      contents: read
+      packages: write
+    environment:
+      name: production
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Локальная сборка образа для smoke-проверки
-        run: docker build -t nuvio:release-test .
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Smoke-проверка WebUI
+      - name: Авторизация в GHCR
+        uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4.5.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Метаданные Docker
+        id: docker_meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Сборка canonical digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          cache-from: type=gha,scope=nuvio-release
+          cache-to: type=gha,mode=max,scope=nuvio-release
+          provenance: mode=max
+          sbom: true
+
+      - name: Загрузка canonical digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker pull "$REGISTRY_IMAGE@$IMAGE_DIGEST"
+
+      - name: Проверка digest на исправимые уязвимости
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume nuvio-trivy-cache:/root/.cache/trivy \
+            "$TRIVY_IMAGE" image \
+            --scanners vuln \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            "$REGISTRY_IMAGE@$IMAGE_DIGEST"
+
+      - name: Smoke-проверка опубликованного digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           docker run --detach --name nuvio-release-smoke \
             --publish 127.0.0.1:18080:8080 \
-            nuvio:release-test python -m web
+            "$REGISTRY_IMAGE@$IMAGE_DIGEST" python -m web
           for attempt in {1..20}; do
-            if curl --fail --silent http://127.0.0.1:18080/health; then
+            if curl --fail --silent --show-error http://127.0.0.1:18080/health; then
               exit 0
             fi
+            echo "WebUI ещё не готов: попытка ${attempt}/20"
             sleep 1
           done
           docker logs nuvio-release-smoke
@@ -181,28 +146,101 @@ jobs:
         if: always()
         run: docker rm --force nuvio-release-smoke || true
 
-      - name: Авторизация в GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Публикация проверенных тегов
+        env:
+          DOCKER_TAGS: ${{ steps.docker_meta.outputs.tags }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then
+              tag_args+=(--tag "$tag")
+            fi
+          done <<< "$DOCKER_TAGS"
 
-      - name: Метаданные Docker
-        id: docker_meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
+          if [[ ${#tag_args[@]} -eq 0 ]]; then
+            echo "docker/metadata-action не сформировал теги"
+            exit 1
+          fi
 
-      - name: Сборка и пуш образа
-        uses: docker/build-push-action@v7
+          docker buildx imagetools create \
+            "${tag_args[@]}" \
+            "$REGISTRY_IMAGE@$IMAGE_DIGEST"
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [docker]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          context: .
-          push: true
-          tags: ${{ steps.docker_meta.outputs.tags }}
-          labels: ${{ steps.docker_meta.outputs.labels }}
+          fetch-depth: 0
+
+      - name: Метаданные версии
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Генерация release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          CURRENT_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          NOTES_PATH="$RUNNER_TEMP/release-notes.md"
+          PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" --match "v[0-9]*" 2>/dev/null || true)
+
+          if [[ -n "$PREV_TAG" ]]; then
+            RANGE="${PREV_TAG}..${CURRENT_TAG}"
+          else
+            RANGE="$CURRENT_TAG"
+          fi
+
+          FEAT=$(git log "$RANGE" --pretty=format:"- %s" \
+            --regexp-ignore-case \
+            --grep="^feat" --grep="^add" --grep="добавл" || true)
+          FIX=$(git log "$RANGE" --pretty=format:"- %s" \
+            --regexp-ignore-case \
+            --grep="^fix" --grep="исправ" --grep="починк" || true)
+          OTHER=$(git log "$RANGE" --pretty=format:"- %s" \
+            --perl-regexp --regexp-ignore-case --invert-grep \
+            --grep="^(feat|add)|добавл|^(fix)|исправ|починк" || true)
+
+          {
+            printf '## 🚀 Nuvio v%s\n\n' "$VERSION"
+            if [[ -n "$FEAT" ]]; then
+              printf '### ✨ Новое\n%s\n\n' "$FEAT"
+            fi
+            if [[ -n "$FIX" ]]; then
+              printf '### 🐛 Исправления\n%s\n\n' "$FIX"
+            fi
+            if [[ -n "$OTHER" ]]; then
+              printf '### 📦 Остальные изменения\n%s\n\n' "$OTHER"
+            fi
+            printf '%s\n\n' '---'
+            printf '%s\n\n' '### 📥 Установка через Docker'
+            printf '%s\n' '```bash'
+            printf '%s\n' "git clone --branch v${VERSION} --depth 1 https://github.com/${GITHUB_REPOSITORY}.git"
+            printf '%s\n' 'cd Nuvio'
+            printf '%s\n' 'mkdir -p .secrets'
+            printf '%s\n' 'cp .env.example .secrets/.env'
+            printf '%s\n' '# заполнить TELEGRAM_TOKEN, ADMIN_IDS, TELEGRAM_API_ID и TELEGRAM_API_HASH'
+            printf '%s\n' "TAG=${VERSION} docker compose --env-file .secrets/.env up -d"
+            printf '%s\n' '```'
+          } > "$NOTES_PATH"
+
+          echo "path=$NOTES_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Создание GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: "Nuvio v${{ steps.meta.outputs.version }}"
+          tag_name: ${{ steps.meta.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: false

@@ -7,10 +7,18 @@ git clone https://github.com/mazixs/Nuvio.git
 cd Nuvio
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --requirement requirements-dev.txt
 ```
 
 Системные зависимости: FFmpeg, git, Python 3.14+
+
+Прямые зависимости редактируются в `requirements.in` и
+`requirements-dev.in`. После изменения пересоберите lock-файлы с хешами:
+
+```bash
+uv pip compile --python-version 3.14 --generate-hashes --output-file requirements.txt requirements.in
+uv pip compile --python-version 3.14 --generate-hashes --output-file requirements-dev.txt requirements-dev.in
+```
 
 ## Структура кодовой базы
 

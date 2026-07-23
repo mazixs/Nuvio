@@ -25,7 +25,7 @@ coverage run --branch -m pytest tests/
 coverage report --fail-under=40
 
 # Зависимости
-pip install -r requirements.txt
+python -m pip install --requirement requirements-dev.txt
 ```
 
 Прямой запуск использует облачный Bot API с лимитом 50 МБ. Полный

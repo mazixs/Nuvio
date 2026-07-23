@@ -365,9 +365,9 @@ python -m web            # дашборд (отдельный процесс)
 ### 8.3 Production (GHCR)
 
 При пуше тега `v*` GitHub Actions автоматически:
-1. Проверяет тег, стиль, полный набор тестов и покрытие
-2. Собирает и smoke-проверяет Docker-образ
-3. Публикует образ в GHCR с тегами `latest`, `X.Y.Z`, `X.Y`, `X`
+1. Проверяет semver-тег, его принадлежность `main`, стиль, тесты и покрытие
+2. Собирает canonical digest с SBOM/provenance и публикует его без пользовательских тегов
+3. Проверяет digest через Trivy и WebUI smoke, затем назначает ему теги `latest`, `X.Y.Z`, `X.Y`, `X`
 4. Генерирует changelog и создаёт GitHub Release
 
 ```bash
@@ -378,14 +378,15 @@ TAG=1.0.0 docker compose --env-file .secrets/.env up -d
 
 ```
 Push/PR → CI:
-  ├── Lint (ruff)
+  ├── Workflow lint (actionlint) + Python lint (ruff)
   ├── Full tests + coverage ≥40% (Python 3.14)
-  └── Docker build + smoke checks
+  └── Cached Docker build + smoke checks
 
 Tag v* → Release:
-  ├── Validate semver tag
+  ├── Validate semver tag and main ancestry
   ├── Full tests + lint + coverage
-  ├── Docker → GHCR
+  ├── Build/push canonical digest with SBOM/provenance
+  ├── Smoke digest → publish GHCR tags
   ├── Changelog generation
   └── GitHub Release
 ```
@@ -458,7 +459,10 @@ Nuvio/
 ├── Dockerfile.telegram-bot-api # Сборка локального Bot API
 ├── compose.yaml                # Основной стек
 ├── compose.dev.yaml            # Сборка Nuvio из исходников
-└── requirements.txt            # Зависимости
+├── requirements.in             # Прямые runtime-зависимости
+├── requirements.txt            # Runtime lock-файл с хешами
+├── requirements-dev.in         # Прямые dev/CI-зависимости
+└── requirements-dev.txt        # Dev/CI lock-файл с хешами
 ```
 
 ---

@@ -44,7 +44,10 @@ Nuvio/
 ├── main.py                      # Точка входа: event loop, хэндлеры, graceful shutdown
 ├── config.py                    # Парсинг env-переменных, пути к секретам, валидация
 ├── messages.py                  # Все пользовательские тексты (централизовано)
-├── requirements.txt             # Зависимости Python
+├── requirements.in              # Прямые runtime-зависимости
+├── requirements.txt             # Runtime lock-файл с хешами
+├── requirements-dev.in          # Прямые dev/CI-зависимости
+├── requirements-dev.txt         # Dev/CI lock-файл с хешами
 ├── pytest.ini                  # Конфигурация pytest
 ├── Dockerfile                  # Сборка образа (python:3.14-slim + ffmpeg)
 ├── Dockerfile.telegram-bot-api # Сборка локального Telegram Bot API
@@ -110,7 +113,7 @@ git clone https://github.com/mazixs/Nuvio.git
 cd Nuvio
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m pip install --requirement requirements-dev.txt
 
 # Настройка окружения
 mkdir -p .secrets
@@ -187,7 +190,7 @@ coverage report --fail-under=40    # Та же граница, что в CI
 В CI используется **ruff**:
 
 ```bash
-pip install ruff
+python -m pip install --requirement requirements-dev.txt
 ruff check --output-format=github .
 ```
 
@@ -255,15 +258,18 @@ ruff check --output-format=github .
 ### CI (`.github/workflows/ci.yml`)
 
 Запускается на push/PR в `main` и `develop`:
-1. **Линтинг** — `ruff check --output-format=github .`
+1. **Линтинг** — actionlint и `ruff check --output-format=github .`
 2. **Тесты** — полный `pytest tests/` на Python 3.14 с покрытием не ниже 40%.
-3. **Docker build** — сборка и smoke-проверка Nuvio и локального Bot API.
+3. **Docker build** — Buildx-сборка с GHA-кэшем, Trivy-проверка исправимых
+   HIGH/CRITICAL уязвимостей и smoke-проверка Nuvio и локального Bot API.
 
 ### Release (`.github/workflows/release.yml`)
 
 Запускается на push тега `v*`:
-1. **Тесты** — полный набор, ruff и порог покрытия.
-2. **Docker → GHCR** — smoke-проверка, сборка и пуш образа с тегами версий (`latest`, `major.minor`, `major`).
+1. **Тесты** — проверка semver-тега и его принадлежности `main`, полный набор, ruff и порог покрытия.
+2. **Docker → GHCR** — публикация canonical digest с SBOM/provenance,
+   Trivy- и smoke-проверка этого digest и только затем создание тегов
+   (`latest`, `major.minor`, `major`).
 3. **GitHub Release** — генерация changelog и создание релиза только после успешной публикации образа.
 
 ---

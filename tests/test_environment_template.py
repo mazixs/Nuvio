@@ -23,7 +23,7 @@ def test_environment_template_contains_local_bot_api_credentials():
 
 @pytest.mark.unit
 def test_direct_dependencies_are_pinned_to_reviewed_versions():
-    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.in").read_text(encoding="utf-8")
 
     expected = {
         "python-telegram-bot[job-queue]==22.8",
@@ -36,7 +36,6 @@ def test_direct_dependencies_are_pinned_to_reviewed_versions():
         "jinja2==3.1.6",
         "itsdangerous==2.2.0",
         "python-multipart==0.0.32",
-        "pytest==9.1.1",
     }
 
     for dependency in expected:
@@ -47,4 +46,4 @@ def test_direct_dependencies_are_pinned_to_reviewed_versions():
 def test_application_image_uses_python_314():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert dockerfile.startswith("FROM python:3.14-slim\n")
+    assert dockerfile.startswith("FROM python:3.14-slim@sha256:")

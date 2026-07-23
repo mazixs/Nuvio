@@ -3,6 +3,7 @@
 .pytest_cache
 .pytest_tmp
 .ruff_cache
+.coverage
 __pycache__
 *.pyc
 *.db
@@ -16,6 +17,8 @@ downloads/
 .venv/
 tests/
 docs/
+requirements*.in
+requirements-dev.txt
 *.md
 Dockerfile*
 docker-compose*.yml

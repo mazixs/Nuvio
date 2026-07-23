@@ -106,10 +106,13 @@ docker compose --env-file .secrets/.env up -d
 ## CI/CD
 
 - **CI** — полный набор тестов, покрытие не ниже 40%, линтинг и Docker
-  smoke-проверки на каждый push/PR в `main`
+  smoke-проверки и Trivy-сканирование исправимых HIGH/CRITICAL уязвимостей
+  на каждый push/PR в `main` и `develop`
 - **Релиз** — при пуше тега `v*` автоматически:
   - Прогоняются тесты
-  - Собирается Docker-образ и пушится в GHCR с тегами версий
+  - Собирается canonical digest с SBOM и provenance
+  - Опубликованный digest проходит smoke-проверку
+  - Проверенному digest назначаются теги версий в GHCR
   - Генерируется changelog из коммитов
   - Создаётся GitHub Release только после успешной публикации образа
 
@@ -224,7 +227,10 @@ Nuvio/
 ├── Dockerfile.telegram-bot-api
 ├── compose.yaml             # основной стек с локальным Bot API
 ├── compose.dev.yaml         # сборка Nuvio из исходников
-└── requirements.txt
+├── requirements.in          # прямые runtime-зависимости
+├── requirements.txt         # runtime lock-файл с хешами
+├── requirements-dev.in      # прямые инструменты разработки
+└── requirements-dev.txt     # полный dev/CI lock-файл с хешами
 ```
 
 | Модуль | Назначение |
@@ -252,11 +258,20 @@ Nuvio/
 ## Тестирование
 
 ```bash
+python -m pip install --requirement requirements-dev.txt
 pytest                              # все тесты
 pytest tests/test_youtube_smoke.py -v  # один файл с подробным выводом
 pytest -k "test_name"               # запуск конкретного теста
 coverage run --branch -m pytest tests/
 coverage report --fail-under=40     # та же граница, что в CI
+```
+
+`requirements.in` и `requirements-dev.in` содержат прямые зависимости.
+Lock-файлы с хешами пересобираются командами:
+
+```bash
+uv pip compile --python-version 3.14 --generate-hashes --output-file requirements.txt requirements.in
+uv pip compile --python-version 3.14 --generate-hashes --output-file requirements-dev.txt requirements-dev.in
 ```
 
 Маркеры: `syntax`, `unit`, `integration`. Тесты не обращаются к платформам по

@@ -4,22 +4,45 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_IMAGE: rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+  TRIVY_IMAGE: aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
 
 jobs:
   lint:
     name: Линтинг
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-          cache: 'pip'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
-      - name: Установка ruff
-        run: pip install ruff
+      - name: Установка инструментов разработки
+        run: python -m pip install --requirement requirements-dev.txt
+
+      - name: Проверка GitHub Actions
+        run: |
+          docker run --rm \
+            --volume "$PWD:/repo:ro" \
+            --workdir /repo \
+            "$ACTIONLINT_IMAGE" \
+            -color .github/workflows/*.yml
 
       - name: Проверка стиля кода
         run: ruff check --output-format=github .
@@ -27,20 +50,20 @@ jobs:
   test:
     name: Тесты (Python 3.14)
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-          cache: 'pip'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Установка зависимостей
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest ruff
+        run: python -m pip install --requirement requirements-dev.txt
 
       - name: Полный набор тестов с покрытием
         run: |
@@ -50,9 +73,12 @@ jobs:
   docker-build:
     name: Проверка Docker-сборки
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [lint, test]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Проверка Compose
         env:
@@ -62,13 +88,40 @@ jobs:
         run: docker compose -f compose.yaml config --quiet
 
       - name: Сборка образа Nuvio
-        run: docker build -t nuvio:test .
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          tags: nuvio:test
+          cache-from: type=gha,scope=nuvio
+          cache-to: type=gha,mode=max,scope=nuvio
 
       - name: Сборка локального Telegram Bot API
-        run: docker build -f Dockerfile.telegram-bot-api -t nuvio-telegram-bot-api:test .
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.telegram-bot-api
+          load: true
+          tags: nuvio-telegram-bot-api:test
+          cache-from: type=gha,scope=telegram-bot-api
+          cache-to: type=gha,mode=max,scope=telegram-bot-api
 
       - name: Проверка исполняемого файла Telegram Bot API
         run: docker run --rm nuvio-telegram-bot-api:test --version
+
+      - name: Проверка образов на исправимые уязвимости
+        run: |
+          for image in nuvio:test nuvio-telegram-bot-api:test; do
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              --volume nuvio-trivy-cache:/root/.cache/trivy \
+              "$TRIVY_IMAGE" image \
+              --scanners vuln \
+              --exit-code 1 \
+              --ignore-unfixed \
+              --severity HIGH,CRITICAL \
+              "$image"
+          done
 
       - name: Запуск WebUI из собранного образа
         run: |
@@ -76,9 +129,10 @@ jobs:
             --publish 127.0.0.1:18080:8080 \
             nuvio:test python -m web
           for attempt in {1..20}; do
-            if curl --fail --silent http://127.0.0.1:18080/health; then
+            if curl --fail --silent --show-error http://127.0.0.1:18080/health; then
               exit 0
             fi
+            echo "WebUI ещё не готов: попытка ${attempt}/20"
             sleep 1
           done
           docker logs nuvio-web-smoke
