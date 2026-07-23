@@ -36,3 +36,16 @@ def test_classify_polling_error_detects_conflict():
 
     assert category == "POLLING_CONFLICT"
     assert "Параллельный polling" in summary
+
+
+def test_prepare_runtime_storage_removes_orphaned_media(monkeypatch):
+    cleanup_calls = []
+    monkeypatch.setattr(
+        main,
+        "cleanup_temp_files",
+        lambda: cleanup_calls.append("all"),
+    )
+
+    main._prepare_runtime_storage()
+
+    assert cleanup_calls == ["all"]

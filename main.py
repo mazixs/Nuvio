@@ -266,8 +266,15 @@ async def _shutdown_application(application: Application) -> None:
         await application.shutdown()
 
 
+def _prepare_runtime_storage() -> None:
+    """Удаляет медиа, оставшиеся после некорректной остановки."""
+    cleanup_temp_files()
+    logger.info("🧹 Остаточные временные файлы очищены")
+
+
 async def run_bot() -> None:
     """Основной цикл с graceful shutdown (SIGINT/SIGTERM)."""
+    _prepare_runtime_storage()
     try:
         validate_config()
         logger.info("Конфигурация валидна")
