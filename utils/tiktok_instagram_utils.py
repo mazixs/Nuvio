@@ -56,6 +56,24 @@ RETRY_DELAY_BASE = 1  # секунды
 HTTP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 INSTAGRAM_PUBLIC_PAGE_USER_AGENT = HTTP_USER_AGENT
 TIKWM_API_URL = "https://www.tikwm.com/api/"
+
+# === Бюджет ожидания на пути быстрой доставки ===
+# Пока быстрый путь ждёт сокеты, воркер занят, а пользователь видит
+# «Скачиваю…». Поэтому таймауты здесь короткие: при недоступном резолвере
+# суммарная добавленная задержка до откатa на yt-dlp не должна превышать ~15 с.
+
+# Один запрос на развёртывание короткой ссылки (HEAD, при отказе — GET).
+TIKTOK_REDIRECT_TIMEOUT_SECONDS = 6
+# Один запрос к стороннему резолверу прямых ссылок.
+TIKTOK_RESOLVER_TIMEOUT_SECONDS = 6
+# Попыток к резолверу до откатa на yt-dlp: 2 × 6 с = 12 с в худшем случае.
+TIKTOK_RESOLVER_MAX_ATTEMPTS = 2
+# Скачивание самого медиафайла — здесь большой таймаут оправдан: холодный edge
+# CDN отдавал 19.5 МБ за 14.3 с (docs/technical/latency-disk-network-research.md).
+REMOTE_DOWNLOAD_TIMEOUT_SECONDS = 60
+# Фото-пост идёт только через резолвер, откатa на yt-dlp у него нет, поэтому
+# ожидание там остаётся щедрым.
+TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS = 20
 INSTAGRAM_GRAPHQL_URL = "https://www.instagram.com/graphql/query/"
 INSTAGRAM_GRAPHQL_WEB_INFO_DOC_ID = "26072308439129654"
 
@@ -278,7 +296,10 @@ def _resolve_tiktok_url(url: str) -> str:
 
     try:
         response = httpx.head(
-            url, headers=headers, follow_redirects=True, timeout=15
+            url,
+            headers=headers,
+            follow_redirects=True,
+            timeout=TIKTOK_REDIRECT_TIMEOUT_SECONDS,
         )
         if response.status_code < 400:
             return str(response.url)
@@ -292,7 +313,10 @@ def _resolve_tiktok_url(url: str) -> str:
 
     try:
         response = httpx.get(
-            url, headers=headers, follow_redirects=True, timeout=15
+            url,
+            headers=headers,
+            follow_redirects=True,
+            timeout=TIKTOK_REDIRECT_TIMEOUT_SECONDS,
         )
         return str(response.url)
     except Exception as e:
@@ -399,7 +423,7 @@ def _download_remote_file(
             "Referer": referer or "https://www.tiktok.com/",
         },
         follow_redirects=True,
-        timeout=60,
+        timeout=REMOTE_DOWNLOAD_TIMEOUT_SECONDS,
     ) as response:
         response.raise_for_status()
 
@@ -442,7 +466,7 @@ def _fetch_tiktok_photo_post_data(url: str) -> dict[str, Any]:
             params={"url": resolved_url},
             headers={"User-Agent": HTTP_USER_AGENT},
             follow_redirects=True,
-            timeout=20,
+            timeout=TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         payload = response.json()
@@ -467,12 +491,16 @@ def _call_tiktok_resolver(url: str) -> dict[str, Any]:
             params={"url": url},
             headers={"User-Agent": HTTP_USER_AGENT},
             follow_redirects=True,
-            timeout=20,
+            timeout=TIKTOK_RESOLVER_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         return response.json()
 
-    return _smart_retry(_request, max_attempts=3, context="TikTok resolver")
+    return _smart_retry(
+        _request,
+        max_attempts=TIKTOK_RESOLVER_MAX_ATTEMPTS,
+        context="TikTok resolver",
+    )
 
 
 def fetch_tiktok_fast_media(url: str) -> FastMedia:
