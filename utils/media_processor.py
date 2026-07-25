@@ -12,13 +12,34 @@ from utils.temp_file_manager import get_temp_file_path
 logger = setup_logger(__name__)
 
 
+# Кодеки, которые Telegram проигрывает в MP4 без перекодирования.
+TELEGRAM_READY_VIDEO_CODECS = frozenset({"h264", "avc1"})
+TELEGRAM_READY_AUDIO_CODECS = frozenset({"aac", "mp3"})
+
+# Результат проверки FFmpeg кэшируется: бинарь не появляется и не исчезает
+# в течение жизни процесса, а проверка вызывается на каждую операцию.
+_ffmpeg_available: bool | None = None
+
+
+def reset_ffmpeg_probe_cache() -> None:
+    """Сбрасывает кэш проверки наличия FFmpeg."""
+    global _ffmpeg_available
+    _ffmpeg_available = None
+
+
 def check_ffmpeg_installed() -> bool:
     """
     Проверяет, установлен ли FFmpeg в системе.
 
+    Результат кэшируется на время жизни процесса.
+
     Returns:
         bool: True, если FFmpeg установлен, иначе False.
     """
+    global _ffmpeg_available
+    if _ffmpeg_available is not None:
+        return _ffmpeg_available
+
     try:
         result = subprocess.run(
             ["ffmpeg", "-version"],
@@ -26,22 +47,16 @@ def check_ffmpeg_installed() -> bool:
             stderr=subprocess.PIPE,
             text=True,
         )
-        return result.returncode == 0
+        _ffmpeg_available = result.returncode == 0
     except Exception as e:
         logger.error(f"Ошибка при проверке FFmpeg: {e}", exc_info=True)
-        return False
+        _ffmpeg_available = False
+
+    return _ffmpeg_available
 
 
-def get_video_codec(file_path: Path) -> str | None:
-    """
-    Возвращает имя видеокодека для указанного файла с помощью ffprobe.
-
-    Args:
-        file_path (Path): Путь к медиафайлу.
-
-    Returns:
-        str | None: Имя кодека (например, 'h264', 'hevc') или None в случае ошибки.
-    """
+def _probe_codec(file_path: Path, stream_selector: str) -> str | None:
+    """Возвращает имя кодека первого потока выбранного типа через ffprobe."""
     if not check_ffmpeg_installed():
         return None
 
@@ -51,7 +66,7 @@ def get_video_codec(file_path: Path) -> str | None:
             "-v",
             "error",
             "-select_streams",
-            "v:0",
+            stream_selector,
             "-show_entries",
             "stream=codec_name",
             "-print_format",
@@ -79,9 +94,38 @@ def get_video_codec(file_path: Path) -> str | None:
             return streams[0].get("codec_name")
 
     except Exception as e:
-        logger.error(f"Ошибка при получении видеокодека файла {file_path}: {e}", exc_info=True)
+        logger.error(
+            f"Ошибка при получении кодека ({stream_selector}) файла {file_path}: {e}",
+            exc_info=True,
+        )
 
     return None
+
+
+def get_video_codec(file_path: Path) -> str | None:
+    """
+    Возвращает имя видеокодека для указанного файла с помощью ffprobe.
+
+    Args:
+        file_path (Path): Путь к медиафайлу.
+
+    Returns:
+        str | None: Имя кодека (например, 'h264', 'hevc') или None в случае ошибки.
+    """
+    return _probe_codec(file_path, "v:0")
+
+
+def get_audio_codec(file_path: Path) -> str | None:
+    """
+    Возвращает имя аудиокодека для указанного файла с помощью ffprobe.
+
+    Args:
+        file_path (Path): Путь к медиафайлу.
+
+    Returns:
+        str | None: Имя кодека (например, 'aac', 'opus') или None в случае ошибки.
+    """
+    return _probe_codec(file_path, "a:0")
 
 
 def has_audio_stream(file_path: Path) -> bool:
@@ -136,6 +180,36 @@ def has_audio_stream(file_path: Path) -> bool:
 
 
 
+def _build_mp4_command(
+    input_path: Path,
+    output_path: Path,
+    video_codec: str | None,
+    audio_codec: str | None,
+) -> list[str]:
+    """Строит команду FFmpeg для MP4, избегая лишнего перекодирования.
+
+    Смена контейнера на MP4 не требует перекодирования, если потоки уже
+    пригодны для Telegram. Перекодирование H.264-видео стоит секунды, а
+    копирование потока — десятки миллисекунд, поэтому решение принимается
+    по фактическим кодекам. Неизвестный кодек трактуется консервативно —
+    как требующий перекодирования.
+    """
+    command = ["ffmpeg", "-i", str(input_path)]
+    video_ready = (video_codec or "").lower() in TELEGRAM_READY_VIDEO_CODECS
+    audio_ready = (audio_codec or "").lower() in TELEGRAM_READY_AUDIO_CODECS
+
+    if video_ready and audio_ready:
+        command += ["-c", "copy"]
+    elif video_ready:
+        command += ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k"]
+    else:
+        command += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+        command += ["-c:a", "copy"] if audio_ready else ["-c:a", "aac", "-b:a", "128k"]
+
+    command += ["-movflags", "+faststart", "-y", str(output_path)]
+    return command
+
+
 def convert_to_format(
     input_path: Path,
     output_format: str,
@@ -171,14 +245,21 @@ def convert_to_format(
 
         output_path = get_temp_file_path(session_id, output_filename)
 
-        # Команда FFmpeg для конвертации
-        cmd = [
-            "ffmpeg",
-            "-i",
-            str(input_path),
-            "-y",  # Перезаписать выходной файл, если он существует
-            str(output_path),
-        ]
+        if output_format == "mp4":
+            cmd = _build_mp4_command(
+                input_path,
+                output_path,
+                get_video_codec(input_path),
+                get_audio_codec(input_path),
+            )
+        else:
+            cmd = [
+                "ffmpeg",
+                "-i",
+                str(input_path),
+                "-y",  # Перезаписать выходной файл, если он существует
+                str(output_path),
+            ]
 
         # Запуск процесса FFmpeg
         process = subprocess.Popen(
@@ -220,6 +301,77 @@ def convert_to_format(
             f"input_path={input_path}, output_format={output_format}, session_id={session_id}"
         )
         logger.error(f"Ошибка при конвертации файла: {e}", exc_info=True)
+        raise
+
+
+def extract_audio_copy(
+    input_path: Path,
+    session_id: str,
+    output_filename: str | None = None,
+) -> Path:
+    """Извлекает звуковую дорожку без перекодирования.
+
+    TikTok и Instagram отдают AAC, который Telegram проигрывает как есть,
+    поэтому копирование потока в M4A заменяет перекодирование в MP3.
+
+    Args:
+        input_path (Path): Путь к исходному медиафайлу.
+        session_id (str): Идентификатор сессии.
+        output_filename (str | None, optional): Имя выходного файла.
+
+    Returns:
+        Path: Путь к файлу со звуковой дорожкой.
+
+    Raises:
+        Exception: Если FFmpeg отсутствует или файл не был создан.
+    """
+    if not check_ffmpeg_installed():
+        raise Exception(
+            "FFmpeg не установлен. Установите FFmpeg для извлечения звука."
+        )
+
+    if output_filename is None:
+        output_filename = f"{input_path.stem}.m4a"
+
+    output_path = get_temp_file_path(session_id, output_filename)
+
+    cmd = [
+        "ffmpeg",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-c:a",
+        "copy",
+        "-y",
+        str(output_path),
+    ]
+
+    try:
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        try:
+            _, stderr = process.communicate(timeout=BLOCKING_TASK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            _, stderr = process.communicate()
+            raise Exception(
+                f"FFmpeg процесс превысил лимит времени в {BLOCKING_TASK_TIMEOUT} секунд."
+            )
+
+        if process.returncode != 0:
+            logger.error(f"Ошибка FFmpeg при извлечении звука: {stderr}")
+            raise Exception(f"Ошибка при извлечении звука: {stderr}")
+
+        if not output_path.exists():
+            raise Exception("Файл со звуковой дорожкой не был создан")
+
+        logger.info(f"Звук извлечён без перекодирования: {output_path}")
+        return output_path
+
+    except Exception as e:
+        e.add_note(f"input_path={input_path}, session_id={session_id}")
+        logger.error(f"Ошибка при извлечении звука: {e}", exc_info=True)
         raise
 
 

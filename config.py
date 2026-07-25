@@ -97,6 +97,11 @@ MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "8"))
 BLOCKING_TASK_TIMEOUT = int(os.environ.get("BLOCKING_TASK_TIMEOUT", "600"))  # сек
 
+# Быстрый путь TikTok: прямая ссылка резолвера вместо yt-dlp.
+# Отдаёт H.264 со звуком (576x1024), что снимает перекодирование HEVC.
+# При отказе резолвера код автоматически возвращается к пути через yt-dlp.
+TIKTOK_FAST_PATH = _parse_bool(os.environ.get("TIKTOK_FAST_PATH"), default=True)
+
 # Rolling-release стратегия для yt-dlp
 YTDLP_AUTO_UPDATE = _parse_bool(os.environ.get("YTDLP_AUTO_UPDATE"), default=False)
 YTDLP_RELEASE_CHANNEL = _parse_ytdlp_release_channel(

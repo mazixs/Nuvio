@@ -20,8 +20,20 @@ from yt_dlp.networking.impersonate import ImpersonateTarget
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.ytdlp_common import FileSizeLimitError, finalize_downloaded_file
-from utils.media_processor import convert_webm_to_mp4, convert_to_format, get_video_codec, has_audio_stream
-from config import INSTAGRAM_COOKIES_PATH, MAX_FILE_SIZE, TIKTOK_COOKIES_PATH
+from utils.media_processor import (
+    convert_webm_to_mp4,
+    convert_to_format,
+    extract_audio_copy,
+    get_video_codec,
+    has_audio_stream,
+)
+from utils.tiktok_fast_path import FastMedia, parse_fast_media
+from config import (
+    INSTAGRAM_COOKIES_PATH,
+    MAX_FILE_SIZE,
+    TIKTOK_COOKIES_PATH,
+    TIKTOK_FAST_PATH,
+)
 
 logger = setup_logger(__name__)
 
@@ -256,18 +268,50 @@ def _get_tiktok_base_configs() -> list[dict]:
 
 
 def _resolve_tiktok_url(url: str) -> str:
-    """Разворачивает короткие TikTok-ссылки до конечного адреса."""
+    """Разворачивает короткие TikTok-ссылки до конечного адреса.
+
+    Для прохождения редиректов достаточно заголовков ответа, поэтому сначала
+    выполняется HEAD. Тело страницы скачивается только если сервер HEAD не
+    принял — иначе на каждый запрос уходил бы лишний HTML.
+    """
+    headers = {"User-Agent": HTTP_USER_AGENT}
+
+    try:
+        response = httpx.head(
+            url, headers=headers, follow_redirects=True, timeout=15
+        )
+        if response.status_code < 400:
+            return str(response.url)
+        logger.debug(
+            "HEAD для %s вернул %s, повторяем полным запросом",
+            url,
+            response.status_code,
+        )
+    except Exception as e:
+        logger.debug("HEAD для %s не удался (%s), повторяем полным запросом", url, e)
+
     try:
         response = httpx.get(
-            url,
-            headers={"User-Agent": HTTP_USER_AGENT},
-            follow_redirects=True,
-            timeout=15,
+            url, headers=headers, follow_redirects=True, timeout=15
         )
         return str(response.url)
     except Exception as e:
         logger.warning("Не удалось развернуть TikTok URL %s: %s", url, e)
         return url
+
+
+def _audio_format_sort_key(fmt: dict[str, Any]) -> tuple[float, float, int]:
+    """Ключ сортировки аудиокандидатов TikTok. Применять с ``reverse=True``.
+
+    При извлечении звука видеодорожка выбрасывается, поэтому лёгкий формат
+    скачивается быстрее и предпочтительнее. При равных битрейте и размере
+    предпочитаем формат без видео.
+    """
+    return (
+        -(fmt.get("tbr") or 999999),
+        -(fmt.get("filesize") or 999999999),
+        1 if fmt.get("vcodec") == "none" else 0,
+    )
 
 
 def _is_tiktok_photo_post_info(info: dict[str, Any] | None) -> bool:
@@ -375,6 +419,113 @@ def _fetch_tiktok_photo_post_data(url: str) -> dict[str, Any]:
         return data
 
     return _smart_retry(_request, max_attempts=3, context="TikTok photo fallback")
+
+
+def _call_tiktok_resolver(url: str) -> dict[str, Any]:
+    """Запрашивает у резолвера прямые ссылки для TikTok-публикации."""
+
+    def _request() -> dict[str, Any]:
+        response = httpx.get(
+            TIKWM_API_URL,
+            params={"url": url},
+            headers={"User-Agent": HTTP_USER_AGENT},
+            follow_redirects=True,
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    return _smart_retry(_request, max_attempts=3, context="TikTok resolver")
+
+
+def fetch_tiktok_fast_media(url: str) -> FastMedia:
+    """Возвращает прямые ссылки быстрого пути. Ожидает уже развёрнутый URL."""
+    return parse_fast_media(_call_tiktok_resolver(url))
+
+
+def _fast_destination(
+    media: FastMedia,
+    session_id: str,
+    output_dir: Path | None,
+    extension: str,
+    suffix: str = "",
+) -> Path:
+    """Строит путь для файла, скачиваемого по прямой ссылке."""
+    title_seed = _normalize_filename_component(media.title, "tiktok")
+    filename = f"{title_seed}{suffix}{extension}"
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir / filename
+    return get_temp_file_path(session_id, filename)
+
+
+def download_tiktok_video_fast(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+) -> Path:
+    """Скачивает TikTok-видео по прямой ссылке резолвера.
+
+    Резолвер отдаёт H.264 со звуковой дорожкой, поэтому ни мультиплексирование,
+    ни перекодирование HEVC не требуются.
+
+    Raises:
+        FastPathUnavailable: резолвер не дал пригодной прямой ссылки.
+    """
+    resolved_url = _resolve_tiktok_url(url)
+    media = fetch_tiktok_fast_media(resolved_url)
+    destination = _fast_destination(media, session_id, output_dir, ".mp4")
+    downloaded = _download_remote_file(
+        media.video_url, destination, referer="https://www.tiktok.com/"
+    )
+    logger.info(
+        "Быстрый путь TikTok: получено %s байт без обработки FFmpeg", media.size
+    )
+    return finalize_downloaded_file(downloaded, force_local)
+
+
+def download_tiktok_audio_fast(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+) -> Path:
+    """Скачивает звук TikTok-публикации без перекодирования.
+
+    Если ``music`` резолвера — это звук самого видео, он забирается напрямую.
+    Для лицензированного трека ``music`` содержит полную песню, поэтому звук
+    извлекается из видео копированием потока.
+
+    Raises:
+        FastPathUnavailable: резолвер не дал пригодной прямой ссылки.
+    """
+    resolved_url = _resolve_tiktok_url(url)
+    media = fetch_tiktok_fast_media(resolved_url)
+
+    if media.audio_url:
+        destination = _fast_destination(
+            media,
+            session_id,
+            output_dir,
+            _guess_extension(media.audio_url, ".mp3"),
+            suffix="_audio",
+        )
+        downloaded = _download_remote_file(
+            media.audio_url, destination, referer="https://www.tiktok.com/"
+        )
+        return finalize_downloaded_file(downloaded, force_local)
+
+    logger.info(
+        "Звук публикации — библиотечный трек, извлекаем дорожку из видео"
+    )
+    video_destination = _fast_destination(media, session_id, output_dir, ".mp4")
+    video_path = _download_remote_file(
+        media.video_url, video_destination, referer="https://www.tiktok.com/"
+    )
+    audio_path = extract_audio_copy(video_path, session_id)
+    video_path.unlink(missing_ok=True)
+    return finalize_downloaded_file(audio_path, force_local)
 
 
 def _build_tiktok_photo_info(url: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1278,6 +1429,19 @@ def download_tiktok_video(
                 f"{MAX_FILE_SIZE // 1024 // 1024} МБ"
             )
 
+    if TIKTOK_FAST_PATH:
+        try:
+            return download_tiktok_video_fast(
+                url, session_id, output_dir, force_local
+            )
+        except FileSizeLimitError:
+            raise
+        except Exception as fast_error:
+            logger.warning(
+                "Быстрый путь TikTok не сработал (%s), используем yt-dlp",
+                fast_error,
+            )
+
     if output_dir is None:
         output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")
     else:
@@ -1754,6 +1918,19 @@ def download_tiktok_audio(
             url, session_id, output_dir, force_local, cached_info
         )
 
+    if TIKTOK_FAST_PATH:
+        try:
+            return download_tiktok_audio_fast(
+                url, session_id, output_dir, force_local
+            )
+        except FileSizeLimitError:
+            raise
+        except Exception as fast_error:
+            logger.warning(
+                "Быстрый путь аудио TikTok не сработал (%s), используем yt-dlp",
+                fast_error,
+            )
+
     if output_dir is None:
         output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")
     else:
@@ -1777,16 +1954,7 @@ def download_tiktok_audio(
             if f.get("acodec") != "none" and f.get("format_id")
         ]
 
-        # Сортируем форматы: более легкие файлы (меньший tbr / filesize) должны идти первыми,
-        # так как при извлечении аудио видеодорожка выбрасывается, а меньший файл скачивается быстрее.
-        def format_sort_key(f):
-            return (
-                -(f.get("tbr") or 999999),
-                -(f.get("filesize") or 999999999),
-                1 if f.get("vcodec") != "none" else 0
-            )
-
-        audio_formats.sort(key=format_sort_key, reverse=True)
+        audio_formats.sort(key=_audio_format_sort_key, reverse=True)
 
         # Если форматы не обнаружены, используем дефолтный bestaudio/best
         if not audio_formats:
