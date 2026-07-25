@@ -351,6 +351,43 @@ def _guess_extension(url: str, default_ext: str) -> str:
     return default_ext
 
 
+def _ensure_ios_compatible_video(
+    video_path: Path, session_id: str, source: str
+) -> Path:
+    """Приводит видео к H.264, если оно пришло в HEVC/H.265.
+
+    Плеер Telegram на iOS искажает пропорции HEVC-видео и теряет звук — это
+    требование ADR-001, общее для всех путей скачивания. Сбой проверки или
+    перекодирования не должен ломать доставку, поэтому в этом случае
+    возвращается исходный файл.
+    """
+    try:
+        codec = get_video_codec(video_path)
+        if codec not in ("hevc", "h265"):
+            return video_path
+
+        logger.info(
+            "Обнаружен HEVC/H.265 видеофайл (%s), конвертируем в H.264 для "
+            "совместимости с iOS: %s",
+            source,
+            video_path,
+        )
+        converted_file = convert_to_format(video_path, "mp4", session_id)
+        if video_path.exists() and video_path != converted_file:
+            video_path.unlink()
+        logger.info("Конвертация HEVC в H.264 завершена: %s", converted_file)
+        return converted_file
+    except Exception as e:
+        logger.warning(
+            "Не удалось проверить или конвертировать HEVC в H.264 (%s): %s. "
+            "Используем исходный файл.",
+            source,
+            e,
+            exc_info=True,
+        )
+        return video_path
+
+
 def _download_remote_file(
     url: str, destination: Path, referer: str | None = None
 ) -> Path:
@@ -479,8 +516,11 @@ def download_tiktok_video_fast(
     downloaded = _download_remote_file(
         media.video_url, destination, referer="https://www.tiktok.com/"
     )
-    logger.info(
-        "Быстрый путь TikTok: получено %s байт без обработки FFmpeg", media.size
+    logger.info("Быстрый путь TikTok: получено %s байт", media.size)
+    # Резолвер обычно отдаёт H.264, но состав `play` — не наш контракт, поэтому
+    # кодек проверяется так же, как на пути через yt-dlp (ADR-001).
+    downloaded = _ensure_ios_compatible_video(
+        downloaded, session_id, "быстрый путь TikTok"
     )
     return finalize_downloaded_file(downloaded, force_local)
 
@@ -1533,23 +1573,9 @@ def download_tiktok_video(
                                 exc_info=True,
                             )
 
-                    # Проверяем видеокодек. Если это HEVC/H.265, конвертируем его в H.264 для лучшей совместимости с iOS (Telegram iOS)
-                    try:
-                        codec = get_video_codec(downloaded_file)
-                        if codec in ("hevc", "h265"):
-                            logger.info(
-                                f"Обнаружен HEVC/H.265 видеофайл, конвертируем в H.264 для совместимости с iOS: {downloaded_file}"
-                            )
-                            converted_file = convert_to_format(downloaded_file, "mp4", session_id)
-                            if downloaded_file.exists() and downloaded_file != converted_file:
-                                downloaded_file.unlink()
-                            downloaded_file = converted_file
-                            logger.info(f"Конвертация HEVC в H.264 завершена: {downloaded_file}")
-                    except Exception as e:
-                        logger.warning(
-                            f"Не удалось проверить или конвертировать HEVC в H.264: {e}. Используем исходный файл.",
-                            exc_info=True,
-                        )
+                    downloaded_file = _ensure_ios_compatible_video(
+                        downloaded_file, session_id, "TikTok"
+                    )
 
                     return finalize_downloaded_file(downloaded_file, force_local)
 
@@ -1727,23 +1753,9 @@ def download_instagram_video(
                         "Файл не был загружен, хотя ydl.extract_info завершился."
                     )
 
-            # Проверяем видеокодек. Если это HEVC/H.265, конвертируем его в H.264 для лучшей совместимости с iOS (Telegram iOS)
-            try:
-                codec = get_video_codec(downloaded_file)
-                if codec in ("hevc", "h265"):
-                    logger.info(
-                        f"Обнаружен HEVC/H.265 видеофайл Instagram, конвертируем в H.264 для совместимости с iOS: {downloaded_file}"
-                    )
-                    converted_file = convert_to_format(downloaded_file, "mp4", session_id)
-                    if downloaded_file.exists() and downloaded_file != converted_file:
-                        downloaded_file.unlink()
-                    downloaded_file = converted_file
-                    logger.info(f"Конвертация HEVC в H.264 завершена: {downloaded_file}")
-            except Exception as e:
-                logger.warning(
-                    f"Не удалось проверить или конвертировать HEVC в H.264 для Instagram: {e}. Используем исходный файл.",
-                    exc_info=True,
-                )
+            downloaded_file = _ensure_ios_compatible_video(
+                downloaded_file, session_id, "Instagram"
+            )
 
             return finalize_downloaded_file(downloaded_file, force_local)
 

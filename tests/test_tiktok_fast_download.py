@@ -90,6 +90,64 @@ def test_fast_video_download_uses_direct_url(monkeypatch, tmp_path, fake_downloa
 
 
 @pytest.mark.unit
+def test_fast_video_transcodes_hevc_from_resolver(monkeypatch, tmp_path, fake_downloads):
+    """ADR-001: HEVC нельзя отдавать в Telegram, даже если его прислал резолвер.
+
+    Резолвер может начать отдавать в `play` HEVC при смене тарифа/региона, и
+    результат попадёт в кэш file_id на 90 дней.
+    """
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(),
+    )
+    monkeypatch.setattr(tiktok_instagram_utils, "get_video_codec", lambda path: "hevc")
+    converted = tmp_path / "converted.mp4"
+
+    def _fake_convert(input_path, output_format, session_id, output_filename=None):
+        assert output_format == "mp4"
+        converted.write_bytes(b"h264")
+        return converted
+
+    monkeypatch.setattr(tiktok_instagram_utils, "convert_to_format", _fake_convert)
+
+    result = tiktok_instagram_utils.download_tiktok_video_fast(
+        "https://vt.tiktok.com/example/",
+        "session-hevc",
+        output_dir=tmp_path,
+    )
+
+    assert Path(result) == converted
+    assert not (tmp_path / "Клип.mp4").exists(), "исходный HEVC должен удаляться"
+
+
+@pytest.mark.unit
+def test_fast_video_keeps_h264_without_transcode(monkeypatch, tmp_path, fake_downloads):
+    """H.264 из резолвера — обычный случай, перекодирование запускать нельзя."""
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(),
+    )
+    monkeypatch.setattr(tiktok_instagram_utils, "get_video_codec", lambda path: "h264")
+
+    def _forbidden_convert(*args, **kwargs):
+        raise AssertionError("H.264 не должен перекодироваться")
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "convert_to_format", _forbidden_convert
+    )
+
+    result = tiktok_instagram_utils.download_tiktok_video_fast(
+        "https://vt.tiktok.com/example/",
+        "session-h264",
+        output_dir=tmp_path,
+    )
+
+    assert Path(result).name == "Клип.mp4"
+
+
+@pytest.mark.unit
 def test_fast_audio_uses_music_url_for_original_sound(
     monkeypatch, tmp_path, fake_downloads
 ):
