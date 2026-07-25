@@ -27,9 +27,12 @@ from utils.media_processor import (
     get_video_codec,
     has_audio_stream,
 )
-from utils.tiktok_fast_path import FastMedia, FastPathUnavailable, parse_fast_media
+from utils.fast_path import FastPathUnavailable
+from utils.instagram_fast_path import InstagramFastMedia, parse_instagram_fast_media
+from utils.tiktok_fast_path import FastMedia, parse_fast_media
 from config import (
     INSTAGRAM_COOKIES_PATH,
+    INSTAGRAM_FAST_PATH,
     MAX_FILE_SIZE,
     TIKTOK_COOKIES_PATH,
     TIKTOK_FAST_PATH,
@@ -68,6 +71,11 @@ TIKTOK_REDIRECT_TIMEOUT_SECONDS = 6
 TIKTOK_RESOLVER_TIMEOUT_SECONDS = 6
 # Попыток к резолверу до откатa на yt-dlp: 2 × 6 с = 12 с в худшем случае.
 TIKTOK_RESOLVER_MAX_ATTEMPTS = 2
+# Один запрос к GraphQL Instagram за прямой ссылкой. На реальных рилсах ответ
+# приходил за 0.9–1.1 с, поэтому 6 с — запас, а не рабочее время.
+INSTAGRAM_FAST_PATH_TIMEOUT_SECONDS = 6
+# Попыток к GraphQL до откатa на yt-dlp: 2 × 6 с = 12 с в худшем случае.
+INSTAGRAM_FAST_PATH_MAX_ATTEMPTS = 2
 # Скачивание самого медиафайла — здесь большой таймаут оправдан: холодный edge
 # CDN отдавал 19.5 МБ за 14.3 с (docs/technical/latency-disk-network-research.md).
 REMOTE_DOWNLOAD_TIMEOUT_SECONDS = 60
@@ -528,6 +536,71 @@ def fetch_tiktok_fast_media(url: str) -> FastMedia:
     return parse_fast_media(_call_tiktok_resolver(url))
 
 
+def fetch_instagram_fast_media(url: str) -> InstagramFastMedia:
+    """Возвращает прямую ссылку на видео Instagram из ответа GraphQL.
+
+    Raises:
+        FastPathUnavailable: shortcode не разобран, GraphQL не дал прямой
+            ссылки, это карусель или ссылка вне allowlist.
+    """
+    shortcode = _extract_instagram_shortcode(url)
+    if not shortcode:
+        raise FastPathUnavailable(
+            "не удалось определить shortcode Instagram-публикации"
+        )
+
+    canonical_url = f"https://www.instagram.com/p/{shortcode}/"
+    media = _smart_retry(
+        lambda: _fetch_public_instagram_graphql_media(
+            canonical_url,
+            shortcode,
+            timeout=INSTAGRAM_FAST_PATH_TIMEOUT_SECONDS,
+        ),
+        max_attempts=INSTAGRAM_FAST_PATH_MAX_ATTEMPTS,
+        context="Instagram fast path",
+    )
+    return parse_instagram_fast_media(media)
+
+
+def download_instagram_video_fast(
+    url: str,
+    session_id: str,
+    output_dir: Path | None = None,
+    force_local: bool = False,
+) -> Path:
+    """Скачивает видео Instagram по прямой ссылке из GraphQL.
+
+    Instagram отдаёт H.264 + AAC, поэтому ни мультиплексирование, ни
+    перекодирование не требуются.
+
+    Raises:
+        FastPathUnavailable: GraphQL не дал пригодной прямой ссылки.
+    """
+    media = fetch_instagram_fast_media(url)
+
+    title_seed = _normalize_filename_component(media.title, "instagram")
+    filename = f"{title_seed}.mp4"
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        destination = output_dir / filename
+    else:
+        destination = get_temp_file_path(session_id, filename)
+
+    downloaded = _download_remote_file(
+        media.video_url,
+        destination,
+        referer="https://www.instagram.com/",
+        expected_content_type="video/",
+    )
+    logger.info("Быстрый путь Instagram: файл получен по прямой ссылке")
+    # Состав ссылки — не наш контракт, поэтому кодек проверяется так же, как на
+    # пути через yt-dlp (ADR-001).
+    downloaded = _ensure_ios_compatible_video(
+        downloaded, session_id, "быстрый путь Instagram"
+    )
+    return finalize_downloaded_file(downloaded, force_local)
+
+
 def _fast_destination(
     media: FastMedia,
     session_id: str,
@@ -947,8 +1020,14 @@ def _extract_instagram_audio_url(media: dict[str, Any]) -> str | None:
 
 
 def _fetch_public_instagram_graphql_media(
-    canonical_url: str, shortcode: str
+    canonical_url: str, shortcode: str, timeout: float | None = None
 ) -> dict[str, Any]:
+    """Запрашивает у GraphQL Instagram данные публикации.
+
+    ``timeout`` задаётся быстрым путём, которому нужен короткий бюджет ожидания.
+    Сбор фото-постов оставлен на прежних 20 секундах: там откатa на yt-dlp нет,
+    и обрыв запроса означал бы отказ пользователю.
+    """
     with httpx.Client(
         headers={
             "User-Agent": INSTAGRAM_PUBLIC_PAGE_USER_AGENT,
@@ -959,7 +1038,7 @@ def _fetch_public_instagram_graphql_media(
             "Referer": canonical_url,
         },
         follow_redirects=True,
-        timeout=20,
+        timeout=timeout if timeout is not None else 20,
     ) as client:
         response = client.get(
             INSTAGRAM_GRAPHQL_URL,
@@ -1727,6 +1806,19 @@ def download_instagram_video(
         raise Exception(
             "Instagram фото-пост нужно отправлять как набор изображений и отдельное аудио."
         )
+
+    if INSTAGRAM_FAST_PATH:
+        try:
+            return download_instagram_video_fast(
+                url, session_id, output_dir, force_local
+            )
+        except FileSizeLimitError:
+            raise
+        except Exception as fast_error:
+            logger.warning(
+                "Быстрый путь Instagram не сработал (%s), используем yt-dlp",
+                fast_error,
+            )
 
     if output_dir is None:
         output_path_template = get_temp_file_path(session_id, "%(title)s.%(ext)s")

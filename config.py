@@ -102,6 +102,13 @@ BLOCKING_TASK_TIMEOUT = int(os.environ.get("BLOCKING_TASK_TIMEOUT", "600"))  # �
 # При отказе резолвера код автоматически возвращается к пути через yt-dlp.
 TIKTOK_FAST_PATH = _parse_bool(os.environ.get("TIKTOK_FAST_PATH"), default=True)
 
+# Быстрый путь Instagram: прямая ссылка из GraphQL вместо yt-dlp.
+# Instagram отдаёт H.264 + AAC, поэтому перекодирование не требуется.
+# При отказе GraphQL код автоматически возвращается к пути через yt-dlp.
+INSTAGRAM_FAST_PATH = _parse_bool(
+    os.environ.get("INSTAGRAM_FAST_PATH"), default=True
+)
+
 # Rolling-release стратегия для yt-dlp
 YTDLP_AUTO_UPDATE = _parse_bool(os.environ.get("YTDLP_AUTO_UPDATE"), default=False)
 YTDLP_RELEASE_CHANNEL = _parse_ytdlp_release_channel(
