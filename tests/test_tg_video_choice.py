@@ -2,7 +2,11 @@
 
 import pytest
 
-from utils.tg_video_choice import select_tg_video_format
+from utils.tg_video_choice import (
+    list_audio_options,
+    list_video_options,
+    select_tg_video_format,
+)
 
 
 MB = 1024 * 1024
@@ -294,3 +298,102 @@ def test_cascade_continues_until_something_fits():
     choice = select_tg_video_format(video, audio, [], LOCAL_BUDGET)
 
     assert choice.height == 480
+# --- список разрешений для меню --------------------------------------------
+
+
+@pytest.mark.unit
+def test_menu_lists_every_available_resolution_from_high_to_low():
+    """Меню обещает выбор, поэтому показывает все проходные разрешения."""
+    options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert [option.height for option in options] == [2160, 1440, 1080, 720, 480, 360]
+
+
+@pytest.mark.unit
+def test_menu_pairs_1080p_with_the_telegram_ready_pair():
+    options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+    option = next(o for o in options if o.height == 1080)
+
+    assert option.format_id == "299+140"
+    assert option.size == int(301.2 * MB) + int(29.7 * MB)
+
+
+@pytest.mark.unit
+def test_ready_single_file_needs_no_audio_pairing():
+    """У готового combined-формата звук уже внутри — склеивать нечего."""
+    options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+    option = next(o for o in options if o.height == 360)
+
+    assert option.format_id == "18"
+    assert option.size == int(61.7 * MB)
+
+
+@pytest.mark.unit
+def test_tight_budget_leaves_only_what_actually_fits():
+    """В облачном режиме под 50 МБ проходит лишь 480p, и то не на H.264."""
+    options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, CLOUD_BUDGET)
+
+    assert [option.height for option in options] == [480]
+    assert options[0].format_id == "397+139"
+    assert options[0].size <= CLOUD_BUDGET
+
+
+@pytest.mark.unit
+def test_resolution_without_a_known_size_is_still_offered():
+    """Размер неизвестен — это не повод скрывать разрешение от пользователя."""
+    video_only = [
+        {"format_id": "271", "height": 1440, "ext": "webm", "vcodec": "vp9"},
+    ]
+
+    options = list_video_options(video_only, AUDIO_ONLY, [], LOCAL_BUDGET)
+
+    assert [option.height for option in options] == [1440]
+    assert options[0].size == 0
+    assert options[0].format_id == "271+140"
+
+
+@pytest.mark.unit
+def test_nothing_available_gives_an_empty_list():
+    assert list_video_options([], [], [], LOCAL_BUDGET) == []
+
+
+# --- список аудиодорожек для меню ------------------------------------------
+
+
+@pytest.mark.unit
+def test_audio_menu_offers_only_tracks_telegram_plays():
+    """Opus в WebM Telegram аудио не считает — предлагать его нельзя."""
+    options = list_audio_options(AUDIO_ONLY, LOCAL_BUDGET)
+
+    assert [option.format_id for option in options] == ["140", "139"]
+    assert all(option.ext == "m4a" for option in options)
+
+
+@pytest.mark.unit
+def test_audio_menu_puts_the_better_track_first():
+    options = list_audio_options(AUDIO_ONLY, LOCAL_BUDGET)
+
+    assert options[0].size > options[1].size
+
+
+@pytest.mark.unit
+def test_audio_menu_drops_tracks_over_the_budget():
+    options = list_audio_options(AUDIO_ONLY, 20 * MB)
+
+    assert [option.format_id for option in options] == ["139"]
+
+
+@pytest.mark.unit
+def test_audio_menu_keeps_a_track_without_a_known_size():
+    options = list_audio_options(
+        [{"format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2"}], LOCAL_BUDGET
+    )
+
+    assert [option.size for option in options] == [0]
+
+
+@pytest.mark.unit
+def test_audio_menu_is_empty_without_a_playable_track():
+    webm_only = [{"format_id": "251", "ext": "webm", "acodec": "opus", "filesize": MB}]
+
+    assert list_audio_options(webm_only, LOCAL_BUDGET) == []

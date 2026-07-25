@@ -72,10 +72,12 @@ def test_main_action_cache_keys_are_explicit():
 
 
 def test_format_selection_cache_keys_preserve_scope():
+    """Ключ есть только у combined: остальные ветви меню удалены вместе с кнопками."""
     assert cache_key_for_format_selection("combined", "18") == "combined:18"
-    assert cache_key_for_format_selection("video_only", "137") == "video_only:137"
-    assert cache_key_for_format_selection("best", "ignored") == "best"
+    assert cache_key_for_format_selection("combined", "299+140") == "combined:299+140"
     assert cache_key_for_format_selection("audio_only", "140") is None
+    assert cache_key_for_format_selection("video_only", "137") is None
+    assert cache_key_for_format_selection("best", "ignored") is None
 
 
 def test_main_action_cache_keys_cover_rutube_and_vk():
@@ -152,8 +154,8 @@ def test_youtube_main_actions_read_cache():
 def test_format_selection_path_reads_cache():
     """Выбор конкретного формата YouTube тоже обязан проверять кэш.
 
-    Ключи `combined:<id>`, `video_only:<id>` и `best` пишутся в кэш, поэтому
-    без чтения они так же расходовали бы TTL без единого попадания.
+    Ключ `combined:<id>` пишется в кэш, поэтому без чтения он так же
+    расходовал бы TTL без единого попадания.
     """
     tree = ast.parse(TELEGRAM_UTILS_PATH.read_text(encoding="utf-8"))
 

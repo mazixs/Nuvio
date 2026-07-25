@@ -97,7 +97,6 @@ ERROR_FILE_TOO_LARGE_TELEGRAM = (
     "📁 Файл слишком большой для отправки через Telegram (макс. 50 МБ)"
 )
 SUBTITLE_CAPTION = "📝 Субтитры (SRT)"
-MP3_MIN_LABEL = "🎵 MP3 (минимальный размер)"
 
 # === КНОПКИ ===
 BTN_TG_VIDEO = "📹 Скачать видео для ТГ"
@@ -108,10 +107,23 @@ BTN_DOWNLOAD_VIDEO = "Скачать видео"
 BTN_DOWNLOAD_POST = "Скачать пост"
 BTN_AUDIO_ONLY = "Только аудио (MP3)"
 BTN_SUBTITLES = "📝 Скачать субтитры (SRT)"
+BTN_SECTION_VIDEO = "🎬 Видео"
+BTN_SECTION_AUDIO = "🎵 Аудио"
+BTN_SECTION_SUBTITLES = "📝 Субтитры"
+BTN_AUDIO_TRANSCODE = "🎵 Звук (перекодируем в M4A)"
+
+# === ЭКРАНЫ ВЫБОРА ===
+CHOOSE_SECTION_MESSAGE = "Что нужно скачать?"
+CHOOSE_RESOLUTION_MESSAGE = (
+    "Выберите разрешение. Показаны только те, что пройдут по лимиту отправки."
+)
+CHOOSE_AUDIO_MESSAGE = "Выберите звуковую дорожку:"
+NO_VIDEO_OPTIONS_MESSAGE = (
+    "❌ У этого видео нет разрешений, которые проходят по лимиту отправки."
+)
+NO_AUDIO_OPTIONS_MESSAGE = "❌ У этого видео нет звуковой дорожки."
 
 # === ПОДПИСИ К ФОРМАТАМ ===
-BEST_QUALITY_LABEL = "⭐ Лучшее качество (видео + аудио)"
-BEST_AUDIO_LABEL = "🎵 Лучшее аудио"
 FILE_PREPARING = "Файл готовится к отправке..."
 FILE_SENT = "✅ Файл успешно отправлен!"
 

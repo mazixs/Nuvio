@@ -168,6 +168,7 @@ Fixtures и hooks — `tests/conftest.py`, там же лёгкая заглуш
 - **`messages.py`** — лимит Telegram 4096 символов на сообщение
 - **`config.py`** — новая env-переменная требует обновления `.env.example` (иначе падает тест) и `README.md`
 - **`callback_fsm.py` + `telegram_utils.py`** — смена формата `callback_data` ломает уже отправленные пользователям кнопки; сопровождай тестами разбора событий
+- **Меню форматов** — два уровня: разделы (`main|video_menu`, `main|audio_menu`, `main|subtitles`), затем выбор. Из `format`-действий живы только `combined` и `audio_only`; `best`, `audio_best`, `mp3_min` и `video_only` удалены вместе с кнопками и закреплены в `test_dead_code_contract.py`
 - **`youtube_utils.py`** — цепочка fallback чувствительна к порядку операций
 - **`tests/conftest.py`** — заглушка `yt_dlp` используется всем набором
 - **Схемы SQLite** — учитывай WAL и необходимость миграции существующих установок (образец — миграция `last_csi_sent` в `analytics_db.py`)

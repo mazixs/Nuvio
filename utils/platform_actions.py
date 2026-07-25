@@ -28,8 +28,4 @@ def cache_key_for_format_selection(
     """Возвращает ключ кэша для расширенного формата YouTube."""
     if content_type == "combined":
         return f"combined:{format_id}"
-    if content_type == "video_only":
-        return f"video_only:{format_id}"
-    if content_type == "best":
-        return "best"
     return None

@@ -15,11 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.unit
 def test_url_handoff_leftovers_are_removed():
-    """Передачи файла по URL в sendVideo в коде нет — остатки не нужны.
+    """Остатки первой, невзлетевшей попытки доставки по URL не возвращаются.
 
     URL_HANDOFF_LIMIT_BYTES, fits_url_handoff и FastMedia.cover использовались
-    только тестами, а CLAUDE.md при этом обещал «проверку лимита передачи
-    по URL», которой в поведении бота не существует.
+    только тестами. Работающая доставка по ссылке живёт в utils/url_delivery.py
+    и меряет лимит сама — дублировать её константы в разборе ответа резолвера
+    незачем.
     """
     assert not hasattr(tiktok_fast_path, "URL_HANDOFF_LIMIT_BYTES")
     assert not hasattr(tiktok_fast_path, "fits_url_handoff")
@@ -42,9 +43,28 @@ def test_obsolete_message_constants_are_removed():
         "AUDIO_ONLY_LABEL",
         "VIDEO_ONLY_LABEL",
         "COMBINED_LABEL",
+        # Кнопки убраны при переходе на каскадное меню: «Лучшее качество» и
+        # «Лучшее аудио» дублировали первый экран, MP3 требовал перекодирования
+        # там, где родная дорожка уже пригодна.
+        "BEST_QUALITY_LABEL",
+        "BEST_AUDIO_LABEL",
+        "MP3_MIN_LABEL",
     }
 
     assert obsolete_names.isdisjoint(vars(messages))
+
+
+def test_flat_format_menu_is_not_back():
+    """Плоское меню с лимитами «не более 3» и дедупликацией по тексту удалено."""
+    assert not hasattr(telegram_utils, "_build_youtube_more_menu")
+
+    from utils import media_processor
+
+    assert not hasattr(media_processor, "convert_to_mp3_with_compression")
+
+    source = (ROOT / "utils" / "telegram_utils.py").read_text(encoding="utf-8")
+    for gone in ('"mp3_min"', '"audio_best"', '"video_only":\n'):
+        assert gone not in source, gone
 
 
 def test_obsolete_cache_helpers_are_removed():

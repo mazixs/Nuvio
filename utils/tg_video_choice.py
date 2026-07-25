@@ -77,6 +77,133 @@ def _audio_sort_key(fmt: dict[str, Any]) -> tuple[int, int]:
     )
 
 
+@dataclass(frozen=True)
+class VideoOption:
+    """Один пункт меню разрешений."""
+
+    height: int
+    format_id: str
+    ext: str
+    size: int  # 0 — размер неизвестен
+
+
+@dataclass(frozen=True)
+class AudioOption:
+    """Один пункт меню звуковых дорожек."""
+
+    format_id: str
+    ext: str
+    size: int  # 0 — размер неизвестен
+
+
+def list_audio_options(
+    audio_only: Sequence[dict[str, Any]], budget_bytes: int
+) -> list[AudioOption]:
+    """Возвращает родные дорожки, пригодные для отправки как аудио.
+
+    Opus в WebM Telegram аудиофайлом не считает, поэтому такие дорожки в меню
+    не попадают: предлагать их — значит обещать то, что не воспроизведётся.
+    Перекодирование здесь не рассматривается, речь только о родном звуке.
+    """
+    playable = [
+        fmt
+        for fmt in audio_only
+        if _codec_rank(fmt.get("acodec"), TELEGRAM_READY_AUDIO_CODECS) == 0
+        and (
+            not isinstance(fmt.get("filesize"), int)
+            or fmt["filesize"] <= budget_bytes
+        )
+    ]
+    return [
+        AudioOption(
+            format_id=str(fmt["format_id"]),
+            ext=fmt.get("ext") or "m4a",
+            size=fmt["filesize"] if isinstance(fmt.get("filesize"), int) else 0,
+        )
+        for fmt in sorted(
+            playable,
+            key=lambda fmt: -(
+                fmt["filesize"] if isinstance(fmt.get("filesize"), int) else 0
+            ),
+        )
+    ]
+
+
+def _best_pair(
+    video: dict[str, Any], audios: Sequence[dict[str, Any]], budget_bytes: int
+) -> tuple[str, int] | None:
+    """Подбирает к видеодорожке звук, с которым пара влезает в бюджет."""
+    if not isinstance(video.get("filesize"), int):
+        # Размер неизвестен — сверять с бюджетом нечего, звук берём лучший.
+        if not audios:
+            return None
+        return f"{video['format_id']}+{audios[0]['format_id']}", 0
+
+    for audio in audios:
+        total = video["filesize"] + audio["filesize"]
+        if total <= budget_bytes:
+            return f"{video['format_id']}+{audio['format_id']}", total
+    return None
+
+
+def list_video_options(
+    video_only: Sequence[dict[str, Any]],
+    audio_only: Sequence[dict[str, Any]],
+    combined: Sequence[dict[str, Any]],
+    budget_bytes: int,
+) -> list[VideoOption]:
+    """Возвращает по одному пункту на разрешение, от высокого к низкому.
+
+    Меню обещает выбор, поэтому потолок разрешения здесь не действует — в
+    отличие от кнопки «отправить в Telegram». Отсекается только то, что не
+    влезает в лимит доставки: предлагать заведомо неотправляемый файл значит
+    обещать невыполнимое.
+
+    Внутри одного разрешения работают те же правила, что у кнопки: сначала
+    H.264, затем меньший размер; готовый ``combined`` предпочтительнее пары,
+    потому что его не нужно склеивать FFmpeg.
+    """
+    audios = sorted(_sized(audio_only), key=_audio_sort_key)
+    options: dict[int, VideoOption] = {}
+
+    ready = sorted(
+        (fmt for fmt in _sized(combined) if fmt["filesize"] <= budget_bytes),
+        key=_video_sort_key,
+    )
+    for fmt in ready:
+        height = fmt.get("height") or 0
+        options.setdefault(
+            height,
+            VideoOption(
+                height=height,
+                format_id=str(fmt["format_id"]),
+                ext=fmt.get("ext") or "mp4",
+                size=fmt["filesize"],
+            ),
+        )
+
+    # Форматы без размера сортируются после форматов с размером: у них тот же
+    # ключ, но проверить бюджет нельзя, поэтому в приоритете известное.
+    tracks = sorted(_sized(video_only), key=_video_sort_key) + [
+        fmt for fmt in video_only if not isinstance(fmt.get("filesize"), int)
+    ]
+    for fmt in tracks:
+        height = fmt.get("height") or 0
+        if height in options:
+            continue
+        pair = _best_pair(fmt, audios, budget_bytes)
+        if pair:
+            format_id, size = pair
+            options[height] = VideoOption(
+                height=height,
+                format_id=format_id,
+                ext=fmt.get("ext") or "mp4",
+                size=size,
+            )
+
+    return sorted(options.values(), key=lambda option: -option.height)
+
+
 def select_tg_video_format(
     video_only: Sequence[dict[str, Any]],
     audio_only: Sequence[dict[str, Any]],
