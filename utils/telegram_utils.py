@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import contextlib
 import functools
 import io
 import traceback
@@ -22,7 +23,11 @@ from config import (
     TELEGRAM_LOCAL_MODE,
 )
 from utils.logger import setup_logger
-from utils.tg_video_choice import select_tg_video_format
+from utils.tg_video_choice import (
+    list_audio_options,
+    list_video_options,
+    select_tg_video_format,
+)
 from utils.analytics_db import (
     init_db as _init_analytics,
     track_user,
@@ -40,7 +45,6 @@ from utils.youtube_utils import (
     download_audio_native,
     download_subtitles,
 )
-from utils.media_processor import convert_to_mp3_with_compression
 from utils.temp_file_manager import create_temp_dir, cleanup_temp_files
 from utils.callback_fsm import CallbackEvent, SessionStore
 from utils.file_delivery import media_kind_for_suffix
@@ -72,8 +76,6 @@ from messages import (
     FILE_PREPARING,
     FILE_SENT,
     DOWNLOAD_FORMAT_PROMPT,
-    BEST_QUALITY_LABEL,
-    BEST_AUDIO_LABEL,
     CHOOSE_ANOTHER_FORMAT,
     NO_SUBTITLES_AVAILABLE,
     NO_TG_VIDEO,
@@ -86,12 +88,19 @@ from messages import (
     BTN_DOWNLOAD_VIDEO,
     BTN_DOWNLOAD_POST,
     BTN_AUDIO_ONLY,
-    BTN_SUBTITLES,
+    BTN_SECTION_VIDEO,
+    BTN_SECTION_AUDIO,
+    BTN_SECTION_SUBTITLES,
+    BTN_AUDIO_TRANSCODE,
+    CHOOSE_SECTION_MESSAGE,
+    CHOOSE_RESOLUTION_MESSAGE,
+    CHOOSE_AUDIO_MESSAGE,
+    NO_VIDEO_OPTIONS_MESSAGE,
+    NO_AUDIO_OPTIONS_MESSAGE,
     ERROR_FALLBACK,
     ERROR_NETWORK,
     ERROR_FILE_TOO_LARGE_TELEGRAM,
     SUBTITLE_CAPTION,
-    MP3_MIN_LABEL,
     SPAM_WARNING,
     USER_ERROR_WITH_CODE,
     USER_NETWORK_ERROR_WITH_CODE,
@@ -354,8 +363,10 @@ def _build_main_menu(
     platform: str,
     video_info: dict,
     session_token: str,
+    formats: dict | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Возвращает текст и клавиатуру главного меню для платформы."""
+    formats = formats or {}
     title = escape_markdown(str(video_info.get("title") or "Video"))
     uploader = escape_markdown(str(video_info.get("uploader") or "N/A"))
     duration = format_duration(int(video_info.get("duration") or 0))
@@ -498,140 +509,173 @@ def _build_main_menu(
                 BTN_TG_VIDEO,
                 callback_data=_make_callback_data(session_token, "main", "tg_video"),
             )
-        ],
-        [
-            InlineKeyboardButton(
-                BTN_AUDIO_M4A,
-                callback_data=_make_callback_data(session_token, "main", "audio_m4a"),
-            )
-        ],
+        ]
+    ]
+    # Кнопка звука рисуется только когда звук есть: у беззвучного видео она
+    # раньше приводила к отказу уже после нажатия.
+    if formats.get("audio_only"):
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    BTN_AUDIO_M4A,
+                    callback_data=_make_callback_data(
+                        session_token, "main", "audio_m4a"
+                    ),
+                )
+            ]
+        )
+    keyboard.append(
         [
             InlineKeyboardButton(
                 BTN_MORE,
                 callback_data=_make_callback_data(session_token, "main", "more"),
             )
-        ],
-    ]
+        ]
+    )
     text = _build_youtube_prompt(video_info)
     return text, InlineKeyboardMarkup(keyboard)
 
 
-def _build_youtube_more_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup:
-    """Расширенное меню форматов для YouTube."""
-    keyboard = []
-    added_button_labels = set()
-    combined_count = 0
+def _format_size(size: int) -> str:
+    """Размер для подписи кнопки; для неизвестного размера — пустая строка."""
+    if size <= 0:
+        return ""
+    if size >= 1024 * 1024 * 1024:
+        return f" · {size / 1024 / 1024 / 1024:.1f} ГБ"
+    return f" · {size / 1024 / 1024:.0f} МБ"
 
-    for fmt in formats.get("combined", []):
-        label = f"📹+🔊 {fmt.get('height', 'N/A')}p - {fmt.get('ext', 'mp4').upper()}"
-        if label in added_button_labels or combined_count >= 3:
-            continue
+
+def _button_row(label: str, session_token: str, scope: str, action: str, value=None):
+    """Строка клавиатуры из одной кнопки."""
+    return [
+        InlineKeyboardButton(
+            label,
+            callback_data=_make_callback_data(session_token, scope, action, value),
+        )
+    ]
+
+
+def _build_more_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup:
+    """Разделы расширенного меню.
+
+    Раньше здесь лежал плоский список: до трёх combined, до трёх «без звука», до
+    двух аудио, плюс «Лучшее качество», «Лучшее аудио» и MP3. Ограничения
+    прятали форматы (из 22 доступных было видно шесть), а дедупликация по тексту
+    кнопки скрывала одно разрешение за другим. Теперь выбор идёт по разделам, и
+    ни одно доступное разрешение не теряется.
+    """
+    keyboard = [_button_row(BTN_SECTION_VIDEO, session_token, "main", "video_menu")]
+    if formats.get("audio_only"):
         keyboard.append(
-            [
-                InlineKeyboardButton(
-                    label,
-                    callback_data=_make_callback_data(
-                        session_token, "format", "combined", fmt["format_id"]
-                    ),
-                )
-            ]
+            _button_row(BTN_SECTION_AUDIO, session_token, "main", "audio_menu")
         )
-        added_button_labels.add(label)
-        combined_count += 1
-
-    video_only_count = 0
-    for fmt in formats.get("video_only", []):
-        label = f"📹 {fmt.get('height', 'N/A')}p - {fmt.get('ext', 'mp4').upper()} (без звука)"
-        if label in added_button_labels or video_only_count >= 3:
-            continue
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    label,
-                    callback_data=_make_callback_data(
-                        session_token, "format", "video_only", fmt["format_id"]
-                    ),
-                )
-            ]
-        )
-        added_button_labels.add(label)
-        video_only_count += 1
-
-    audio_only = formats.get("audio_only", [])
-    audio_only_count = 0
-    for fmt in audio_only:
-        label = f"🔊 Только аудио - {fmt.get('ext', 'm4a').upper()}"
-        if label in added_button_labels or audio_only_count >= 2:
-            continue
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    label,
-                    callback_data=_make_callback_data(
-                        session_token, "format", "audio_only", fmt["format_id"]
-                    ),
-                )
-            ]
-        )
-        added_button_labels.add(label)
-        audio_only_count += 1
-
-    if audio_only:
-        min_m4a = min(
-            [f for f in audio_only if f.get("ext") == "m4a"],
-            key=lambda x: x.get("filesize", float("inf")),
-            default=None,
-        )
-        if min_m4a:
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        MP3_MIN_LABEL,
-                        callback_data=_make_callback_data(
-                            session_token, "format", "mp3_min", min_m4a["format_id"]
-                        ),
-                    )
-                ]
-            )
-
-    best_label = BEST_QUALITY_LABEL
     keyboard.append(
-        [
-            InlineKeyboardButton(
-                best_label,
-                callback_data=_make_callback_data(
-                    session_token, "format", "best", "best"
-                ),
-            )
-        ]
+        _button_row(BTN_SECTION_SUBTITLES, session_token, "main", "subtitles")
     )
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                BEST_AUDIO_LABEL,
-                callback_data=_make_callback_data(
-                    session_token, "format", "audio_best", "bestaudio"
-                ),
-            )
-        ]
-    )
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                BTN_SUBTITLES,
-                callback_data=_make_callback_data(session_token, "main", "subtitles"),
-            )
-        ]
-    )
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                BTN_BACK,
-                callback_data=_make_callback_data(session_token, "main", "back"),
-            )
-        ]
-    )
+    keyboard.append(_button_row(BTN_BACK, session_token, "main", "back"))
     return InlineKeyboardMarkup(keyboard)
+
+
+def _build_video_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup | None:
+    """Меню разрешений: по одной кнопке на разрешение, от высокого к низкому.
+
+    Returns:
+        None, если ни одно разрешение не проходит по лимиту доставки.
+    """
+    options = list_video_options(
+        formats.get("video_only", []),
+        formats.get("audio_only", []),
+        formats.get("combined", []),
+        MAX_FILE_SIZE,
+    )
+    if not options:
+        return None
+
+    keyboard = [
+        _button_row(
+            f"{option.height}p{_format_size(option.size)}",
+            session_token,
+            "format",
+            "combined",
+            option.format_id,
+        )
+        for option in options
+    ]
+    keyboard.append(_button_row(BTN_BACK, session_token, "main", "more"))
+    return InlineKeyboardMarkup(keyboard)
+
+
+def _build_audio_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup | None:
+    """Меню звуковых дорожек: только родные и только пригодные для Telegram.
+
+    Если родной пригодной дорожки нет, предлагается единственный вариант с
+    перекодированием — иначе звук у таких видео был бы недоступен вовсе.
+
+    Returns:
+        None, если у видео нет звука вообще.
+    """
+    if not formats.get("audio_only"):
+        return None
+
+    options = list_audio_options(formats.get("audio_only", []), MAX_FILE_SIZE)
+    if options:
+        keyboard = [
+            _button_row(
+                f"🎵 {option.ext.upper()}{_format_size(option.size)}",
+                session_token,
+                "format",
+                "audio_only",
+                option.format_id,
+            )
+            for option in options
+        ]
+    else:
+        keyboard = [
+            _button_row(BTN_AUDIO_TRANSCODE, session_token, "main", "audio_m4a")
+        ]
+    keyboard.append(_button_row(BTN_BACK, session_token, "main", "more"))
+    return InlineKeyboardMarkup(keyboard)
+
+
+# Telegram гасит отметку активности через пять секунд, поэтому её обновляем чаще.
+_CHAT_ACTION_REFRESH_SECONDS = 4
+
+
+def _chat_action_for(action: str) -> str:
+    """Подбирает отметку активности под характер работы."""
+    if "audio" in action or action == "subtitles":
+        return telegram.constants.ChatAction.UPLOAD_DOCUMENT
+    return telegram.constants.ChatAction.UPLOAD_VIDEO
+
+
+@contextlib.asynccontextmanager
+async def _pulsing_chat_action(chat, action: str, enabled: bool = True):
+    """Держит отметку «отправляет видео…» в шапке чата на всё время работы.
+
+    Это единственная анимация, доступная боту: рисовать «крутилку» правкой
+    текста значило бы запрос на каждый кадр и затирание статусов. Отметка —
+    украшение, поэтому её отказ работу не роняет.
+    """
+    if not enabled:
+        yield
+        return
+
+    async def _pulse() -> None:
+        while True:
+            try:
+                await chat.send_action(action)
+            except telegram.error.TelegramError as error:
+                logger.debug("Отметка активности не отправлена: %s", error)
+                return
+            await asyncio.sleep(_CHAT_ACTION_REFRESH_SECONDS)
+
+    task = asyncio.create_task(_pulse())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 def _should_rate_limit_callback(callback_data: str | None) -> bool:
@@ -1183,7 +1227,9 @@ async def process_url(
                 platform="youtube",
                 formats=formats,
             )
-            text, reply_markup = _build_main_menu("youtube", video_info, session_token)
+            text, reply_markup = _build_main_menu(
+                "youtube", video_info, session_token, formats
+            )
             await processing_message.edit_text(
                 text, reply_markup=reply_markup, parse_mode="Markdown"
             )
@@ -2196,9 +2242,32 @@ async def _handle_main_callback(
         case "more":
             await safe_edit_message_text(
                 query,
-                _build_youtube_prompt(session_data["video_info"]),
-                reply_markup=_build_youtube_more_menu(formats, session_token),
-                parse_mode="Markdown",
+                CHOOSE_SECTION_MESSAGE,
+                reply_markup=_build_more_menu(formats, session_token),
+            )
+            return
+
+        case "video_menu":
+            markup = _build_video_menu(formats, session_token)
+            if markup is None:
+                await safe_edit_message_text(
+                    query, NO_VIDEO_OPTIONS_MESSAGE, reply_markup=back_markup
+                )
+                return
+            await safe_edit_message_text(
+                query, CHOOSE_RESOLUTION_MESSAGE, reply_markup=markup
+            )
+            return
+
+        case "audio_menu":
+            markup = _build_audio_menu(formats, session_token)
+            if markup is None:
+                await safe_edit_message_text(
+                    query, NO_AUDIO_OPTIONS_MESSAGE, reply_markup=back_markup
+                )
+                return
+            await safe_edit_message_text(
+                query, CHOOSE_AUDIO_MESSAGE, reply_markup=markup
             )
             return
 
@@ -2239,7 +2308,7 @@ async def _handle_main_callback(
 
         case "back":
             text, reply_markup = _build_main_menu(
-                platform, session_data["video_info"], session_token
+                platform, session_data["video_info"], session_token, formats
             )
             await safe_edit_message_text(
                 query,
@@ -2273,44 +2342,7 @@ async def _handle_format_callback(
     session_id = session_data["session_id"]
     formats = session_data.get("formats", {})
 
-    if content_type == "mp3_min":
-        await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-        audio_only = formats.get("audio_only", [])
-        min_m4a = next(
-            (
-                f
-                for f in audio_only
-                if f.get("format_id") == format_id and f.get("ext") == "m4a"
-            ),
-            None,
-        )
-        if not min_m4a:
-            await query.edit_message_text(ERROR_MESSAGE)
-            await _cleanup_user_session(user_id, context, session_token)
-            return
-
-        m4a_path = await run_blocking(
-            download_audio,
-            url,
-            min_m4a["format_id"],
-            session_id,
-            True,
-            description="download_audio_min",
-        )
-        mp3_path = await run_blocking(
-            convert_to_mp3_with_compression,
-            m4a_path,
-            session_id,
-            description="convert_to_mp3_with_compression",
-        )
-        try:
-            m4a_path.unlink()
-        except Exception:
-            pass
-        await send_file(query, mp3_path, session_token, session_data, context)
-        return
-
-    if content_type in ("audio_only", "audio_best"):
+    if content_type == "audio_only":
         await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
     else:
         await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
@@ -2348,21 +2380,9 @@ async def _handle_format_callback(
                 file_path = await download_content(
                     url, format_id, session_id, "combined"
                 )
-            case "video_only":
-                file_path = await download_content(
-                    url, format_id, session_id, "video_only"
-                )
             case "audio_only":
                 file_path = await download_content(
                     url, format_id, session_id, "audio_only"
-                )
-            case "best":
-                file_path = await download_content(
-                    url, "bestvideo+bestaudio", session_id, "best"
-                )
-            case "audio_best":
-                file_path = await download_content(
-                    url, "bestaudio", session_id, "audio_best"
                 )
 
         if not file_path:
@@ -2407,7 +2427,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     session_token: str | None = None
     now = asyncio.get_running_loop().time()
 
-    if _should_rate_limit_callback(query.data) and _check_spam(user_id, context, now):
+    expensive = _should_rate_limit_callback(query.data)
+    if expensive and _check_spam(user_id, context, now):
         await query.answer(text=SPAM_WARNING, show_alert=False)
         return
 
@@ -2422,13 +2443,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         event = CallbackEvent.parse(query.data)
         if event and event.scope == "main" and event.session_token:
             session_token = event.session_token
-            await _handle_main_callback(
-                query,
-                context,
-                user_id,
-                session_token,
-                event.action,
-            )
+            # Скачивание и отправка идут секунды: пока они идут, в шапке чата
+            # держится отметка активности — иначе пользователь смотрит в
+            # неподвижный текст и не понимает, жив ли бот.
+            async with _pulsing_chat_action(
+                query.message.chat, _chat_action_for(event.action), expensive
+            ):
+                await _handle_main_callback(
+                    query,
+                    context,
+                    user_id,
+                    session_token,
+                    event.action,
+                )
         elif (
             event
             and event.scope == "format"
@@ -2436,14 +2463,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             and event.value
         ):
             session_token = event.session_token
-            await _handle_format_callback(
-                query,
-                context,
-                user_id,
-                session_token,
-                event.action,
-                event.value,
-            )
+            async with _pulsing_chat_action(
+                query.message.chat, _chat_action_for(event.action), expensive
+            ):
+                await _handle_format_callback(
+                    query,
+                    context,
+                    user_id,
+                    session_token,
+                    event.action,
+                    event.value,
+                )
         elif event and event.scope == "csi" and event.value:
             rating = int(event.value)
             csi_id = save_csi_rating(user_id, rating)
@@ -2530,14 +2560,6 @@ async def download_content(
                 session_id,
                 description="download_video_combined_simple",
             )
-        if content_type == "video_only":
-            return await run_blocking(
-                download_video,
-                url,
-                format_id,
-                session_id,
-                description="download_video_only",
-            )
         if content_type == "audio_only":
             return await run_blocking(
                 download_audio,
@@ -2545,33 +2567,6 @@ async def download_content(
                 format_id,
                 session_id,
                 description="download_audio_only",
-            )
-        if content_type == "best":
-            try:
-                return await run_blocking(
-                    download_video,
-                    url,
-                    "bestvideo+bestaudio/best",
-                    session_id,
-                    description="download_video_best_combo",
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось скачать bestvideo+bestaudio: {e}")
-                logger.info("Пробуем скачать в формате best")
-                return await run_blocking(
-                    download_video,
-                    url,
-                    "best",
-                    session_id,
-                    description="download_video_best",
-                )
-        if content_type == "audio_best":
-            return await run_blocking(
-                download_audio,
-                url,
-                "bestaudio",
-                session_id,
-                description="download_audio_bestaudio_only",
             )
         raise ValueError(f"Неподдерживаемый content_type: {content_type}")
     except Exception as e:
