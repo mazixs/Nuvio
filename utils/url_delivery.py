@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlparse
 
 from utils.fast_path import is_allowed_media_url
 from utils.instagram_fast_path import ALLOWED_INSTAGRAM_MEDIA_DOMAINS
@@ -31,7 +32,9 @@ __all__ = [
     "ALLOWED_HANDOFF_DOMAINS",
     "MAX_HANDOFF_BYTES",
     "MAX_PHOTO_HANDOFF_BYTES",
+    "HANDOFF_REFUSAL_COOLDOWN_SECONDS",
     "HandoffKind",
+    "HandoffRefusals",
     "PhotoPostHandoff",
     "UrlHandoff",
     "find_format_url",
@@ -103,6 +106,59 @@ def plan_url_handoff(
     if not url or not is_allowed_media_url(url, ALLOWED_HANDOFF_DOMAINS):
         return None
     return UrlHandoff(url=url, kind=kind, size=size)
+
+
+# Сколько помнить отказ CDN. Проверено: CDN TikTok отдаёт ссылку на видео любому
+# клиенту, но инфраструктуре Telegram отказывает — 6 попыток из 6, при том что
+# картинки того же CDN и видео Instagram уходят нормально. Повторять такую
+# попытку бессмысленно, но и запрещать навсегда нельзя: политика CDN меняется.
+HANDOFF_REFUSAL_COOLDOWN_SECONDS = 900
+
+
+def _handoff_domain(url: str) -> str | None:
+    """Возвращает домен из allowlist, которому принадлежит ссылка.
+
+    Ключом служит именно он, а не хост: CDN отдаёт медиа с разных краёв
+    (``v16m``, ``v19m``), и отказ относится к политике CDN, а не к конкретному
+    краю.
+    """
+    try:
+        host = (urlparse(url or "").hostname or "").lower().rstrip(".")
+    except ValueError:
+        return None
+    for domain in ALLOWED_HANDOFF_DOMAINS:
+        if host == domain or host.endswith(f".{domain}"):
+            return domain
+    return None
+
+
+class HandoffRefusals:
+    """Помнит, какие CDN Telegram недавно не смог обслужить.
+
+    Гранулярность — «домен плюс вид медиа»: измерено, что картинки TikTok
+    уходили ссылкой в то же время, когда видео того же CDN уже отказывало.
+    """
+
+    def __init__(self, cooldown_seconds: int = HANDOFF_REFUSAL_COOLDOWN_SECONDS):
+        self.cooldown_seconds = cooldown_seconds
+        self._seen: dict[tuple[str, str], float] = {}
+
+    def remember(self, url: str, kind: HandoffKind, now: float) -> None:
+        domain = _handoff_domain(url)
+        if domain:
+            self._seen[(domain, kind)] = now
+
+    def is_cooling_down(self, url: str, kind: HandoffKind, now: float) -> bool:
+        domain = _handoff_domain(url)
+        if not domain:
+            return False
+        refused_at = self._seen.get((domain, kind))
+        if refused_at is None:
+            return False
+        if now - refused_at > self.cooldown_seconds:
+            del self._seen[(domain, kind)]
+            return False
+        return True
 
 
 def find_format_url(video_info: dict | None, format_id: str) -> str | None:

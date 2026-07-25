@@ -13,7 +13,7 @@ import pytest
 import telegram
 
 from utils import telegram_utils, tiktok_instagram_utils
-from utils.url_delivery import PhotoPostHandoff, UrlHandoff
+from utils.url_delivery import HandoffRefusals, PhotoPostHandoff, UrlHandoff
 
 
 MB = 1024 * 1024
@@ -96,6 +96,13 @@ def test_empty_post_has_nothing_to_hand_over(sizes):
 
 
 # --- отправка поста ссылками ------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def clean_refusal_memory(monkeypatch):
+    """Память отказов живёт в модуле, поэтому тесты обнуляют её каждый раз."""
+    monkeypatch.setattr(telegram_utils, "_HANDOFF_REFUSALS", HandoffRefusals())
+
 
 
 def _query(reply_photo, reply_audio=None):

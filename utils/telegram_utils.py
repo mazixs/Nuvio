@@ -59,6 +59,7 @@ from utils.public_errors import (
     youtube_error_code,
 )
 from utils.url_delivery import (
+    HandoffRefusals,
     PhotoPostHandoff,
     UrlHandoff,
     find_format_url,
@@ -974,6 +975,13 @@ async def _deliver_by_url(
         через скачивание файла.
     """
     size_mb = plan.size / 1024 / 1024
+    now = asyncio.get_running_loop().time()
+    if _HANDOFF_REFUSALS.is_cooling_down(plan.url, plan.kind, now):
+        logger.info(
+            "Пропускаю доставку ссылкой (%s): CDN недавно отказал Telegram", plan.kind
+        )
+        return False
+
     try:
         match plan.kind:
             case "video":
@@ -985,6 +993,7 @@ async def _deliver_by_url(
             case _:
                 message = await query.message.reply_photo(photo=plan.url, caption=None)
     except telegram.error.TelegramError as e:
+        _HANDOFF_REFUSALS.remember(plan.url, plan.kind, now)
         logger.warning(
             "Telegram не принял ссылку (%s, %.2f МБ): %s — уходим на скачивание",
             plan.kind,
@@ -1001,6 +1010,13 @@ async def _deliver_by_url(
     return True
 
 
+# CDN может отказать инфраструктуре Telegram, оставаясь доступным для нас;
+# тогда попытка отдать ссылку — чистая потеря 0.3 с на каждом запросе. Память
+# отказов гасит попытки на время и сама возвращает их, когда политика CDN
+# меняется. Живёт в процессе: переживать перезапуск ей незачем.
+_HANDOFF_REFUSALS = HandoffRefusals()
+
+
 async def _deliver_photo_post_by_url(
     query: telegram.CallbackQuery, plan: PhotoPostHandoff
 ) -> bool:
@@ -1015,12 +1031,19 @@ async def _deliver_photo_post_by_url(
             ушла. Повторять пост нельзя — пользователь получил бы дубли, —
             поэтому ошибка поднимается наверх к обычной обработке.
     """
+    now = asyncio.get_running_loop().time()
+    first = plan.images[0]
+    if _HANDOFF_REFUSALS.is_cooling_down(first.url, first.kind, now):
+        logger.info("Пропускаю фото-пост ссылками: CDN недавно отказал Telegram")
+        return False
+
     for index, image in enumerate(plan.images):
         try:
             await query.message.reply_photo(photo=image.url, caption=None)
         except telegram.error.TelegramError as error:
             if index:
                 raise
+            _HANDOFF_REFUSALS.remember(image.url, image.kind, now)
             logger.warning(
                 "Telegram не принял ссылку на картинку: %s — уходим на скачивание",
                 error,
