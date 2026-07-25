@@ -207,7 +207,7 @@ def test_download_tiktok_video_skips_fast_path_when_disabled(
 
 
 @pytest.mark.unit
-def test_fast_video_reuses_already_resolved_url(monkeypatch, tmp_path):
+def test_fast_video_reuses_already_resolved_url(monkeypatch, tmp_path, fake_downloads):
     """Ссылку уже развернул вызывающий код — повторный запрос лишний."""
     resolves: list[str] = []
 
@@ -216,15 +216,6 @@ def test_fast_video_reuses_already_resolved_url(monkeypatch, tmp_path):
         return "https://www.tiktok.com/@tester/video/1"
 
     monkeypatch.setattr(tiktok_instagram_utils, "_resolve_tiktok_url", _resolve)
-
-    def _fake_download(url, destination, referer=None):
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(b"media")
-        return destination
-
-    monkeypatch.setattr(
-        tiktok_instagram_utils, "_download_remote_file", _fake_download
-    )
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_call_tiktok_resolver",
@@ -242,7 +233,7 @@ def test_fast_video_reuses_already_resolved_url(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
-def test_download_tiktok_video_resolves_url_once(monkeypatch, tmp_path):
+def test_download_tiktok_video_resolves_url_once(monkeypatch, tmp_path, fake_downloads):
     """На одну доставку должно приходиться одно развёртывание ссылки."""
     resolves: list[str] = []
 
@@ -251,15 +242,6 @@ def test_download_tiktok_video_resolves_url_once(monkeypatch, tmp_path):
         return "https://www.tiktok.com/@tester/video/1"
 
     monkeypatch.setattr(tiktok_instagram_utils, "_resolve_tiktok_url", _resolve)
-
-    def _fake_download(url, destination, referer=None):
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(b"media")
-        return destination
-
-    monkeypatch.setattr(
-        tiktok_instagram_utils, "_download_remote_file", _fake_download
-    )
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_call_tiktok_resolver",
