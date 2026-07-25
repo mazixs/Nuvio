@@ -6,6 +6,7 @@ import pytest
 
 from utils import tiktok_instagram_utils
 from utils.tiktok_fast_path import FastPathUnavailable
+from utils.ytdlp_common import FileSizeLimitError
 
 
 def _resolver_payload(**music_info_overrides):
@@ -229,6 +230,86 @@ def test_download_tiktok_video_falls_back_to_ytdlp(monkeypatch, fake_downloads):
     )
 
     assert result == Path("/tmp/ytdlp-fallback.mp4")
+
+
+@pytest.mark.unit
+def test_size_gate_does_not_block_fast_path(monkeypatch, tmp_path, fake_downloads):
+    """Гейт по размеру HQ-формата не должен отклонять то, что качается иначе.
+
+    `cached_info["filesize"]` приходит из yt-dlp и описывает 1080p/HEVC формат,
+    который на быстром пути не скачивается: `play` того же ролика вчетверо
+    меньше и в лимит облачного режима укладывается.
+    """
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(),
+    )
+    monkeypatch.setattr(tiktok_instagram_utils, "MAX_FILE_SIZE", 50 * 1024 * 1024)
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "TIKTOK_FAST_PATH", True, raising=False
+    )
+
+    result = tiktok_instagram_utils.download_tiktok_video(
+        "https://vt.tiktok.com/example/",
+        "session-size-gate",
+        output_dir=tmp_path,
+        cached_info={"filesize": 60 * 1024 * 1024},
+    )
+
+    assert Path(result).exists()
+    assert fake_downloads == ["https://cdn.example.test/play.mp4"]
+
+
+@pytest.mark.unit
+def test_size_gate_still_rejects_when_fast_path_disabled(monkeypatch, tmp_path):
+    """При выключенном быстром пути прежнее поведение обязано сохраниться."""
+    monkeypatch.setattr(tiktok_instagram_utils, "MAX_FILE_SIZE", 50 * 1024 * 1024)
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "TIKTOK_FAST_PATH", False, raising=False
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda url: "https://www.tiktok.com/@tester/video/1",
+    )
+
+    with pytest.raises(FileSizeLimitError):
+        tiktok_instagram_utils.download_tiktok_video(
+            "https://vt.tiktok.com/example/",
+            "session-size-gate-off",
+            output_dir=tmp_path,
+            cached_info={"filesize": 60 * 1024 * 1024},
+        )
+
+
+@pytest.mark.unit
+def test_size_gate_applies_after_fast_path_failure(monkeypatch, tmp_path):
+    """Откат ведёт на yt-dlp, где размер HQ-формата снова релевантен."""
+    monkeypatch.setattr(tiktok_instagram_utils, "MAX_FILE_SIZE", 50 * 1024 * 1024)
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "TIKTOK_FAST_PATH", True, raising=False
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda url: "https://www.tiktok.com/@tester/video/1",
+    )
+
+    def _unavailable(*args, **kwargs):
+        raise FastPathUnavailable("резолвер недоступен")
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "download_tiktok_video_fast", _unavailable
+    )
+
+    with pytest.raises(FileSizeLimitError):
+        tiktok_instagram_utils.download_tiktok_video(
+            "https://vt.tiktok.com/example/",
+            "session-size-gate-fallback",
+            output_dir=tmp_path,
+            cached_info={"filesize": 60 * 1024 * 1024},
+        )
 
 
 @pytest.mark.unit
