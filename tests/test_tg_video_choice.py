@@ -1,0 +1,253 @@
+"""Тесты выбора формата для кнопки «отправить видео в Telegram»."""
+
+import pytest
+
+from utils.tg_video_choice import select_tg_video_format
+
+
+MB = 1024 * 1024
+
+# Форматы реального видео (youtube.com/watch?v=NXNazpSQl6Q, 1924 с). Значения
+# vcodec/acodec и размеры сняты с ответа yt-dlp, не придуманы: именно на этом
+# наборе бот выбирал AV1 480p со звуком opus.
+VIDEO_ONLY = [
+    {"format_id": "315", "height": 2160, "ext": "webm", "vcodec": "vp9", "filesize": int(925.8 * MB)},
+    {"format_id": "401", "height": 2160, "ext": "mp4", "vcodec": "av01.0.13M.08", "filesize": int(467.6 * MB)},
+    {"format_id": "308", "height": 1440, "ext": "webm", "vcodec": "vp9", "filesize": int(374.0 * MB)},
+    {"format_id": "400", "height": 1440, "ext": "mp4", "vcodec": "av01.0.12M.08", "filesize": int(216.3 * MB)},
+    {"format_id": "299", "height": 1080, "ext": "mp4", "vcodec": "avc1.64002a", "filesize": int(301.2 * MB)},
+    {"format_id": "303", "height": 1080, "ext": "webm", "vcodec": "vp9", "filesize": int(135.1 * MB)},
+    {"format_id": "399", "height": 1080, "ext": "mp4", "vcodec": "av01.0.09M.08", "filesize": int(103.7 * MB)},
+    {"format_id": "298", "height": 720, "ext": "mp4", "vcodec": "avc1.640020", "filesize": int(183.9 * MB)},
+    {"format_id": "135", "height": 480, "ext": "mp4", "vcodec": "avc1.4d401f", "filesize": int(67.1 * MB)},
+    {"format_id": "397", "height": 480, "ext": "mp4", "vcodec": "av01.0.04M.08", "filesize": int(29.9 * MB)},
+]
+
+AUDIO_ONLY = [
+    {"format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2", "filesize": int(29.7 * MB)},
+    {"format_id": "251", "ext": "webm", "acodec": "opus", "filesize": int(25.0 * MB)},
+    {"format_id": "249", "ext": "webm", "acodec": "opus", "filesize": int(11.5 * MB)},
+    {"format_id": "139", "ext": "m4a", "acodec": "mp4a.40.5", "filesize": int(11.2 * MB)},
+]
+
+COMBINED = [
+    {"format_id": "18", "height": 360, "ext": "mp4", "vcodec": "avc1.42001E", "filesize": int(61.7 * MB)},
+]
+
+LOCAL_BUDGET = 2000 * MB
+CLOUD_BUDGET = 50 * MB
+
+
+@pytest.mark.unit
+def test_local_mode_picks_h264_1080p_instead_of_av1_480p():
+    """Главный дефект: при лимите 2 ГБ бот отдавал 480p AV1 со звуком opus.
+
+    Прежние границы были захардкожены под облачные 50 МБ — 35 МБ на видео и
+    15 МБ на звук, — поэтому единственным подходящим видео оказывался AV1 480p
+    на 29.9 МБ, а звуком — opus на 11.5 МБ. При бюджете 2 ГБ доступен
+    1080p H.264 (301 МБ) с дорожкой AAC.
+    """
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert choice is not None
+    assert choice.format_id == "299+140"
+    assert choice.height == 1080
+
+
+@pytest.mark.unit
+def test_prefers_h264_over_higher_resolution_in_other_codecs():
+    """1080p H.264 важнее 2160p VP9/AV1 — это кнопка «отправить в Telegram».
+
+    Меню форматов по-прежнему позволяет взять 4K осознанно, а у этой кнопки
+    задача другая: чтобы файл гарантированно проигрался, в том числе на iOS,
+    где ADR-001 уже фиксировал проблему с нестандартным кодеком.
+    """
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert choice.format_id.startswith("299")
+
+
+@pytest.mark.unit
+def test_prefers_aac_audio_over_opus():
+    """Opus внутри MP4 — тот же риск несовместимости, что и экзотическое видео.
+
+    Прежний код брал первый звук под 15 МБ, то есть opus на 11.5 МБ, хотя рядом
+    лежал AAC на 11.2 МБ.
+    """
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert choice.format_id.endswith("+140")
+
+
+@pytest.mark.unit
+def test_cloud_budget_still_fits_fifty_megabytes():
+    """В облачном режиме лимит настоящий, и выбор обязан в него укладываться."""
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, CLOUD_BUDGET)
+
+    assert choice is not None
+    assert choice.total_size <= CLOUD_BUDGET
+
+
+@pytest.mark.unit
+def test_cloud_budget_falls_back_to_available_codec():
+    """Под 50 МБ H.264 не влезает — тогда допустим и AV1, лишь бы отправилось."""
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, CLOUD_BUDGET)
+
+    assert choice.format_id == "397+139"
+
+
+@pytest.mark.unit
+def test_returns_none_when_nothing_fits():
+    """Ничего не влезло — решение принимает вызывающий код, а не догадка здесь."""
+    assert select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, 5 * MB) is None
+
+
+@pytest.mark.unit
+def test_combined_format_used_when_no_pair_fits():
+    """Готовый combined не требует склейки, но по качеству уступает паре.
+
+    Поэтому он берётся только когда пара «видео + звук» в бюджет не влезла.
+    """
+    choice = select_tg_video_format([], [], COMBINED, LOCAL_BUDGET)
+
+    assert choice is not None
+    assert choice.format_id == "18"
+    assert choice.kind == "combined"
+
+
+@pytest.mark.unit
+def test_pair_wins_over_combined_when_both_fit():
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert choice.kind == "combined_manual"
+
+
+@pytest.mark.unit
+def test_formats_without_known_size_are_ignored():
+    """Формат без размера нельзя сверить с бюджетом — угадывать здесь нечего."""
+    choice = select_tg_video_format(
+        [{"format_id": "999", "height": 2160, "ext": "mp4", "vcodec": "avc1.640033"}],
+        [{"format_id": "998", "ext": "m4a", "acodec": "mp4a.40.2"}],
+        [],
+        LOCAL_BUDGET,
+    )
+
+    assert choice is None
+
+
+@pytest.mark.unit
+def test_smaller_file_wins_between_equal_height_and_codec_class():
+    """При равной высоте и равной пригодности кодека лишние байты не нужны."""
+    choice = select_tg_video_format(
+        [
+            {"format_id": "big", "height": 1080, "ext": "webm", "vcodec": "vp9", "filesize": 400 * MB},
+            {"format_id": "small", "height": 1080, "ext": "mp4", "vcodec": "av01.0.09M.08", "filesize": 100 * MB},
+        ],
+        [{"format_id": "a", "ext": "m4a", "acodec": "mp4a.40.2", "filesize": 10 * MB}],
+        [],
+        LOCAL_BUDGET,
+    )
+
+    assert choice.format_id == "small+a"
+
+
+@pytest.mark.unit
+def test_total_size_reports_pair_sum():
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert choice.total_size == int(301.2 * MB) + int(29.7 * MB)
+
+
+@pytest.mark.unit
+def test_get_available_formats_carries_codecs():
+    """Выбор формата опирается на кодек, значит он обязан доходить до него.
+
+    Раньше `vcodec`/`acodec` читались из ответа yt-dlp только для разделения на
+    группы и в итоговые словари не попадали, поэтому обработчик о кодеках
+    ничего не знал и склеивал AV1 с opus в MP4.
+    """
+    from utils.youtube_utils import get_available_formats
+
+    info = {
+        "formats": [
+            {
+                "format_id": "299",
+                "ext": "mp4",
+                "height": 1080,
+                "vcodec": "avc1.64002a",
+                "acodec": "none",
+                "filesize": 301 * MB,
+            },
+            {
+                "format_id": "140",
+                "ext": "m4a",
+                "audio_channels": 2,
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+                "filesize": 29 * MB,
+            },
+            {
+                "format_id": "18",
+                "ext": "mp4",
+                "height": 360,
+                "vcodec": "avc1.42001E",
+                "acodec": "mp4a.40.2",
+                "filesize": 61 * MB,
+            },
+        ]
+    }
+
+    formats = get_available_formats(info, filter_by_size=False)
+
+    assert formats["video_only"][0]["vcodec"] == "avc1.64002a"
+    assert formats["audio_only"][0]["acodec"] == "mp4a.40.2"
+    assert formats["combined"][0]["vcodec"] == "avc1.42001E"
+    assert formats["combined"][0]["acodec"] == "mp4a.40.2"
+
+
+@pytest.mark.unit
+def test_resolution_ceiling_keeps_4k_out_of_the_button():
+    """2160p влезает в 2 ГБ, но кнопка обещает «просто отправь».
+
+    4K на 32-минутном ролике — 467 МБ в AV1 или 926 МБ в VP9 и минуты отправки,
+    причём H.264 в таком разрешении YouTube не отдаёт вовсе. Кто хочет больше,
+    берёт формат в меню осознанно.
+    """
+    choice = select_tg_video_format(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
+
+    assert choice.height == 1080
+
+
+@pytest.mark.unit
+def test_resolution_outranks_codec_when_h264_forces_a_downgrade():
+    """Кодек — тай-брейк, а не приоритет.
+
+    Под облачные 50 МБ H.264 влезает только в 240p, а AV1 даёт 480p. Ставить
+    кодек выше разрешения означало бы уронить качество там, где его никто не
+    просил ухудшать.
+    """
+    video = [
+        {"format_id": "135", "height": 480, "ext": "mp4", "vcodec": "avc1.4d401f", "filesize": int(67.1 * MB)},
+        {"format_id": "397", "height": 480, "ext": "mp4", "vcodec": "av01.0.04M.08", "filesize": int(29.9 * MB)},
+        {"format_id": "133", "height": 240, "ext": "mp4", "vcodec": "avc1.4d4015", "filesize": int(20.8 * MB)},
+    ]
+    audio = [{"format_id": "139", "ext": "m4a", "acodec": "mp4a.40.5", "filesize": int(11.2 * MB)}]
+
+    choice = select_tg_video_format(video, audio, [], CLOUD_BUDGET)
+
+    assert choice.height == 480
+    assert choice.format_id == "397+139"
+
+
+@pytest.mark.unit
+def test_h264_wins_within_the_same_resolution():
+    """При равном разрешении выбирается кодек, который играет везде."""
+    video = [
+        {"format_id": "399", "height": 1080, "ext": "mp4", "vcodec": "av01.0.09M.08", "filesize": int(103.7 * MB)},
+        {"format_id": "299", "height": 1080, "ext": "mp4", "vcodec": "avc1.64002a", "filesize": int(301.2 * MB)},
+    ]
+    audio = [{"format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2", "filesize": int(29.7 * MB)}]
+
+    choice = select_tg_video_format(video, audio, [], LOCAL_BUDGET)
+
+    assert choice.format_id == "299+140"
