@@ -306,13 +306,13 @@ def test_menu_lists_every_available_resolution_from_high_to_low():
     """Меню обещает выбор, поэтому показывает все проходные разрешения."""
     options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
 
-    assert [option.height for option in options] == [2160, 1440, 1080, 720, 480, 360]
+    assert [option.resolution for option in options] == [2160, 1440, 1080, 720, 480, 360]
 
 
 @pytest.mark.unit
 def test_menu_pairs_1080p_with_the_telegram_ready_pair():
     options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
-    option = next(o for o in options if o.height == 1080)
+    option = next(o for o in options if o.resolution == 1080)
 
     assert option.format_id == "299+140"
     assert option.size == int(301.2 * MB) + int(29.7 * MB)
@@ -322,7 +322,7 @@ def test_menu_pairs_1080p_with_the_telegram_ready_pair():
 def test_ready_single_file_needs_no_audio_pairing():
     """У готового combined-формата звук уже внутри — склеивать нечего."""
     options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, LOCAL_BUDGET)
-    option = next(o for o in options if o.height == 360)
+    option = next(o for o in options if o.resolution == 360)
 
     assert option.format_id == "18"
     assert option.size == int(61.7 * MB)
@@ -333,7 +333,7 @@ def test_tight_budget_leaves_only_what_actually_fits():
     """В облачном режиме под 50 МБ проходит лишь 480p, и то не на H.264."""
     options = list_video_options(VIDEO_ONLY, AUDIO_ONLY, COMBINED, CLOUD_BUDGET)
 
-    assert [option.height for option in options] == [480]
+    assert [option.resolution for option in options] == [480]
     assert options[0].format_id == "397+139"
     assert options[0].size <= CLOUD_BUDGET
 
@@ -347,7 +347,7 @@ def test_resolution_without_a_known_size_is_still_offered():
 
     options = list_video_options(video_only, AUDIO_ONLY, [], LOCAL_BUDGET)
 
-    assert [option.height for option in options] == [1440]
+    assert [option.resolution for option in options] == [1440]
     assert options[0].size == 0
     assert options[0].format_id == "271+140"
 
@@ -397,3 +397,25 @@ def test_audio_menu_is_empty_without_a_playable_track():
     webm_only = [{"format_id": "251", "ext": "webm", "acodec": "opus", "filesize": MB}]
 
     assert list_audio_options(webm_only, LOCAL_BUDGET) == []
+
+
+@pytest.mark.unit
+def test_vertical_video_is_labelled_by_its_short_side():
+    """У Shorts высота — длинная сторона: «1920p» вместо «1080p» сбивает с толку.
+
+    Значения сняты с реального Shorts (youtube.com/shorts/oNmeHx8TIkk), где
+    меню показывало 2560p, 1920p и 1280p.
+    """
+    video_only = [
+        {"format_id": "400", "height": 2560, "width": 1440, "ext": "mp4",
+         "vcodec": "av01", "filesize": 32 * MB},
+        {"format_id": "299", "height": 1920, "width": 1080, "ext": "mp4",
+         "vcodec": "avc1", "filesize": 27 * MB},
+        {"format_id": "298", "height": 1280, "width": 720, "ext": "mp4",
+         "vcodec": "avc1", "filesize": 17 * MB},
+    ]
+    audio = [{"format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2", "filesize": MB}]
+
+    options = list_video_options(video_only, audio, [], LOCAL_BUDGET)
+
+    assert [option.resolution for option in options] == [1440, 1080, 720]

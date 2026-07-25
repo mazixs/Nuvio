@@ -148,3 +148,35 @@ def test_removed_buttons_are_gone_for_good():
     assert "Лучшее" not in joined
     assert "MP3" not in joined
     assert "без звука" not in joined
+
+
+def test_small_track_size_is_shown_in_kilobytes():
+    """«0 МБ» на дорожке в полмегабайта читается как ошибка."""
+    tiny = {
+        "audio_only": [
+            {"format_id": "139", "ext": "m4a", "acodec": "mp4a.40.5", "filesize": 480 * 1024}
+        ]
+    }
+
+    markup = telegram_utils._build_audio_menu(tiny, TOKEN)
+
+    assert "🎵 M4A · 480 КБ" in _labels(markup)
+
+
+def test_vertical_video_menu_uses_familiar_resolutions():
+    """Shorts показывались как «1920p»: пользователь знает это видео как 1080p."""
+    shorts = {
+        "video_only": [
+            {"format_id": "299", "height": 1920, "width": 1080, "ext": "mp4",
+             "vcodec": "avc1", "filesize": 27 * MB},
+            {"format_id": "298", "height": 1280, "width": 720, "ext": "mp4",
+             "vcodec": "avc1", "filesize": 17 * MB},
+        ],
+        "audio_only": FORMATS["audio_only"],
+        "combined": [],
+    }
+
+    labels = _labels(telegram_utils._build_video_menu(shorts, TOKEN))
+
+    assert any(label.startswith("1080p") for label in labels), labels
+    assert not any(label.startswith("1920p") for label in labels), labels
