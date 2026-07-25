@@ -27,7 +27,7 @@ from utils.media_processor import (
     get_video_codec,
     has_audio_stream,
 )
-from utils.tiktok_fast_path import FastMedia, parse_fast_media
+from utils.tiktok_fast_path import FastMedia, FastPathUnavailable, parse_fast_media
 from config import (
     INSTAGRAM_COOKIES_PATH,
     MAX_FILE_SIZE,
@@ -413,8 +413,19 @@ def _ensure_ios_compatible_video(
 
 
 def _download_remote_file(
-    url: str, destination: Path, referer: str | None = None
+    url: str,
+    destination: Path,
+    referer: str | None = None,
+    expected_content_type: str | None = None,
 ) -> Path:
+    """Скачивает файл по прямой ссылке.
+
+    Args:
+        expected_content_type: требуемый префикс ``content-type`` (например
+            ``"video/"``). Если ответ ему не соответствует, поднимается
+            ``FastPathUnavailable`` — вызывающий код откатится на yt-dlp вместо
+            того, чтобы отдать пользователю чужое тело под видом медиа.
+    """
     with httpx.stream(
         "GET",
         url,
@@ -426,6 +437,15 @@ def _download_remote_file(
         timeout=REMOTE_DOWNLOAD_TIMEOUT_SECONDS,
     ) as response:
         response.raise_for_status()
+
+        if expected_content_type:
+            content_type = (response.headers.get("content-type") or "").lower()
+            if not content_type.startswith(expected_content_type):
+                raise FastPathUnavailable(
+                    f"ответ отдан с content-type "
+                    f"{content_type or 'без content-type'}, "
+                    f"ожидался {expected_content_type}*"
+                )
 
         # Проверяем Content-Length перед скачиванием
         content_length_str = response.headers.get("content-length")
@@ -542,7 +562,10 @@ def download_tiktok_video_fast(
     media = fetch_tiktok_fast_media(resolved_url or _resolve_tiktok_url(url))
     destination = _fast_destination(media, session_id, output_dir, ".mp4")
     downloaded = _download_remote_file(
-        media.video_url, destination, referer="https://www.tiktok.com/"
+        media.video_url,
+        destination,
+        referer="https://www.tiktok.com/",
+        expected_content_type="video/",
     )
     logger.info("Быстрый путь TikTok: получено %s байт", media.size)
     # Резолвер обычно отдаёт H.264, но состав `play` — не наш контракт, поэтому
@@ -580,7 +603,10 @@ def download_tiktok_audio_fast(
             suffix="_audio",
         )
         downloaded = _download_remote_file(
-            media.audio_url, destination, referer="https://www.tiktok.com/"
+            media.audio_url,
+            destination,
+            referer="https://www.tiktok.com/",
+            expected_content_type="audio/",
         )
         return finalize_downloaded_file(downloaded, force_local)
 
@@ -589,7 +615,10 @@ def download_tiktok_audio_fast(
     )
     video_destination = _fast_destination(media, session_id, output_dir, ".mp4")
     video_path = _download_remote_file(
-        media.video_url, video_destination, referer="https://www.tiktok.com/"
+        media.video_url,
+        video_destination,
+        referer="https://www.tiktok.com/",
+        expected_content_type="video/",
     )
     audio_path = extract_audio_copy(video_path, session_id)
     video_path.unlink(missing_ok=True)
