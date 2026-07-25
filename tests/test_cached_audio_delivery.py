@@ -1,6 +1,7 @@
 """Тесты доставки аудио из кэша file_id."""
 
 import asyncio
+import typing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,14 @@ import pytest
 import telegram
 
 from utils import telegram_utils
+
+
+@pytest.mark.unit
+def test_deliver_cached_audio_annotates_query():
+    """Аннотация query должна совпадать с образцом send_single_file."""
+    hints = typing.get_type_hints(telegram_utils._deliver_cached_audio)
+
+    assert hints["query"] is telegram.CallbackQuery
 
 
 def _query(reply_audio):

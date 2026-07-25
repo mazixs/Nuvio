@@ -815,7 +815,9 @@ def _cache_format_id_for_main_action(platform: str, action: str) -> str | None:
     return cache_key_for_main_action(platform, action)
 
 
-async def _deliver_cached_audio(query, url: str, cache_key: str) -> bool:
+async def _deliver_cached_audio(
+    query: telegram.CallbackQuery, url: str, cache_key: str
+) -> bool:
     """Отправляет аудио из кэша по file_id.
 
     Returns:
