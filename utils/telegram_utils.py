@@ -1392,6 +1392,12 @@ async def _handle_main_callback(
             return
 
         case "tiktok_audio":
+            cache_key = _cache_format_id_for_main_action("tiktok", "tiktok_audio")
+            if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await query.edit_message_text(FILE_SENT)
+                await _cleanup_user_session(user_id, context, session_token)
+                return
+
             await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
             from utils.tiktok_instagram_utils import download_tiktok_audio
 
@@ -1415,7 +1421,7 @@ async def _handle_main_callback(
                     session_token,
                     session_data,
                     context,
-                    cache_format_id="tiktok_audio",
+                    cache_format_id=cache_key,
                 )
             except PhotoPostAudioMissingError:
                 await query.edit_message_text(
@@ -1526,6 +1532,14 @@ async def _handle_main_callback(
             return
 
         case "instagram_audio":
+            cache_key = _cache_format_id_for_main_action(
+                "instagram", "instagram_audio"
+            )
+            if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await query.edit_message_text(FILE_SENT)
+                await _cleanup_user_session(user_id, context, session_token)
+                return
+
             await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
             from utils.tiktok_instagram_utils import download_instagram_audio
 
@@ -1549,7 +1563,7 @@ async def _handle_main_callback(
                     session_token,
                     session_data,
                     context,
-                    cache_format_id="instagram_audio",
+                    cache_format_id=cache_key,
                 )
             except PhotoPostAudioMissingError:
                 await query.edit_message_text(
@@ -1636,6 +1650,12 @@ async def _handle_main_callback(
             return
 
         case "rutube_audio":
+            cache_key = _cache_format_id_for_main_action("rutube", "rutube_audio")
+            if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await query.edit_message_text(FILE_SENT)
+                await _cleanup_user_session(user_id, context, session_token)
+                return
+
             await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
             try:
                 file_path = await run_blocking(
@@ -1654,7 +1674,7 @@ async def _handle_main_callback(
                     session_token,
                     session_data,
                     context,
-                    cache_format_id="rutube_audio",
+                    cache_format_id=cache_key,
                 )
             except Exception as e:
                 error_code = _make_error_code(
@@ -1734,6 +1754,12 @@ async def _handle_main_callback(
             return
 
         case "vk_audio":
+            cache_key = _cache_format_id_for_main_action("vk", "vk_audio")
+            if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await query.edit_message_text(FILE_SENT)
+                await _cleanup_user_session(user_id, context, session_token)
+                return
+
             await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
             try:
                 file_path = await run_blocking(
@@ -1752,7 +1778,7 @@ async def _handle_main_callback(
                     session_token,
                     session_data,
                     context,
-                    cache_format_id="vk_audio",
+                    cache_format_id=cache_key,
                 )
             except Exception as e:
                 error_code = _make_error_code(
