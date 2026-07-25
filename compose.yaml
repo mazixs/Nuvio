@@ -6,6 +6,11 @@ services:
       context: .
       dockerfile: Dockerfile.telegram-bot-api
     image: nuvio-telegram-bot-api:10.2
+    # Образа нет ни в одном реестре — он собирается здесь. Без явной политики
+    # Compose при связке `build` + `image` сначала идёт за ним в реестр, и
+    # `docker compose pull` падает с «pull access denied», обрывая обновление
+    # всего стека. `build` заставляет Compose пропустить pull и собрать образ.
+    pull_policy: build
     restart: unless-stopped
     environment:
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:?TELEGRAM_API_ID is required}
