@@ -838,6 +838,33 @@ async def _deliver_cached_audio(
     return True
 
 
+async def _deliver_cached_video(
+    query: telegram.CallbackQuery, url: str, cache_key: str
+) -> bool:
+    """Отправляет видео из кэша по file_id.
+
+    Returns:
+        bool: True, если файл доставлен; False, если записи нет или file_id устарел.
+    """
+    cached = telegram_cache.get(url, format_id=cache_key)
+    if not cached:
+        return False
+
+    try:
+        await query.message.reply_video(
+            video=cached.file_id,
+            caption=None,
+            supports_streaming=True,
+        )
+    except telegram.error.BadRequest as e:
+        logger.warning("file_id видео устарел (key=%s): %s", cache_key, e)
+        telegram_cache.delete_by_file_id(cached.file_id)
+        return False
+
+    logger.info("Видео доставлено из кэша (key=%s)", cache_key)
+    return True
+
+
 def _cache_format_id_for_format_selection(
     content_type: str, format_id: str
 ) -> str | None:
@@ -1801,6 +1828,12 @@ async def _handle_main_callback(
             return
 
         case "audio_m4a":
+            cache_key = _cache_format_id_for_main_action("youtube", "audio_m4a")
+            if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await query.edit_message_text(FILE_SENT)
+                await _cleanup_user_session(user_id, context, session_token)
+                return
+
             audio_only = formats.get("audio_only", [])
             native_audio = None
             for ext in ["m4a", "mp3", "ogg"]:
@@ -1849,11 +1882,17 @@ async def _handle_main_callback(
                 session_token,
                 session_data,
                 context,
-                cache_format_id="audio_m4a",
+                cache_format_id=cache_key,
             )
             return
 
         case "tg_video":
+            cache_key = _cache_format_id_for_main_action("youtube", "tg_video")
+            if cache_key and await _deliver_cached_video(query, url, cache_key):
+                await query.edit_message_text(FILE_SENT)
+                await _cleanup_user_session(user_id, context, session_token)
+                return
+
             combined = formats.get("combined", [])
             tg_video = None
 
@@ -2120,6 +2159,13 @@ async def _handle_format_callback(
     try:
         file_path = None
         cache_format_id = _cache_format_id_for_format_selection(content_type, format_id)
+        if cache_format_id and await _deliver_cached_video(
+            query, url, cache_format_id
+        ):
+            await query.edit_message_text(FILE_SENT)
+            await _cleanup_user_session(user_id, context, session_token)
+            return
+
         match content_type:
             case "combined":
                 file_path = await download_content(

@@ -12,8 +12,9 @@ def cache_key_for_main_action(platform: str, action: str) -> str | None:
     """Возвращает ключ кэша для основной кнопки платформы."""
     if platform in _DIRECT_VIDEO_PLATFORMS and action.endswith("_download"):
         return DIRECT_VIDEO_CACHE_KEY
-    if platform == "youtube" and action == "tg_video":
-        return "tg_video"
+    if platform == "youtube" and action in {"tg_video", "audio_m4a"}:
+        # Значения совпадают с ключами, под которыми записи уже лежат в кэше.
+        return action
     if platform in _DIRECT_VIDEO_PLATFORMS and action.endswith("_audio"):
         # Значение совпадает с ключами, под которыми записи уже лежат в кэше.
         return action
