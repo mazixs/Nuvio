@@ -170,6 +170,9 @@ def get_available_formats(
                     "height": format_info.get("height"),
                     "width": format_info.get("width"),
                     "filesize": filesize,
+                    # Кодек нужен выбору формата для Telegram: H.264 и AAC
+                    # проигрываются везде, остальное — на свой риск (ADR-001).
+                    "vcodec": format_info.get("vcodec"),
                     "type": "video_only",
                 }
             )
@@ -182,6 +185,7 @@ def get_available_formats(
                     "format": format_info.get("format"),
                     "ext": format_info.get("ext"),
                     "filesize": filesize,
+                    "acodec": format_info.get("acodec"),
                     "type": "audio_only",
                 }
             )
@@ -196,6 +200,8 @@ def get_available_formats(
                     "height": format_info.get("height"),
                     "width": format_info.get("width"),
                     "filesize": filesize,
+                    "vcodec": format_info.get("vcodec"),
+                    "acodec": format_info.get("acodec"),
                     "type": "combined",
                 }
             )

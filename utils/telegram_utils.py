@@ -18,9 +18,11 @@ from config import (
     ADMIN_IDS,
     BLOCKING_TASK_TIMEOUT,
     DOWNLOAD_WORKERS,
+    MAX_FILE_SIZE,
     TELEGRAM_LOCAL_MODE,
 )
 from utils.logger import setup_logger
+from utils.tg_video_choice import select_tg_video_format
 from utils.analytics_db import (
     init_db as _init_analytics,
     track_user,
@@ -1909,34 +1911,26 @@ async def _handle_main_callback(
 
             video_only = formats.get("video_only", [])
             audio_only = formats.get("audio_only", [])
-            suitable_video = [
-                v
-                for v in video_only
-                if v.get("filesize") is not None
-                and v.get("filesize") <= 35 * 1024 * 1024
-            ]
-            suitable_audio = next(
-                (
-                    a
-                    for a in audio_only
-                    if a.get("filesize") is not None
-                    and a.get("filesize") <= 15 * 1024 * 1024
-                ),
-                None,
+            # Бюджет берётся из режима доставки: 2000 МБ через локальный Bot API,
+            # 50 МБ через облачный. Прежние 35 + 15 МБ были захардкожены под
+            # облачный лимит и обесценивали локальный сервер.
+            choice = select_tg_video_format(
+                video_only, audio_only, combined, MAX_FILE_SIZE
             )
 
-            if suitable_video and suitable_audio:
-                best_video = max(suitable_video, key=lambda x: x.get("height", 0))
+            if choice:
                 tg_video = {
-                    "format_id": f"{best_video['format_id']}+{suitable_audio['format_id']}",
-                    "height": best_video.get("height"),
-                    "ext": best_video.get("ext", "mp4"),
-                    "type": "combined_manual",
+                    "format_id": choice.format_id,
+                    "height": choice.height,
+                    "ext": choice.ext,
+                    "type": choice.kind,
                 }
                 logger.info(
-                    "Выбран комбинированный формат: %s - %sp",
-                    tg_video.get("format_id"),
-                    tg_video.get("height"),
+                    "Выбран формат для Telegram: %s - %sp - %.1f МБ из бюджета %.0f МБ",
+                    choice.format_id,
+                    choice.height,
+                    choice.total_size / 1024 / 1024,
+                    MAX_FILE_SIZE / 1024 / 1024,
                 )
 
                 await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
@@ -1971,37 +1965,21 @@ async def _handle_main_callback(
                 tg_video = None
 
             if not tg_video:
-                suitable_formats = []
-                formats_without_size = []
-
-                for fmt in combined:
-                    size = fmt.get("filesize")
-                    if size is not None and size <= 50 * 1024 * 1024:
-                        suitable_formats.append(fmt)
-                    elif size is None:
-                        formats_without_size.append(fmt)
-
-                if suitable_formats:
-                    tg_video = max(suitable_formats, key=lambda x: x.get("height", 0))
+                # Форматы без известного размера сверить с бюджетом нельзя,
+                # поэтому select_tg_video_format их не рассматривает. Берём
+                # осторожно — из нижней трети по высоте, чтобы скачанное с
+                # большей вероятностью прошло по лимиту доставки.
+                formats_without_size = [
+                    fmt for fmt in combined if fmt.get("filesize") is None
+                ]
+                if formats_without_size:
+                    formats_without_size.sort(key=lambda x: x.get("height", 0))
+                    tg_video = formats_without_size[len(formats_without_size) // 3]
                     logger.info(
-                        "Выбран готовый combined формат: %s - %sp",
+                        "Выбран резервный формат (размер неизвестен): %s - %sp",
                         tg_video.get("format_id"),
                         tg_video.get("height"),
                     )
-                elif formats_without_size:
-                    formats_without_size.sort(key=lambda x: x.get("height", 0))
-                    middle_index = len(formats_without_size) // 3
-                    tg_video = (
-                        formats_without_size[middle_index]
-                        if formats_without_size
-                        else None
-                    )
-                    if tg_video:
-                        logger.info(
-                            "Выбран резервный формат (размер неизвестен): %s - %sp",
-                            tg_video.get("format_id"),
-                            tg_video.get("height"),
-                        )
 
             if tg_video:
                 await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
