@@ -58,7 +58,12 @@ from utils.public_errors import (
     classify_internal_error_category,
     youtube_error_code,
 )
-from utils.url_delivery import UrlHandoff, find_format_url, plan_url_handoff
+from utils.url_delivery import (
+    PhotoPostHandoff,
+    UrlHandoff,
+    find_format_url,
+    plan_url_handoff,
+)
 import yt_dlp
 from messages import (
     WELCOME_MESSAGE,
@@ -993,6 +998,39 @@ async def _deliver_by_url(
     # хранятся, поэтому для них запись пропускается.
     if cache_format_id and plan.kind != "photo":
         _cache_sent_media(message, url, platform, cache_format_id, video_info)
+    return True
+
+
+async def _deliver_photo_post_by_url(
+    query: telegram.CallbackQuery, plan: PhotoPostHandoff
+) -> bool:
+    """Отправляет фото-пост прямыми ссылками.
+
+    Returns:
+        bool: True, если пост доставлен; False — если Telegram отказал на первой
+        же картинке, когда уйти на обычный путь ещё безопасно.
+
+    Raises:
+        telegram.error.TelegramError: отказ после того, как часть поста уже
+            ушла. Повторять пост нельзя — пользователь получил бы дубли, —
+            поэтому ошибка поднимается наверх к обычной обработке.
+    """
+    for index, image in enumerate(plan.images):
+        try:
+            await query.message.reply_photo(photo=image.url, caption=None)
+        except telegram.error.TelegramError as error:
+            if index:
+                raise
+            logger.warning(
+                "Telegram не принял ссылку на картинку: %s — уходим на скачивание",
+                error,
+            )
+            return False
+
+    if plan.audio:
+        await query.message.reply_audio(audio=plan.audio.url, caption=None)
+
+    logger.info("Фото-пост доставлен ссылками: %s кадров", len(plan.images))
     return True
 
 
@@ -2707,6 +2745,9 @@ async def _send_photo_post_assets(
             "Не удалось получить изображения для Instagram фото-поста."
         )
         platform_for_errors = "instagram"
+        images_key = "_nuvio_instagram_images"
+        audio_key = "_nuvio_instagram_audio_url"
+        referer = "https://www.instagram.com/"
     else:
         from utils.tiktok_instagram_utils import (
             download_tiktok_photo_post_assets as download_photo_post_assets,
@@ -2715,9 +2756,31 @@ async def _send_photo_post_assets(
         downloading_photos_message = "⏳ Скачиваю фотографии..."
         empty_images_message = "Не удалось получить изображения для TikTok фото-поста."
         platform_for_errors = "tiktok"
+        images_key = "_nuvio_tiktok_images"
+        audio_key = "_nuvio_tiktok_audio_url"
+        referer = "https://www.tiktok.com/"
 
     try:
         await safe_edit_message_text(query, downloading_photos_message)
+
+        # Пост до 5 МБ на кадр Telegram забирает по ссылкам сам, и тогда диск не
+        # трогается вовсе. Решение принимается до первой отправки: доставить
+        # половину поста ссылками, а половину файлами нельзя.
+        from utils.tiktok_instagram_utils import resolve_photo_post_handoff
+
+        video_info = session_data.get("video_info") or {}
+        photo_plan = await run_blocking(
+            resolve_photo_post_handoff,
+            list(video_info.get(images_key) or []),
+            video_info.get(audio_key),
+            referer,
+            description=f"resolve_{platform}_photo_post_handoff",
+        )
+        if photo_plan and await _deliver_photo_post_by_url(query, photo_plan):
+            await query.edit_message_text(FILE_SENT)
+            await _cleanup_user_session(user_id, context, session_token)
+            return
+
         assets = await run_blocking(
             download_photo_post_assets,
             url,

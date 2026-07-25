@@ -10,7 +10,8 @@ import time
 from html import unescape
 from pathlib import Path
 from collections.abc import Callable, Generator
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Sequence
 from urllib.parse import urlparse
 
 import copy
@@ -31,7 +32,7 @@ from utils.media_processor import (
 from utils.fast_path import FastPathUnavailable
 from utils.instagram_fast_path import InstagramFastMedia, parse_instagram_fast_media
 from utils.tiktok_fast_path import FastMedia, parse_fast_media
-from utils.url_delivery import UrlHandoff, plan_url_handoff
+from utils.url_delivery import PhotoPostHandoff, UrlHandoff, plan_url_handoff
 from config import (
     INSTAGRAM_COOKIES_PATH,
     INSTAGRAM_FAST_PATH,
@@ -90,6 +91,11 @@ REMOTE_DOWNLOAD_TIMEOUT_SECONDS = 60
 # Замер размера — это один байт по сети, но он стоит на пути пользователя,
 # поэтому ждать его долго незачем: не ответил быстро — идём обычным путём.
 REMOTE_SIZE_PROBE_TIMEOUT_SECONDS = 5
+
+# Замеры для фото-поста идут параллельно: последовательно 13 кадров карусели
+# стоили 9.95 с — больше, чем всё скачивание, которое доставка ссылками должна
+# была удешевить. Каждый запрос — один байт, поэтому окно можно держать шире.
+PHOTO_POST_PROBE_WORKERS = 6
 
 # Сколько секунд ответ резолвера TikTok считается свежим. Ссылки в нём
 # подписаны на часы, поэтому окно выбрано коротким: оно нужно лишь для того,
@@ -701,6 +707,48 @@ def resolve_tiktok_audio_handoff(
 
     size = probe_remote_size(media.audio_url, referer="https://www.tiktok.com/")
     return plan_url_handoff(media.audio_url, "audio", size)
+
+
+def resolve_photo_post_handoff(
+    image_urls: Sequence[str],
+    audio_url: str | None,
+    referer: str,
+) -> PhotoPostHandoff | None:
+    """Готовит доставку фото-поста ссылками — целиком или никак.
+
+    Половина картинок ссылкой, а половина файлом означала бы разный порядок
+    отправки внутри одного поста, поэтому непригодность любой ссылки отменяет
+    весь замысел. Звук без картинок или картинки без звука — тоже не тот пост,
+    который ожидает пользователь.
+    """
+    if not image_urls:
+        return None
+
+    targets = list(image_urls)
+    if audio_url:
+        targets.append(audio_url)
+
+    with ThreadPoolExecutor(
+        max_workers=min(PHOTO_POST_PROBE_WORKERS, len(targets))
+    ) as pool:
+        sizes = list(
+            pool.map(lambda url: probe_remote_size(url, referer=referer), targets)
+        )
+
+    images = []
+    for image_url, size in zip(image_urls, sizes):
+        plan = plan_url_handoff(image_url, "photo", size)
+        if plan is None:
+            return None
+        images.append(plan)
+
+    audio = None
+    if audio_url:
+        audio = plan_url_handoff(audio_url, "audio", sizes[-1])
+        if audio is None:
+            return None
+
+    return PhotoPostHandoff(images=tuple(images), audio=audio)
 
 
 def resolve_instagram_video_handoff(url: str) -> UrlHandoff | None:

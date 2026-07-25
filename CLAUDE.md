@@ -104,8 +104,8 @@ ThreadPoolExecutor → inline-меню выбора формата → callback 
 
 **Доставка по ссылке** применяется до скачивания: медиа до 20 МБ (фото до 5 МБ)
 с разрешённого домена уходит в Telegram ссылкой, диск не задействуется вовсе.
-Работает для видео и звука TikTok, видео Instagram и progressive-форматов
-YouTube; audio-only YouTube, VK и Rutube так отдать нельзя — это измерено, см.
+Работает для видео и звука TikTok, видео Instagram, фото-постов обеих платформ
+(целиком или никак) и progressive-форматов YouTube; audio-only YouTube, VK и Rutube так отдать нельзя — это измерено, см.
 `docs/technical/latency-disk-network-research.md` §8. Любой отказ Telegram —
 не ошибка, а сигнал идти обычным путём.
 
