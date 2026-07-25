@@ -1460,16 +1460,11 @@ def download_tiktok_video(
             "TikTok фото-пост нужно отправлять как набор изображений и отдельное аудио."
         )
 
-    # Предварительная проверка известного размера до скачивания.
-    if cached_info and not force_local:
-        filesize = cached_info.get("filesize") or cached_info.get("filesize_approx", 0)
-        if filesize and filesize > MAX_FILE_SIZE:
-            raise FileSizeLimitError(
-                f"Файл превышает допустимый размер "
-                f"{MAX_FILE_SIZE // 1024 // 1024} МБ"
-            )
-
     if TIKTOK_FAST_PATH:
+        # Гейт по размеру ниже считается по HQ-формату (1080p/HEVC), который
+        # быстрый путь не скачивает вовсе, поэтому он проверяется только перед
+        # yt-dlp. Реальный размер `play` контролируют Content-Length в
+        # _download_remote_file и finalize_downloaded_file.
         try:
             return download_tiktok_video_fast(
                 url, session_id, output_dir, force_local, resolved_url=resolved_url
@@ -1480,6 +1475,15 @@ def download_tiktok_video(
             logger.warning(
                 "Быстрый путь TikTok не сработал (%s), используем yt-dlp",
                 fast_error,
+            )
+
+    # Предварительная проверка известного размера до скачивания через yt-dlp.
+    if cached_info and not force_local:
+        filesize = cached_info.get("filesize") or cached_info.get("filesize_approx", 0)
+        if filesize and filesize > MAX_FILE_SIZE:
+            raise FileSizeLimitError(
+                f"Файл превышает допустимый размер "
+                f"{MAX_FILE_SIZE // 1024 // 1024} МБ"
             )
 
     if output_dir is None:
