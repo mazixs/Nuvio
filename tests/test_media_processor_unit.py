@@ -253,6 +253,27 @@ def test_convert_to_mp4_transcodes_hevc_with_fast_preset(monkeypatch, tmp_path):
     assert "+faststart" in command
 
 
+@pytest.mark.unit
+def test_convert_to_mp4_reencodes_mp3_audio_to_aac(monkeypatch, tmp_path):
+    """MP3 внутри MP4 плеер Telegram на iOS проигрывает ненадёжно.
+
+    Копировать такой поток в контейнер MP4 нельзя — звук должен стать AAC.
+    """
+    input_path, recorded = _convert_harness(monkeypatch, tmp_path, "h264", "mp3")
+
+    media_processor.convert_to_format(input_path, "mp4", "session-1", "output.mp4")
+
+    command = recorded[0]
+    assert command[command.index("-c:a") + 1] == "aac"
+    assert "-c" not in command, "MP3 нельзя копировать в MP4 целиком"
+
+
+@pytest.mark.unit
+def test_mp3_is_not_treated_as_telegram_ready_in_mp4():
+    assert "mp3" not in media_processor.TELEGRAM_READY_AUDIO_CODECS
+    assert "aac" in media_processor.TELEGRAM_READY_AUDIO_CODECS
+
+
 def test_convert_to_mp4_transcodes_when_codec_unknown(monkeypatch, tmp_path):
     """Неизвестный кодек — консервативный путь с перекодированием."""
     input_path, recorded = _convert_harness(monkeypatch, tmp_path, None, None)
