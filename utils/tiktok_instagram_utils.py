@@ -5,6 +5,7 @@
 import json
 import mimetypes
 import re
+import threading
 import time
 from html import unescape
 from pathlib import Path
@@ -30,6 +31,7 @@ from utils.media_processor import (
 from utils.fast_path import FastPathUnavailable
 from utils.instagram_fast_path import InstagramFastMedia, parse_instagram_fast_media
 from utils.tiktok_fast_path import FastMedia, parse_fast_media
+from utils.url_delivery import UrlHandoff, plan_url_handoff
 from config import (
     INSTAGRAM_COOKIES_PATH,
     INSTAGRAM_FAST_PATH,
@@ -84,6 +86,17 @@ INSTAGRAM_FAST_PATH_MAX_ATTEMPTS = 2
 # Скачивание самого медиафайла — здесь большой таймаут оправдан: холодный edge
 # CDN отдавал 19.5 МБ за 14.3 с (docs/technical/latency-disk-network-research.md).
 REMOTE_DOWNLOAD_TIMEOUT_SECONDS = 60
+
+# Замер размера — это один байт по сети, но он стоит на пути пользователя,
+# поэтому ждать его долго незачем: не ответил быстро — идём обычным путём.
+REMOTE_SIZE_PROBE_TIMEOUT_SECONDS = 5
+
+# Сколько секунд ответ резолвера TikTok считается свежим. Ссылки в нём
+# подписаны на часы, поэтому окно выбрано коротким: оно нужно лишь для того,
+# чтобы два обращения подряд не упёрлись в лимит «1 request/second».
+TIKTOK_RESOLVER_MEMO_TTL_SECONDS = 30
+_RESOLVER_MEMO: dict[str, tuple[float, dict]] = {}
+_RESOLVER_MEMO_LOCK = threading.Lock()
 # Фото-пост идёт только через резолвер, откатa на yt-dlp у него нет, поэтому
 # ожидание там остаётся щедрым.
 TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS = 20
@@ -526,8 +539,35 @@ def _fetch_tiktok_photo_post_data(url: str) -> dict[str, Any]:
     return _smart_retry(_request, max_attempts=3, context="TikTok photo fallback")
 
 
+def reset_tiktok_resolver_memo() -> None:
+    """Забывает запомненные ответы резолвера."""
+    with _RESOLVER_MEMO_LOCK:
+        _RESOLVER_MEMO.clear()
+
+
+def _remembered_resolver_answer(url: str) -> dict[str, Any] | None:
+    """Возвращает недавний ответ резолвера по этой ссылке, если он ещё свеж."""
+    now = time.monotonic()
+    with _RESOLVER_MEMO_LOCK:
+        for key, (stored_at, _) in list(_RESOLVER_MEMO.items()):
+            if now - stored_at > TIKTOK_RESOLVER_MEMO_TTL_SECONDS:
+                del _RESOLVER_MEMO[key]
+        remembered = _RESOLVER_MEMO.get(url)
+    return remembered[1] if remembered else None
+
+
 def _call_tiktok_resolver(url: str) -> dict[str, Any]:
-    """Запрашивает у резолвера прямые ссылки для TikTok-публикации."""
+    """Запрашивает у резолвера прямые ссылки для TikTok-публикации.
+
+    Ответ короткое время переиспользуется: резолвер разрешает один запрос в
+    секунду, а решение «отдать ссылкой» и последующее скачивание файла идут
+    подряд. Без переиспользования откат на скачивание получал бы отказ
+    «Free Api Limit» и уходил на медленный путь через yt-dlp.
+    """
+    remembered = _remembered_resolver_answer(url)
+    if remembered is not None:
+        logger.debug("Ответ резолвера TikTok переиспользован")
+        return remembered
 
     def _request() -> dict[str, Any]:
         response = httpx.get(
@@ -540,11 +580,16 @@ def _call_tiktok_resolver(url: str) -> dict[str, Any]:
         response.raise_for_status()
         return response.json()
 
-    return _smart_retry(
+    payload = _smart_retry(
         _request,
         max_attempts=TIKTOK_RESOLVER_MAX_ATTEMPTS,
         context="TikTok resolver",
     )
+    # Запоминается только пригодный ответ: отказ резолвера залипать не должен.
+    if payload.get("code") == 0:
+        with _RESOLVER_MEMO_LOCK:
+            _RESOLVER_MEMO[url] = (time.monotonic(), payload)
+    return payload
 
 
 def fetch_tiktok_fast_media(url: str) -> FastMedia:
@@ -576,6 +621,102 @@ def fetch_instagram_fast_media(url: str) -> InstagramFastMedia:
         context="Instagram fast path",
     )
     return parse_instagram_fast_media(media)
+
+
+def probe_remote_size(url: str, referer: str | None = None) -> int | None:
+    """Узнаёт размер файла по ссылке, не скачивая его.
+
+    Запрашивается один байт: CDN отвечает ``206`` и сообщает полный размер в
+    ``Content-Range``. Ответ с кодом ошибки размером не считается — VK, к
+    примеру, отдаёт на такой запрос ``400`` с двухбайтовым телом.
+
+    Returns:
+        Размер в байтах либо ``None``, если CDN его не сообщил.
+    """
+    try:
+        response = httpx.get(
+            url,
+            headers={
+                "User-Agent": HTTP_USER_AGENT,
+                "Referer": referer or "https://www.tiktok.com/",
+                "Range": "bytes=0-0",
+            },
+            follow_redirects=True,
+            timeout=REMOTE_SIZE_PROBE_TIMEOUT_SECONDS,
+        )
+    except Exception as error:  # noqa: BLE001 — размер не критичен, откат есть
+        logger.debug("Размер по ссылке узнать не удалось: %s", error)
+        return None
+
+    if response.status_code >= 400:
+        logger.debug("CDN ответил %s на запрос размера", response.status_code)
+        return None
+
+    total = (response.headers.get("content-range") or "").rpartition("/")[2]
+    if total.isdigit():
+        return int(total)
+
+    length = response.headers.get("content-length") or ""
+    return int(length) if length.isdigit() else None
+
+
+def resolve_tiktok_video_handoff(
+    url: str, resolved_url: str | None = None
+) -> UrlHandoff | None:
+    """Готовит доставку TikTok-видео прямой ссылкой.
+
+    Returns:
+        Решение о доставке ссылкой либо ``None`` — тогда видео скачивается
+        обычным путём.
+    """
+    try:
+        media = fetch_tiktok_fast_media(resolved_url or _resolve_tiktok_url(url))
+    except Exception as error:  # noqa: BLE001 — любой сбой означает обычный путь
+        logger.debug("Доставка TikTok ссылкой недоступна: %s", error)
+        return None
+
+    size = media.size or probe_remote_size(
+        media.video_url, referer="https://www.tiktok.com/"
+    )
+    return plan_url_handoff(media.video_url, "video", size)
+
+
+def resolve_tiktok_audio_handoff(
+    url: str, resolved_url: str | None = None
+) -> UrlHandoff | None:
+    """Готовит доставку звука TikTok прямой ссылкой.
+
+    Ссылка на звук есть только тогда, когда это звук самого видео: для
+    лицензированного трека ``music`` содержит полную песню, и её отдавать нельзя
+    — такой звук вырезается из файла обычным путём.
+    """
+    try:
+        media = fetch_tiktok_fast_media(resolved_url or _resolve_tiktok_url(url))
+    except Exception as error:  # noqa: BLE001
+        logger.debug("Доставка звука TikTok ссылкой недоступна: %s", error)
+        return None
+
+    if not media.audio_url:
+        return None
+
+    size = probe_remote_size(media.audio_url, referer="https://www.tiktok.com/")
+    return plan_url_handoff(media.audio_url, "audio", size)
+
+
+def resolve_instagram_video_handoff(url: str) -> UrlHandoff | None:
+    """Готовит доставку видео Instagram прямой ссылкой.
+
+    GraphQL размера не сообщает, поэтому он всегда уточняется отдельным
+    запросом.
+    """
+    try:
+        media = fetch_instagram_fast_media(url)
+    except Exception as error:  # noqa: BLE001
+        logger.debug("Доставка Instagram ссылкой недоступна: %s", error)
+        return None
+
+    size = probe_remote_size(media.video_url, referer="https://www.instagram.com/")
+    return plan_url_handoff(media.video_url, "video", size)
 
 
 def download_instagram_video_fast(

@@ -54,6 +54,7 @@ from utils.public_errors import (
     classify_internal_error_category,
     youtube_error_code,
 )
+from utils.url_delivery import UrlHandoff, find_format_url, plan_url_handoff
 import yt_dlp
 from messages import (
     WELCOME_MESSAGE,
@@ -867,6 +868,121 @@ async def _deliver_cached_video(
     return True
 
 
+def _cache_sent_media(
+    message: telegram.Message,
+    url: str,
+    platform: str,
+    cache_format_id: str,
+    video_info: dict | None = None,
+) -> None:
+    """Сохраняет file_id отправленного медиа в кэш.
+
+    Доставка уже состоялась, поэтому сбой кэша только логируется: ронять из-за
+    него ответ пользователю нельзя.
+    """
+    media = message.video or message.audio or message.document
+    file_id = getattr(media, "file_id", None) if media else None
+    if not file_id:
+        return
+
+    try:
+        telegram_cache.set(
+            CachedVideo(
+                url=url,
+                file_id=file_id,
+                file_unique_id=getattr(media, "file_unique_id", None),
+                platform=platform,
+                format_id=cache_format_id,
+                cached_at=datetime.now(),
+                file_size=getattr(media, "file_size", None),
+                duration=getattr(media, "duration", None),
+                title=video_info.get("title") if video_info else None,
+            )
+        )
+        logger.info(
+            "💾 Файл сохранён в кэш: %s -> %s (key=%s)", url, file_id, cache_format_id
+        )
+    except Exception as e:
+        logger.error("Ошибка сохранения в кэш: %s", e)
+
+
+async def _deliver_by_url(
+    query: telegram.CallbackQuery,
+    plan: UrlHandoff,
+    url: str,
+    platform: str,
+    cache_format_id: str | None = None,
+    video_info: dict | None = None,
+) -> bool:
+    """Отдаёт медиа Telegram прямой ссылкой, минуя диск.
+
+    Returns:
+        bool: True, если Telegram ссылку принял; False — если отказал или не
+        успел её забрать, и тогда вызывающий код обязан пойти обычным путём
+        через скачивание файла.
+    """
+    size_mb = plan.size / 1024 / 1024
+    try:
+        match plan.kind:
+            case "video":
+                message = await query.message.reply_video(
+                    video=plan.url, caption=None, supports_streaming=True
+                )
+            case "audio":
+                message = await query.message.reply_audio(audio=plan.url, caption=None)
+            case _:
+                message = await query.message.reply_photo(photo=plan.url, caption=None)
+    except telegram.error.TelegramError as e:
+        logger.warning(
+            "Telegram не принял ссылку (%s, %.2f МБ): %s — уходим на скачивание",
+            plan.kind,
+            size_mb,
+            e,
+        )
+        return False
+
+    logger.info("Медиа доставлено ссылкой (%s, %.2f МБ)", plan.kind, size_mb)
+    # Кэш file_id рассчитан на видео, аудио и документы; фото-посты в нём не
+    # хранятся, поэтому для них запись пропускается.
+    if cache_format_id and plan.kind != "photo":
+        _cache_sent_media(message, url, platform, cache_format_id, video_info)
+    return True
+
+
+async def _deliver_plan(
+    query: telegram.CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    session_token: str,
+    session_data: dict,
+    plan: UrlHandoff | None,
+    cache_format_id: str | None = None,
+) -> bool:
+    """Доводит доставку по ссылке до конца: отправка, статус, очистка сессии.
+
+    Returns:
+        bool: True, если пользователь уже получил медиа. False означает, что
+        доставка ссылкой не состоялась и нужно продолжать обычным путём — диск
+        при этом ещё не тронут.
+    """
+    if not plan:
+        return False
+
+    delivered = await _deliver_by_url(
+        query,
+        plan,
+        session_data["url"],
+        session_data.get("platform", "bot"),
+        cache_format_id,
+        session_data.get("video_info"),
+    )
+    if not delivered:
+        return False
+
+    await query.edit_message_text(FILE_SENT)
+    await _cleanup_user_session(query.from_user.id, context, session_token)
+    return True
+
+
 def _cache_format_id_for_format_selection(
     content_type: str, format_id: str
 ) -> str | None:
@@ -1378,7 +1494,24 @@ async def _handle_main_callback(
                         telegram_cache.delete_by_file_id(cached.file_id)
 
             await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
-            from utils.tiktok_instagram_utils import download_tiktok_video
+            from utils.tiktok_instagram_utils import (
+                download_tiktok_video,
+                resolve_tiktok_video_handoff,
+            )
+
+            # Ролик до 20 МБ Telegram забирает по ссылке сам — это дешевле, чем
+            # скачать его к себе и выгрузить обратно. При отказе идём ниже
+            # обычным путём: резолвер будет вызван повторно, но только в этом
+            # редком случае.
+            plan = await run_blocking(
+                resolve_tiktok_video_handoff,
+                url,
+                description="resolve_tiktok_video_handoff",
+            )
+            if await _deliver_plan(
+                query, context, session_token, session_data, plan, cache_key
+            ):
+                return
 
             try:
                 file_path = await run_blocking(
@@ -1430,7 +1563,20 @@ async def _handle_main_callback(
                 return
 
             await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
-            from utils.tiktok_instagram_utils import download_tiktok_audio
+            from utils.tiktok_instagram_utils import (
+                download_tiktok_audio,
+                resolve_tiktok_audio_handoff,
+            )
+
+            plan = await run_blocking(
+                resolve_tiktok_audio_handoff,
+                url,
+                description="resolve_tiktok_audio_handoff",
+            )
+            if await _deliver_plan(
+                query, context, session_token, session_data, plan, cache_key
+            ):
+                return
 
             try:
                 file_path = await run_blocking(
@@ -1513,7 +1659,20 @@ async def _handle_main_callback(
                         telegram_cache.delete_by_file_id(cached.file_id)
 
             await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
-            from utils.tiktok_instagram_utils import download_instagram_video
+            from utils.tiktok_instagram_utils import (
+                download_instagram_video,
+                resolve_instagram_video_handoff,
+            )
+
+            plan = await run_blocking(
+                resolve_instagram_video_handoff,
+                url,
+                description="resolve_instagram_video_handoff",
+            )
+            if await _deliver_plan(
+                query, context, session_token, session_data, plan, cache_key
+            ):
+                return
 
             try:
                 file_path = await run_blocking(
@@ -1934,6 +2093,28 @@ async def _handle_main_callback(
                 )
 
                 await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+
+                # Готовый файл до 20 МБ Telegram забирает по ссылке сам.
+                # Пары «видео + аудио» так отдать нельзя: их ещё нужно склеить
+                # FFmpeg, поэтому ссылка ищется только для combined-формата.
+                if choice.kind == "combined":
+                    plan = plan_url_handoff(
+                        find_format_url(
+                            session_data.get("video_info"), choice.format_id
+                        ),
+                        "video",
+                        choice.total_size,
+                    )
+                    if await _deliver_plan(
+                        query,
+                        context,
+                        session_token,
+                        session_data,
+                        plan,
+                        _cache_format_id_for_main_action("youtube", "tg_video"),
+                    ):
+                        return
+
                 try:
                     file_path = await download_content(
                         url, tg_video["format_id"], session_id, "combined"
@@ -2146,6 +2327,24 @@ async def _handle_format_callback(
 
         match content_type:
             case "combined":
+                selected = next(
+                    (
+                        fmt
+                        for fmt in formats.get("combined", [])
+                        if str(fmt.get("format_id")) == format_id
+                    ),
+                    None,
+                )
+                plan = plan_url_handoff(
+                    find_format_url(session_data.get("video_info"), format_id),
+                    "video",
+                    (selected or {}).get("filesize"),
+                )
+                if await _deliver_plan(
+                    query, context, session_token, session_data, plan, cache_format_id
+                ):
+                    return
+
                 file_path = await download_content(
                     url, format_id, session_id, "combined"
                 )
@@ -2670,49 +2869,13 @@ async def send_single_file(
 
             # Кэширование file_id для видео, аудио и документов
             if message and url and cache_format_id:
-                video_info = session_data.get("video_info")
-                file_id = None
-                file_unique_id = None
-                file_size = None
-                duration = None
-
-                if message.video:
-                    file_id = message.video.file_id
-                    file_unique_id = message.video.file_unique_id
-                    file_size = message.video.file_size
-                    duration = message.video.duration
-                elif message.audio:
-                    file_id = message.audio.file_id
-                    file_unique_id = message.audio.file_unique_id
-                    file_size = message.audio.file_size
-                    duration = message.audio.duration
-                elif message.document:
-                    file_id = message.document.file_id
-                    file_unique_id = message.document.file_unique_id
-                    file_size = message.document.file_size
-
-                if file_id:
-                    try:
-                        cached = CachedVideo(
-                            url=url,
-                            file_id=file_id,
-                            file_unique_id=file_unique_id,
-                            platform=platform,
-                            format_id=cache_format_id,
-                            cached_at=datetime.now(),
-                            file_size=file_size,
-                            duration=duration,
-                            title=video_info.get("title") if video_info else None,
-                        )
-                        telegram_cache.set(cached)
-                        logger.info(
-                            "💾 Файл сохранён в кэш: %s -> %s (key=%s)",
-                            url,
-                            file_id,
-                            cache_format_id,
-                        )
-                    except Exception as e:
-                        logger.error("Ошибка сохранения в кэш: %s", e)
+                _cache_sent_media(
+                    message,
+                    url,
+                    platform,
+                    cache_format_id,
+                    session_data.get("video_info"),
+                )
 
             return True
         except (telegram.error.NetworkError, telegram.error.TimedOut) as e:
