@@ -73,6 +73,8 @@ Docker-стек отправляет файлы до 2 ГБ через лока�
 - `file_delivery.py` — выбор Telegram-метода отправки по расширению файла
 - `public_errors.py` — безопасная классификация ошибок в user-facing текст
 - `ytdlp_common.py` — общие для всех загрузчиков сетевые опции yt-dlp, exponential backoff, проверка лимита размера
+- `fast_path.py` — общие примитивы быстрых путей: `FastPathUnavailable` и проверка ссылки по allowlist доменов (одна реализация на все платформы намеренно — это проверка безопасности)
+- `instagram_fast_path.py` — чистый разбор GraphQL-ответа Instagram: прямая ссылка из `video_versions` вместо yt-dlp, отказ на каруселях и фото-постах, allowlist доменов Meta. Включается `INSTAGRAM_FAST_PATH`, при отказе — откат на yt-dlp
 - `tiktok_fast_path.py` — чистый разбор ответа резолвера TikTok: прямая H.264-ссылка вместо yt-dlp, признак «`music` — это звук видео, а не библиотечный трек», проверка ссылок по allowlist доменов (`is_allowed_media_url`). Включается `TIKTOK_FAST_PATH`, при отказе — откат на yt-dlp
 - `youtube_utils.py` — YouTube/Shorts через yt-dlp с cookie-поддержкой и smart retry
 - `tiktok_instagram_utils.py` (~2100 строк) — TikTok (множественные API-хосты, backoff) и Instagram (rate-limit aware, cookies для приватных профилей, фото-посты и карусели)

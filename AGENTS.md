@@ -311,6 +311,7 @@ ruff check --output-format=github .
 | `DOWNLOAD_WORKERS` | нет | `8` | Потоков в ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (сек) |
 | `TIKTOK_FAST_PATH` | нет | `true` | Прямая H.264-ссылка TikTok вместо yt-dlp (576×1024, без перекодирования). Не откатывает уже закэшированные ссылки — см. ниже |
+| `INSTAGRAM_FAST_PATH` | нет | `true` | Прямая ссылка Instagram из GraphQL вместо yt-dlp (~1.9 с против 7.5 с, качество то же) |
 | `YTDLP_AUTO_UPDATE` | нет | `false` | Явно разрешить обновление yt-dlp при старте |
 | `YTDLP_RELEASE_CHANNEL` | нет | `nightly` | Канал: `stable`, `nightly`, `master` |
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут обновления yt-dlp (сек) |

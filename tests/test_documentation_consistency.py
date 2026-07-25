@@ -54,6 +54,24 @@ def test_fast_path_flag_documents_cache_reset():
 
 
 @pytest.mark.unit
+def test_instagram_fast_path_flag_is_documented():
+    """Каждый флаг быстрого пути обязан быть описан во всех трёх документах.
+
+    `config.py` — не документация: оператор ищет переменную в `.env.example`,
+    README и AGENTS.md. Флаг Instagram, в отличие от TikTok, качество не меняет,
+    поэтому предупреждения про кэш ему не нужно — нужен сам факт наличия.
+    """
+    documents = {
+        ".env.example": (ROOT / ".env.example").read_text(encoding="utf-8"),
+        "README.md": (ROOT / "README.md").read_text(encoding="utf-8"),
+        "AGENTS.md": (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+    }
+
+    for name, text in documents.items():
+        assert "INSTAGRAM_FAST_PATH" in text, name
+
+
+@pytest.mark.unit
 def test_cleanup_cache_command_only_removes_expired_records():
     """Команда, на которую ссылается документация, должна делать ровно то.
 

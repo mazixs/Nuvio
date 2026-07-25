@@ -143,6 +143,7 @@ git push origin v1.0.0
 | `DOWNLOAD_WORKERS` | нет | `8` | Количество потоков в ThreadPoolExecutor |
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (секунды) |
 | `TIKTOK_FAST_PATH` | нет | `true` | Быстрый путь TikTok: прямая H.264-ссылка вместо yt-dlp (576×1024, без перекодирования). Смена флага не влияет на уже закэшированные ссылки — см. ниже |
+| `INSTAGRAM_FAST_PATH` | нет | `true` | Быстрый путь Instagram: прямая ссылка из GraphQL вместо yt-dlp (~1.9 с против 7.5 с, качество то же — H.264 + AAC) |
 | `YTDLP_AUTO_UPDATE` | нет | `false` | Явно разрешить обновление yt-dlp при старте |
 | `YTDLP_RELEASE_CHANNEL` | нет | `nightly` | Канал обновлений yt-dlp (`stable`, `nightly`, `master`) |
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут операции обновления yt-dlp (секунды) |
