@@ -172,7 +172,9 @@ audiences. Log in for access.
 `utils/media_processor.py`), под флагом `TIKTOK_FAST_PATH` (по умолчанию включён):
 
 - `download_tiktok_video_fast` — скачивание прямой ссылки `play` без yt-dlp
-  и без FFmpeg;
+  и без перекодирования. FFmpeg всё равно вызывается: `_ensure_ios_compatible_video`
+  делает один `ffprobe`, чтобы не отдать HEVC при смене поведения резолвера
+  (требование ADR-001). FFmpeg остаётся обязательной зависимостью в любом режиме;
 - `download_tiktok_audio_fast` — прямой `music`, если это звук самого видео,
   иначе извлечение из видео копированием потока;
 - `extract_audio_copy` — `-vn -c:a copy` вместо перекодирования;
