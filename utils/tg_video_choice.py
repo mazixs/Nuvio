@@ -81,10 +81,22 @@ def _audio_sort_key(fmt: dict[str, Any]) -> tuple[int, int]:
 class VideoOption:
     """Один пункт меню разрешений."""
 
-    height: int
+    resolution: int
     format_id: str
     ext: str
     size: int  # 0 — размер неизвестен
+
+
+def _resolution_of(fmt: dict[str, Any]) -> int:
+    """Разрешение так, как его называет пользователь: по короткой стороне.
+
+    У вертикального видео yt-dlp сообщает высоту длинной стороны, поэтому Shorts
+    в меню выглядели как «2560p» и «1920p». Пользователь же знает их как 1440p и
+    1080p — ровно так их подписывает и сам YouTube.
+    """
+    height = fmt.get("height") or 0
+    width = fmt.get("width") or 0
+    return min(height, width) if width else height
 
 
 @dataclass(frozen=True)
@@ -171,11 +183,11 @@ def list_video_options(
         key=_video_sort_key,
     )
     for fmt in ready:
-        height = fmt.get("height") or 0
+        resolution = _resolution_of(fmt)
         options.setdefault(
-            height,
+            resolution,
             VideoOption(
-                height=height,
+                resolution=resolution,
                 format_id=str(fmt["format_id"]),
                 ext=fmt.get("ext") or "mp4",
                 size=fmt["filesize"],
@@ -188,20 +200,20 @@ def list_video_options(
         fmt for fmt in video_only if not isinstance(fmt.get("filesize"), int)
     ]
     for fmt in tracks:
-        height = fmt.get("height") or 0
-        if height in options:
+        resolution = _resolution_of(fmt)
+        if resolution in options:
             continue
         pair = _best_pair(fmt, audios, budget_bytes)
         if pair:
             format_id, size = pair
-            options[height] = VideoOption(
-                height=height,
+            options[resolution] = VideoOption(
+                resolution=resolution,
                 format_id=format_id,
                 ext=fmt.get("ext") or "mp4",
                 size=size,
             )
 
-    return sorted(options.values(), key=lambda option: -option.height)
+    return sorted(options.values(), key=lambda option: -option.resolution)
 
 
 def select_tg_video_format(

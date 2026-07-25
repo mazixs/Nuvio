@@ -542,6 +542,9 @@ def _format_size(size: int) -> str:
         return ""
     if size >= 1024 * 1024 * 1024:
         return f" · {size / 1024 / 1024 / 1024:.1f} ГБ"
+    if size < 1024 * 1024:
+        # «0 МБ» на дорожке в несколько сотен килобайт выглядит как ошибка.
+        return f" · {size / 1024:.0f} КБ"
     return f" · {size / 1024 / 1024:.0f} МБ"
 
 
@@ -593,7 +596,7 @@ def _build_video_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup
 
     keyboard = [
         _button_row(
-            f"{option.height}p{_format_size(option.size)}",
+            f"{option.resolution}p{_format_size(option.size)}",
             session_token,
             "format",
             "combined",
