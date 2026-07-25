@@ -11,7 +11,6 @@ import pytest
 from utils.tiktok_fast_path import (
     FastPathUnavailable,
     audio_matches_video,
-    fits_url_handoff,
     is_allowed_media_url,
     parse_fast_media,
 )
@@ -172,20 +171,6 @@ def test_audio_matches_video_tolerates_small_duration_drift():
 @pytest.mark.unit
 def test_audio_matches_video_rejects_missing_music_info():
     assert audio_matches_video({}, video_duration=60) is False
-
-
-# === fits_url_handoff ===
-
-
-@pytest.mark.unit
-def test_fits_url_handoff_accepts_largest_verified_video():
-    """19.53 МБ — проверенное реальное видео на 166 с, 97.6 % лимита."""
-    assert fits_url_handoff(19528428) is True
-
-
-@pytest.mark.unit
-def test_fits_url_handoff_rejects_size_above_bot_api_limit():
-    assert fits_url_handoff(20_000_001) is False
 
 
 # === is_allowed_media_url ===
