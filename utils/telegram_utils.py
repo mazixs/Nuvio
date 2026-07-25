@@ -815,6 +815,27 @@ def _cache_format_id_for_main_action(platform: str, action: str) -> str | None:
     return cache_key_for_main_action(platform, action)
 
 
+async def _deliver_cached_audio(query, url: str, cache_key: str) -> bool:
+    """Отправляет аудио из кэша по file_id.
+
+    Returns:
+        bool: True, если файл доставлен; False, если записи нет или file_id устарел.
+    """
+    cached = telegram_cache.get(url, format_id=cache_key)
+    if not cached:
+        return False
+
+    try:
+        await query.message.reply_audio(audio=cached.file_id)
+    except telegram.error.BadRequest as e:
+        logger.warning("file_id аудио устарел (key=%s): %s", cache_key, e)
+        telegram_cache.delete_by_file_id(cached.file_id)
+        return False
+
+    logger.info("Аудио доставлено из кэша (key=%s)", cache_key)
+    return True
+
+
 def _cache_format_id_for_format_selection(
     content_type: str, format_id: str
 ) -> str | None:
