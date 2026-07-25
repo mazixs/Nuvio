@@ -359,6 +359,37 @@ def test_fast_audio_extracts_from_video_for_licensed_track(
 
 
 @pytest.mark.unit
+def test_fast_audio_removes_video_when_extraction_fails(
+    monkeypatch, tmp_path, fake_downloads
+):
+    """Иначе откат на yt-dlp качает видео повторно в тот же каталог.
+
+    Пиковый расход диска при этом удваивается на каждом сбое извлечения.
+    """
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(title="SAVAGE", duration=168, original=False),
+    )
+
+    def _failing_extract(input_path, session_id, output_filename=None):
+        raise RuntimeError("ffmpeg упал")
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "extract_audio_copy", _failing_extract
+    )
+
+    with pytest.raises(RuntimeError, match="ffmpeg упал"):
+        tiktok_instagram_utils.download_tiktok_audio_fast(
+            "https://vt.tiktok.com/example/",
+            "session-extract-fail",
+            output_dir=tmp_path,
+        )
+
+    assert list(tmp_path.iterdir()) == [], "скачанное видео должно удаляться"
+
+
+@pytest.mark.unit
 def test_download_tiktok_video_falls_back_to_ytdlp(monkeypatch, fake_downloads):
     """Отказ быстрого пути не должен ломать скачивание."""
 

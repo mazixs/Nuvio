@@ -620,8 +620,13 @@ def download_tiktok_audio_fast(
         referer="https://www.tiktok.com/",
         expected_content_type="video/",
     )
-    audio_path = extract_audio_copy(video_path, session_id)
-    video_path.unlink(missing_ok=True)
+    # Видео нужно только как источник звука. Удаляем его и при сбое извлечения,
+    # иначе откат на yt-dlp скачает видео повторно в тот же каталог и удвоит
+    # пиковый расход диска.
+    try:
+        audio_path = extract_audio_copy(video_path, session_id)
+    finally:
+        video_path.unlink(missing_ok=True)
     return finalize_downloaded_file(audio_path, force_local)
 
 
