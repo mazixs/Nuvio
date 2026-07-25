@@ -10,8 +10,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
+from utils.fast_path import FastPathUnavailable, is_allowed_media_url as _is_allowed
+
+
+__all__ = [
+    "ALLOWED_MEDIA_DOMAINS",
+    "AUDIO_DURATION_TOLERANCE_SECONDS",
+    "FastMedia",
+    "FastPathUnavailable",
+    "audio_matches_video",
+    "is_allowed_media_url",
+    "parse_fast_media",
+]
 
 # Допустимое расхождение длительности звука и видео, секунды.
 AUDIO_DURATION_TOLERANCE_SECONDS = 2
@@ -34,31 +45,8 @@ ALLOWED_MEDIA_DOMAINS = frozenset(
 
 
 def is_allowed_media_url(url: str) -> bool:
-    """Проверяет, что ссылка ведёт на разрешённый CDN по HTTPS.
-
-    Сравнение идёт по суффиксу домена, а не по подстроке, иначе хост вида
-    ``tiktokcdn-us.com.evil.test`` прошёл бы проверку.
-    """
-    try:
-        parsed = urlparse(url or "")
-    except ValueError:
-        return False
-
-    if parsed.scheme != "https":
-        return False
-
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if not host:
-        return False
-
-    return any(
-        host == domain or host.endswith(f".{domain}")
-        for domain in ALLOWED_MEDIA_DOMAINS
-    )
-
-
-class FastPathUnavailable(Exception):
-    """Быстрый путь неприменим — вызывающий код обязан использовать yt-dlp."""
+    """Проверяет ссылку TikTok по allowlist доменов резолвера и CDN."""
+    return _is_allowed(url, ALLOWED_MEDIA_DOMAINS)
 
 
 @dataclass(frozen=True)
