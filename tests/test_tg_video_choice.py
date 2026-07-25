@@ -251,3 +251,46 @@ def test_h264_wins_within_the_same_resolution():
     choice = select_tg_video_format(video, audio, [], LOCAL_BUDGET)
 
     assert choice.format_id == "299+140"
+
+
+@pytest.mark.unit
+def test_long_video_cascades_down_to_the_next_fitting_resolution():
+    """Многочасовое видео в 1080p не влезает в 2 ГБ — нужен шаг вниз.
+
+    Размеры пересчитаны с измеренных на реальном 32-минутном ролике битрейтов
+    (1080p H.264 — 301.2 МБ, 720p — 183.9 МБ, 480p — 67.1 МБ) на 4 часа: это
+    2.26 ГБ, 1.38 ГБ и 504 МБ. Первое в лимит локального Bot API не проходит,
+    поэтому выбор обязан опуститься до 720p, а не отказать.
+    """
+    four_hours = 240 / 32  # во столько раз длиннее замеренного ролика
+    video = [
+        {"format_id": "299", "height": 1080, "ext": "mp4", "vcodec": "avc1.64002a",
+         "filesize": int(301.2 * MB * four_hours)},
+        {"format_id": "298", "height": 720, "ext": "mp4", "vcodec": "avc1.640020",
+         "filesize": int(183.9 * MB * four_hours)},
+        {"format_id": "135", "height": 480, "ext": "mp4", "vcodec": "avc1.4d401f",
+         "filesize": int(67.1 * MB * four_hours)},
+    ]
+    audio = [{"format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2",
+              "filesize": int(29.7 * MB * four_hours)}]
+
+    choice = select_tg_video_format(video, audio, [], LOCAL_BUDGET)
+
+    assert choice is not None, "вместо отказа нужен шаг вниз по качеству"
+    assert choice.height == 720
+    assert choice.total_size <= LOCAL_BUDGET
+
+
+@pytest.mark.unit
+def test_cascade_continues_until_something_fits():
+    """Если и 720p не влезает — идём ниже, пока не найдётся проходной вариант."""
+    video = [
+        {"format_id": "a", "height": 1080, "ext": "mp4", "vcodec": "avc1", "filesize": 1900 * MB},
+        {"format_id": "b", "height": 720, "ext": "mp4", "vcodec": "avc1", "filesize": 1200 * MB},
+        {"format_id": "c", "height": 480, "ext": "mp4", "vcodec": "avc1", "filesize": 400 * MB},
+    ]
+    audio = [{"format_id": "s", "ext": "m4a", "acodec": "mp4a.40.2", "filesize": 900 * MB}]
+
+    choice = select_tg_video_format(video, audio, [], LOCAL_BUDGET)
+
+    assert choice.height == 480
