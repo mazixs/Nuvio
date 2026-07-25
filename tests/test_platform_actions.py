@@ -18,3 +18,8 @@ def test_format_selection_cache_keys_preserve_scope():
     assert cache_key_for_format_selection("video_only", "137") == "video_only:137"
     assert cache_key_for_format_selection("best", "ignored") == "best"
     assert cache_key_for_format_selection("audio_only", "140") is None
+
+
+def test_main_action_cache_keys_cover_rutube_and_vk():
+    assert cache_key_for_main_action("rutube", "rutube_download") == "direct_video"
+    assert cache_key_for_main_action("vk", "vk_download") == "direct_video"
