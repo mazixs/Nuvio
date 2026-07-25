@@ -32,6 +32,7 @@ __all__ = [
     "MAX_HANDOFF_BYTES",
     "MAX_PHOTO_HANDOFF_BYTES",
     "HandoffKind",
+    "PhotoPostHandoff",
     "UrlHandoff",
     "find_format_url",
     "handoff_limit_for",
@@ -73,6 +74,14 @@ class UrlHandoff:
     url: str
     kind: HandoffKind
     size: int
+
+
+@dataclass(frozen=True)
+class PhotoPostHandoff:
+    """Решение отдать ссылками весь фото-пост целиком."""
+
+    images: tuple[UrlHandoff, ...]
+    audio: UrlHandoff | None
 
 
 def handoff_limit_for(kind: HandoffKind) -> int:
