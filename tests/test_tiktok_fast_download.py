@@ -9,12 +9,16 @@ from utils.tiktok_fast_path import FastPathUnavailable
 from utils.ytdlp_common import FileSizeLimitError
 
 
+VIDEO_URL = "https://v16m.tiktokcdn-us.com/play.mp4"
+MUSIC_URL = "https://www.tikwm.com/music.mp3"
+
+
 def _resolver_payload(**music_info_overrides):
     music_info = {
         "title": "original sound - tester",
         "duration": 60,
         "original": True,
-        "play": "https://cdn.example.test/music.mp3",
+        "play": MUSIC_URL,
     }
     music_info.update(music_info_overrides)
     return {
@@ -25,13 +29,33 @@ def _resolver_payload(**music_info_overrides):
             "title": "Клип",
             "duration": 60,
             "size": 5576522,
-            "play": "https://cdn.example.test/play.mp4",
-            "music": "https://cdn.example.test/music.mp3",
-            "cover": "https://cdn.example.test/cover.jpg",
+            "play": VIDEO_URL,
+            "music": MUSIC_URL,
+            "cover": "https://www.tikwm.com/cover.jpg",
             "author": {"unique_id": "tester"},
             "music_info": music_info,
         },
     }
+
+
+class _FakeStream:
+    """Минимальный ответ httpx.stream для проверок без сети."""
+
+    def __init__(self, content_type: str, chunks=(b"media",)):
+        self.headers = {"content-type": content_type}
+        self._chunks = chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_bytes(self):
+        return iter(self._chunks)
 
 
 @pytest.fixture
@@ -39,7 +63,7 @@ def fake_downloads(monkeypatch):
     """Подменяет сетевое скачивание записью заглушки на диск."""
     requested: list[str] = []
 
-    def _fake_download(url, destination, referer=None):
+    def _fake_download(url, destination, referer=None, expected_content_type=None):
         requested.append(url)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"media")
@@ -129,8 +153,78 @@ def test_fetch_tiktok_fast_media_parses_resolver_response(monkeypatch):
         "https://vt.tiktok.com/example/"
     )
 
-    assert media.video_url == "https://cdn.example.test/play.mp4"
+    assert media.video_url == VIDEO_URL
     assert media.audio_is_video_sound is True
+
+
+@pytest.mark.unit
+def test_remote_download_rejects_unexpected_content_type(monkeypatch, tmp_path):
+    """Тело неожидаемого типа нельзя ни писать в .mp4, ни отдавать пользователю."""
+    monkeypatch.setattr(
+        tiktok_instagram_utils.httpx,
+        "stream",
+        lambda method, url, **kwargs: _FakeStream("text/html; charset=utf-8"),
+    )
+    destination = tmp_path / "clip.mp4"
+
+    with pytest.raises(FastPathUnavailable, match="text/html"):
+        tiktok_instagram_utils._download_remote_file(
+            VIDEO_URL, destination, expected_content_type="video/"
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.unit
+def test_remote_download_accepts_declared_content_type(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        tiktok_instagram_utils.httpx,
+        "stream",
+        lambda method, url, **kwargs: _FakeStream("video/mp4"),
+    )
+    destination = tmp_path / "clip.mp4"
+
+    result = tiktok_instagram_utils._download_remote_file(
+        VIDEO_URL, destination, expected_content_type="video/"
+    )
+
+    assert result.read_bytes() == b"media"
+
+
+@pytest.mark.unit
+def test_fast_path_declares_expected_content_types(monkeypatch, tmp_path):
+    """Видео обязано приходить как video/*, звук — как audio/*."""
+    seen: list = []
+
+    def _fake_download(url, destination, referer=None, expected_content_type=None):
+        seen.append(expected_content_type)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"media")
+        return destination
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "_download_remote_file", _fake_download
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(),
+    )
+
+    tiktok_instagram_utils.download_tiktok_video_fast(
+        "https://vt.tiktok.com/example/",
+        "session-ct-video",
+        output_dir=tmp_path,
+        resolved_url="https://www.tiktok.com/@tester/video/1",
+    )
+    tiktok_instagram_utils.download_tiktok_audio_fast(
+        "https://vt.tiktok.com/example/",
+        "session-ct-audio",
+        output_dir=tmp_path,
+        resolved_url="https://www.tiktok.com/@tester/video/1",
+    )
+
+    assert seen == ["video/", "audio/"]
 
 
 @pytest.mark.unit
@@ -148,7 +242,7 @@ def test_fast_video_download_uses_direct_url(monkeypatch, tmp_path, fake_downloa
     )
 
     assert Path(result).exists()
-    assert fake_downloads == ["https://cdn.example.test/play.mp4"]
+    assert fake_downloads == [VIDEO_URL]
 
 
 @pytest.mark.unit
@@ -226,7 +320,7 @@ def test_fast_audio_uses_music_url_for_original_sound(
     )
 
     assert Path(result).exists()
-    assert fake_downloads == ["https://cdn.example.test/music.mp3"]
+    assert fake_downloads == [MUSIC_URL]
 
 
 @pytest.mark.unit
@@ -259,7 +353,7 @@ def test_fast_audio_extracts_from_video_for_licensed_track(
         output_dir=tmp_path,
     )
 
-    assert fake_downloads == ["https://cdn.example.test/play.mp4"]
+    assert fake_downloads == [VIDEO_URL]
     assert len(extracted) == 1
     assert Path(result).name == "extracted.m4a"
 
@@ -319,7 +413,7 @@ def test_size_gate_does_not_block_fast_path(monkeypatch, tmp_path, fake_download
     )
 
     assert Path(result).exists()
-    assert fake_downloads == ["https://cdn.example.test/play.mp4"]
+    assert fake_downloads == [VIDEO_URL]
 
 
 @pytest.mark.unit

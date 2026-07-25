@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 # Предел Bot API на скачивание файла по URL силами Telegram (не-фото).
@@ -17,6 +18,46 @@ URL_HANDOFF_LIMIT_BYTES = 20_000_000
 
 # Допустимое расхождение длительности звука и видео, секунды.
 AUDIO_DURATION_TOLERANCE_SECONDS = 2
+
+# Домены, с которых разрешено скачивать медиа быстрого пути: собственный CDN
+# TikTok и хост самого резолвера (проверено на реальных ссылках, см.
+# docs/technical/latency-disk-network-research.md §4). Ответ резолвера — данные
+# третьей стороны: без allowlist подменённый `play` вида
+# `http://telegram-bot-api:8081/...` заставил бы бота сходить во внутреннюю
+# сеть Docker и отдать тело запросившему пользователю.
+ALLOWED_MEDIA_DOMAINS = frozenset(
+    {
+        "tiktokcdn.com",
+        "tiktokcdn-us.com",
+        "tiktokcdn-eu.com",
+        "tiktokcdn-in.com",
+        "tikwm.com",
+    }
+)
+
+
+def is_allowed_media_url(url: str) -> bool:
+    """Проверяет, что ссылка ведёт на разрешённый CDN по HTTPS.
+
+    Сравнение идёт по суффиксу домена, а не по подстроке, иначе хост вида
+    ``tiktokcdn-us.com.evil.test`` прошёл бы проверку.
+    """
+    try:
+        parsed = urlparse(url or "")
+    except ValueError:
+        return False
+
+    if parsed.scheme != "https":
+        return False
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+
+    return any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in ALLOWED_MEDIA_DOMAINS
+    )
 
 
 class FastPathUnavailable(Exception):
@@ -70,7 +111,8 @@ def parse_fast_media(payload: dict) -> FastMedia:
     """Разбирает ответ резолвера в набор прямых ссылок.
 
     Raises:
-        FastPathUnavailable: ответ с ошибкой, без прямой ссылки или фото-пост.
+        FastPathUnavailable: ответ с ошибкой, без прямой ссылки, фото-пост или
+            ссылка на видео вне allowlist разрешённых доменов.
     """
     if payload.get("code") != 0:
         raise FastPathUnavailable(
@@ -87,13 +129,21 @@ def parse_fast_media(payload: dict) -> FastMedia:
     video_url = data.get("play")
     if not video_url:
         raise FastPathUnavailable("резолвер не вернул прямую ссылку на видео")
+    if not is_allowed_media_url(str(video_url)):
+        raise FastPathUnavailable(
+            f"ссылка на видео вне allowlist разрешённых доменов: {video_url}"
+        )
 
     duration = int(data.get("duration") or 0)
     music_info = data.get("music_info") or {}
     audio_is_video_sound = audio_matches_video(music_info, duration)
     audio_url = None
     if audio_is_video_sound:
-        audio_url = data.get("music") or music_info.get("play")
+        audio_candidate = data.get("music") or music_info.get("play")
+        # Негодная ссылка звука не отменяет быстрый путь: звук будет извлечён
+        # из видео копированием потока.
+        if audio_candidate and is_allowed_media_url(str(audio_candidate)):
+            audio_url = str(audio_candidate)
 
     return FastMedia(
         video_url=str(video_url),
