@@ -49,6 +49,9 @@ def test_obsolete_message_constants_are_removed():
         "BEST_QUALITY_LABEL",
         "BEST_AUDIO_LABEL",
         "MP3_MIN_LABEL",
+        # Формат субтитров теперь выбирает пользователь, поэтому кнопки с
+        # зашитым SRT в подписи больше нет.
+        "BTN_SUBTITLES",
     }
 
     assert obsolete_names.isdisjoint(vars(messages))

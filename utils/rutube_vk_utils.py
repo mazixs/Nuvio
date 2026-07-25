@@ -191,7 +191,7 @@ def _download_video(
                 )
             ],
         }
-        apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts, session_id=session_id)
         logger.info(
             f"Скачивание {url} через yt-dlp без cookies, формат: {format_selector}"
         )
@@ -268,7 +268,7 @@ def _download_audio(
                 )
             ],
         }
-        apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts, session_id=session_id)
         logger.info(
             f"Скачивание аудио {url} через yt-dlp без cookies, формат: {format_selector}"
         )

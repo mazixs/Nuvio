@@ -106,10 +106,10 @@ BTN_BACK = "⬅️ Назад"
 BTN_DOWNLOAD_VIDEO = "Скачать видео"
 BTN_DOWNLOAD_POST = "Скачать пост"
 BTN_AUDIO_ONLY = "Только аудио (MP3)"
-BTN_SUBTITLES = "📝 Скачать субтитры (SRT)"
 BTN_SECTION_VIDEO = "🎬 Видео"
 BTN_SECTION_AUDIO = "🎵 Аудио"
 BTN_SECTION_SUBTITLES = "📝 Субтитры"
+BTN_CANCEL = "❌ Отмена"
 BTN_AUDIO_TRANSCODE = "🎵 Звук (перекодируем в M4A)"
 
 # === ЭКРАНЫ ВЫБОРА ===
@@ -122,6 +122,12 @@ NO_VIDEO_OPTIONS_MESSAGE = (
     "❌ У этого видео нет разрешений, которые проходят по лимиту отправки."
 )
 NO_AUDIO_OPTIONS_MESSAGE = "❌ У этого видео нет звуковой дорожки."
+CHOOSE_SUBTITLE_LANGUAGE_MESSAGE = "Язык субтитров:"
+CHOOSE_SUBTITLE_FORMAT_MESSAGE = "Формат субтитров:"
+NO_SUBTITLE_LANGUAGES_MESSAGE = (
+    "❌ У этого видео нет субтитров на русском или английском."
+)
+CANCELLED_MESSAGE = "❌ Отменено. Запрос остановлен, ничего не скачано."
 
 # === ПОДПИСИ К ФОРМАТАМ ===
 FILE_PREPARING = "Файл готовится к отправке..."

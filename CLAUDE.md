@@ -170,7 +170,19 @@ Fixtures и hooks — `tests/conftest.py`, там же лёгкая заглуш
 - **`messages.py`** — лимит Telegram 4096 символов на сообщение
 - **`config.py`** — новая env-переменная требует обновления `.env.example` (иначе падает тест) и `README.md`
 - **`callback_fsm.py` + `telegram_utils.py`** — смена формата `callback_data` ломает уже отправленные пользователям кнопки; сопровождай тестами разбора событий
+- **`cancellation.py`** — отмена длительных задач по `session_id`. `CancelledByUser`
+  наследуется от `BaseException` намеренно (как `asyncio.CancelledError`): она
+  летит мимо широких `except Exception` в обработчиках платформ к единственному
+  перехвату в `button_callback`. До yt-dlp отмена доходит через `progress_hooks`,
+  которые ставит `apply_network_opts(..., session_id=...)` — проверено, что
+  yt-dlp пропускает исключение из хука как есть
 - **Меню форматов** — два уровня: разделы (`main|video_menu`, `main|audio_menu`, `main|subtitles`), затем выбор. Из `format`-действий живы только `combined` и `audio_only`; `best`, `audio_best`, `mp3_min` и `video_only` удалены вместе с кнопками и закреплены в `test_dead_code_contract.py`
+- **Субтитры** — каскад: `main|subtitles` → язык (`format|subs_lang|ru`) → формат
+  (`format|subs|ru:srt`). Предлагаются только русский и английский, TXT
+  собирается из SRT в `utils/subtitles.py`
+- **Отмена** — кнопка есть на каждом экране: на ожидании разбора ссылки, в
+  главном меню и на всех статусах скачивания. Сессия заводится **до** разбора
+  ссылки именно ради этого, иначе кнопке не за что зацепиться
 - **`youtube_utils.py`** — цепочка fallback чувствительна к порядку операций
 - **`tests/conftest.py`** — заглушка `yt_dlp` используется всем набором
 - **Схемы SQLite** — учитывай WAL и необходимость миграции существующих установок (образец — миграция `last_csi_sent` в `analytics_db.py`)

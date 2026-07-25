@@ -18,6 +18,7 @@ from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.media_processor import convert_webm_to_mp4
 from utils.ytdlp_runtime import extract_cli_output_path, run_yt_dlp_cli
+from utils.subtitles import srt_to_text
 from utils.ytdlp_common import (
     DEFAULT_YTDLP_NETWORK_OPTS,
     apply_network_opts,
@@ -400,7 +401,7 @@ def download_video(
             ],
             "merge_output_format": "mp4",
         }
-        apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts, session_id=session_id)
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
             logger.info("Использование файла cookies для скачивания: %s", cookiefile)
@@ -568,7 +569,7 @@ def download_audio_native(
                 )
             ],
         }
-        apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts, session_id=session_id)
 
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
@@ -736,7 +737,7 @@ def download_audio(
                 )
             ],
         }
-        apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts, session_id=session_id)
 
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
@@ -844,21 +845,27 @@ def download_audio(
 
 
 def download_subtitles(
-    url: str, session_id: str, output_dir: Path | None = None
+    url: str,
+    session_id: str,
+    language: str = "ru",
+    subtitle_format: str = "srt",
+    output_dir: Path | None = None,
 ) -> Path | None:
-    """
-    Скачивает субтитры в формате SRT.
-    Приоритет: русские -> английские -> первые доступные.
+    """Скачивает субтитры выбранного языка в выбранном формате.
 
     Args:
-        url: URL YouTube видео
-        session_id: ID сессии
-        output_dir: Директория для сохранения
+        language: код языка, например ``ru``. Региональные варианты вида
+            ``en-US`` и ``ru-orig`` подбираются автоматически: YouTube отдаёт
+            автоперевод именно так.
+        subtitle_format: ``srt``, ``vtt`` или ``txt``. TXT yt-dlp не отдаёт,
+            поэтому он собирается из SRT — таймкоды убираются здесь.
 
     Returns:
-        Path к SRT файлу или None если субтитры недоступны
+        Path к файлу субтитров или None, если дорожки на этом языке нет.
     """
-    logger.info(f"Скачивание субтитров: {url}")
+    logger.info("Скачивание субтитров (%s, %s): %s", language, subtitle_format, url)
+    # TXT — наш формат, а не yt-dlp: запрашиваем SRT и разбираем его сами.
+    requested_format = "srt" if subtitle_format == "txt" else subtitle_format
 
     def _download_subs(use_cookies: bool) -> Path | None:
         if output_dir is None:
@@ -867,15 +874,15 @@ def download_subtitles(
             output_path_template = output_dir / "%(title)s.%(ext)s"
 
         ydl_opts = {
-            "skip_download": True,  # Не скачиваем видео
-            "writesubtitles": True,  # Скачиваем субтитры
-            "writeautomaticsub": True,  # Включаем автоматические субтитры
-            "subtitlesformat": "srt",  # Формат SRT
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitlesformat": requested_format,
             "outtmpl": str(output_path_template),
             "quiet": False,
             "no_warnings": True,
         }
-        apply_network_opts(ydl_opts)
+        apply_network_opts(ydl_opts, session_id=session_id)
 
         if (
             use_cookies
@@ -888,43 +895,29 @@ def download_subtitles(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-            # Проверяем доступные субтитры
-            available_subs = info.get("subtitles", {})
-            auto_subs = info.get("automatic_captions", {})
-
-            # Объединяем ручные и автоматические субтитры
-            all_subs = {**auto_subs, **available_subs}
-
-            if not all_subs:
-                logger.warning("Субтитры не найдены для этого видео")
+            available = {
+                **(info.get("automatic_captions") or {}),
+                **(info.get("subtitles") or {}),
+            }
+            track = _match_subtitle_track(available, language)
+            if not track:
+                logger.warning("Субтитры на языке %s недоступны", language)
                 return None
 
-            # Определяем приоритетный язык: ru -> en -> первый доступный
-            lang = None
-            if "ru" in all_subs:
-                lang = "ru"
-                logger.info("Найдены русские субтитры")
-            elif "en" in all_subs:
-                lang = "en"
-                logger.info("Найдены английские субтитры")
-            else:
-                lang = list(all_subs.keys())[0]
-                logger.info(f"Используем субтитры на языке: {lang}")
+            ydl_opts["subtitleslangs"] = [track]
 
-            # Настраиваем скачивание конкретного языка
-            ydl_opts["subtitleslangs"] = [lang]
-
-            # Скачиваем субтитры
             with yt_dlp.YoutubeDL(ydl_opts) as ydl_download:
                 ydl_download.download([url])
 
-            # Формируем путь к файлу субтитров
             base_filename = Path(ydl.prepare_filename(info))
-            subtitle_file = base_filename.with_suffix(f".{lang}.srt")
+            subtitle_file = base_filename.with_suffix(f".{track}.{requested_format}")
 
             if not subtitle_file.exists():
                 logger.error(f"Файл субтитров не найден: {subtitle_file}")
                 return None
+
+            if subtitle_format == "txt":
+                subtitle_file = _convert_subtitles_to_text(subtitle_file)
 
             logger.info(f"Субтитры успешно скачаны: {subtitle_file}")
             return subtitle_file
@@ -944,3 +937,24 @@ def download_subtitles(
                 f"Ошибка скачивания субтитров даже с cookies: {e2}", exc_info=True
             )
             raise
+
+
+def _match_subtitle_track(available: dict[str, Any], language: str) -> str | None:
+    """Находит код дорожки под нужный язык, включая региональные варианты."""
+    if language in available:
+        return language
+    prefix = f"{language}-"
+    return next(
+        (code for code in available if str(code).lower().startswith(prefix)), None
+    )
+
+
+def _convert_subtitles_to_text(subtitle_file: Path) -> Path:
+    """Превращает SRT в обычный текст, оставляя только реплики."""
+    text_file = subtitle_file.with_suffix(".txt")
+    text_file.write_text(
+        srt_to_text(subtitle_file.read_text(encoding="utf-8", errors="replace")),
+        encoding="utf-8",
+    )
+    subtitle_file.unlink(missing_ok=True)
+    return text_file
