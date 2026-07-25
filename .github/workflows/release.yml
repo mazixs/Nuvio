@@ -14,7 +14,10 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+  # Имя задано литералом в нижнем регистре: `github.repository` даёт
+  # `mazixs/Nuvio`, и сырое `name=` в build-push-action такой ref отвергает
+  # («must be lowercase»). Значение обязано совпадать с образом в compose.yaml.
+  REGISTRY_IMAGE: ghcr.io/mazixs/nuvio
   TRIVY_IMAGE: aquasec/trivy@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
   VALID_TAG_REGEX: '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 

@@ -198,6 +198,27 @@ def test_release_notes_are_generated_by_the_tested_script():
     assert RELEASE_NOTES_SCRIPT.exists()
 
 
+def test_release_image_is_lowercase_and_matches_compose():
+    """Docker-ref обязан быть в нижнем регистре, а compose — тянуть тот же образ.
+
+    `github.repository` даёт `mazixs/Nuvio`. docker/metadata-action приводит
+    имя к нижнему регистру сам, а сырое `name=` в build-push-action — нет,
+    поэтому релиз v1.3.0 упал на `must be lowercase` уже после экспорта слоёв.
+    Совпадение с `compose.yaml` проверяется здесь же: разойдись эти строки —
+    и пользователь тянул бы образ, которого релиз не публиковал.
+    """
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+
+    match = re.search(r"^  REGISTRY_IMAGE: (?P<image>.+)$", workflow, re.M)
+    assert match, "REGISTRY_IMAGE не найден"
+    image = match.group("image").strip()
+
+    assert "${{" not in image, f"имя образа зависит от регистра выражения: {image}"
+    assert image == image.lower(), image
+    assert f"image: {image}:${{TAG:-latest}}" in compose
+
+
 def test_latest_tag_is_never_assigned_to_a_prerelease():
     """`compose.yaml` по умолчанию тянет latest, поэтому RC туда попасть не должен.
 
