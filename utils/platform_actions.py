@@ -14,6 +14,9 @@ def cache_key_for_main_action(platform: str, action: str) -> str | None:
         return DIRECT_VIDEO_CACHE_KEY
     if platform == "youtube" and action == "tg_video":
         return "tg_video"
+    if platform in _DIRECT_VIDEO_PLATFORMS and action.endswith("_audio"):
+        # Значение совпадает с ключами, под которыми записи уже лежат в кэше.
+        return action
     return None
 
 
