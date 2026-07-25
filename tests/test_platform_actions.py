@@ -15,7 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TELEGRAM_UTILS_PATH = ROOT / "utils" / "telegram_utils.py"
 
 # Способы прочитать кэш file_id в обработчиках: прямой вызов и хелпер аудио.
-_CACHE_READER_NAMES = ("telegram_cache.get", "_deliver_cached_audio")
+_CACHE_READER_NAMES = (
+    "telegram_cache.get",
+    "_deliver_cached_audio",
+    "_deliver_cached_video",
+)
 
 
 def _called_name(node: ast.Call) -> str:
@@ -64,7 +68,7 @@ def test_main_action_cache_keys_are_explicit():
     assert cache_key_for_main_action("tiktok", "tiktok_download") == "direct_video"
     assert cache_key_for_main_action("instagram", "instagram_download") == "direct_video"
     assert cache_key_for_main_action("youtube", "tg_video") == "tg_video"
-    assert cache_key_for_main_action("youtube", "audio_m4a") is None
+    assert cache_key_for_main_action("youtube", "audio_m4a") == "audio_m4a"
 
 
 def test_format_selection_cache_keys_preserve_scope():
@@ -105,6 +109,7 @@ def test_listed_main_actions_have_a_key_for_writing_to_cache():
         ("vk", "vk_download"),
         ("vk", "vk_audio"),
         ("youtube", "tg_video"),
+        ("youtube", "audio_m4a"),
     ]
 
     without_key = [
@@ -116,29 +121,58 @@ def test_listed_main_actions_have_a_key_for_writing_to_cache():
 
 
 @pytest.mark.unit
-def test_youtube_audio_m4a_writes_cache_under_literal_key():
-    """`audio_m4a` — единственное действие меню вне списка выше.
+def test_youtube_audio_m4a_key_comes_from_the_pure_function():
+    """Ключ записи `audio_m4a` больше не литерал в обработчике.
 
-    Ключ записи у него есть, но прописан литералом в обработчике, а не выдан
-    чистой функцией: cache_key_for_main_action для него возвращает None.
-    Читателя у этого ключа нет (см. test_youtube_cache_is_write_only).
+    Пока он задавался строкой прямо в вызове send_file, ключи чтения и записи
+    могли разойтись незамеченными. Значение оставлено прежним, иначе уже
+    записанные в кэш строки стали бы недостижимыми.
     """
-    assert cache_key_for_main_action("youtube", "audio_m4a") is None
+    assert cache_key_for_main_action("youtube", "audio_m4a") == "audio_m4a"
 
     source = TELEGRAM_UTILS_PATH.read_text(encoding="utf-8")
-    assert 'cache_format_id="audio_m4a"' in source
+    assert 'cache_format_id="audio_m4a"' not in source
 
 
 @pytest.mark.unit
-def test_youtube_cache_is_write_only():
-    """Фиксирует пробел, а не покрытие: YouTube пишет в кэш и не читает его.
+def test_youtube_main_actions_read_cache():
+    """YouTube обязан читать кэш, а не только писать в него.
 
-    Ветви `tg_video` и `audio_m4a` вызывают send_file с cache_format_id, но ни
-    telegram_cache.get, ни _deliver_cached_audio в них нет. Добавление чтения —
-    отдельное решение владельца проекта; тест сторожит текущее состояние,
-    чтобы контракт ключей его не маскировал.
+    По аналитике проекта YouTube даёт большую часть запросов, поэтому
+    отсутствие читателя означало гарантированный промах на каждом повторе
+    при занятом 90-дневном TTL.
     """
-    assert _cache_readers_in_actions(("tg_video", "audio_m4a")) == []
+    readers = _cache_readers_in_actions(("tg_video", "audio_m4a"))
+
+    assert any(reader.startswith("tg_video:") for reader in readers), readers
+    assert any(reader.startswith("audio_m4a:") for reader in readers), readers
+
+
+@pytest.mark.unit
+def test_format_selection_path_reads_cache():
+    """Выбор конкретного формата YouTube тоже обязан проверять кэш.
+
+    Ключи `combined:<id>`, `video_only:<id>` и `best` пишутся в кэш, поэтому
+    без чтения они так же расходовали бы TTL без единого попадания.
+    """
+    tree = ast.parse(TELEGRAM_UTILS_PATH.read_text(encoding="utf-8"))
+
+    enclosing: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        calls = {
+            _called_name(inner)
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call)
+        }
+        if "_cache_format_id_for_format_selection" in calls:
+            enclosing.append(node.name)
+            assert _CACHE_READER_NAMES[0] in calls or any(
+                name in calls for name in _CACHE_READER_NAMES
+            ), f"{node.name} считает ключ формата, но кэш не читает"
+
+    assert enclosing, "не найден обработчик выбора формата"
 
 
 @pytest.mark.unit

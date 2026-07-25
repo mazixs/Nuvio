@@ -23,6 +23,73 @@ def _query(reply_audio):
     return SimpleNamespace(message=SimpleNamespace(reply_audio=reply_audio))
 
 
+def _video_query(reply_video):
+    return SimpleNamespace(message=SimpleNamespace(reply_video=reply_video))
+
+
+@pytest.mark.unit
+def test_cached_video_is_delivered_by_file_id(monkeypatch):
+    reply_video = AsyncMock()
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache,
+        "get",
+        lambda url, format_id: SimpleNamespace(file_id="AGADvideo"),
+    )
+
+    delivered = asyncio.run(
+        telegram_utils._deliver_cached_video(
+            _video_query(reply_video), "https://example.test/v", "tg_video"
+        )
+    )
+
+    assert delivered is True
+    assert reply_video.await_args.kwargs["video"] == "AGADvideo"
+    assert reply_video.await_args.kwargs["supports_streaming"] is True
+
+
+@pytest.mark.unit
+def test_missing_video_cache_entry_reports_not_delivered(monkeypatch):
+    reply_video = AsyncMock()
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache, "get", lambda url, format_id: None
+    )
+
+    delivered = asyncio.run(
+        telegram_utils._deliver_cached_video(
+            _video_query(reply_video), "https://example.test/v", "tg_video"
+        )
+    )
+
+    assert delivered is False
+    reply_video.assert_not_awaited()
+
+
+@pytest.mark.unit
+def test_stale_video_file_id_is_dropped_from_cache(monkeypatch):
+    """Устаревший file_id видео должен удаляться, иначе он вернётся снова."""
+    reply_video = AsyncMock(side_effect=telegram.error.BadRequest("wrong file_id"))
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache,
+        "get",
+        lambda url, format_id: SimpleNamespace(file_id="AGADstalevideo"),
+    )
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache,
+        "delete_by_file_id",
+        lambda file_id: deleted.append(file_id),
+    )
+
+    delivered = asyncio.run(
+        telegram_utils._deliver_cached_video(
+            _video_query(reply_video), "https://example.test/v", "tg_video"
+        )
+    )
+
+    assert delivered is False
+    assert deleted == ["AGADstalevideo"]
+
+
 @pytest.mark.unit
 def test_cached_audio_is_delivered_by_file_id(monkeypatch):
     reply_audio = AsyncMock()
