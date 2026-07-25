@@ -23,6 +23,12 @@ from config import (
     TELEGRAM_LOCAL_MODE,
 )
 from utils.logger import setup_logger
+from utils.cancellation import CancelledByUser, request_cancellation
+from utils.subtitles import (
+    SUBTITLE_FORMATS,
+    available_subtitle_languages,
+    parse_subtitle_choice,
+)
 from utils.tg_video_choice import (
     list_audio_options,
     list_video_options,
@@ -103,6 +109,11 @@ from messages import (
     CHOOSE_AUDIO_MESSAGE,
     NO_VIDEO_OPTIONS_MESSAGE,
     NO_AUDIO_OPTIONS_MESSAGE,
+    BTN_CANCEL,
+    CANCELLED_MESSAGE,
+    CHOOSE_SUBTITLE_LANGUAGE_MESSAGE,
+    CHOOSE_SUBTITLE_FORMAT_MESSAGE,
+    NO_SUBTITLE_LANGUAGES_MESSAGE,
     ERROR_FALLBACK,
     ERROR_NETWORK,
     ERROR_FILE_TOO_LARGE_TELEGRAM,
@@ -403,8 +414,8 @@ def _build_main_menu(
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    BTN_BACK,
-                    callback_data=_make_callback_data(session_token, "main", "back"),
+                    BTN_CANCEL,
+                    callback_data=_make_callback_data(session_token, "main", "cancel"),
                 )
             ]
         )
@@ -441,8 +452,8 @@ def _build_main_menu(
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    BTN_BACK,
-                    callback_data=_make_callback_data(session_token, "main", "back"),
+                    BTN_CANCEL,
+                    callback_data=_make_callback_data(session_token, "main", "cancel"),
                 )
             ]
         )
@@ -473,8 +484,8 @@ def _build_main_menu(
             ],
             [
                 InlineKeyboardButton(
-                    BTN_BACK,
-                    callback_data=_make_callback_data(session_token, "main", "back"),
+                    BTN_CANCEL,
+                    callback_data=_make_callback_data(session_token, "main", "cancel"),
                 )
             ],
         ]
@@ -501,8 +512,8 @@ def _build_main_menu(
             ],
             [
                 InlineKeyboardButton(
-                    BTN_BACK,
-                    callback_data=_make_callback_data(session_token, "main", "back"),
+                    BTN_CANCEL,
+                    callback_data=_make_callback_data(session_token, "main", "cancel"),
                 )
             ],
         ]
@@ -538,6 +549,14 @@ def _build_main_menu(
             )
         ]
     )
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                BTN_CANCEL,
+                callback_data=_make_callback_data(session_token, "main", "cancel"),
+            )
+        ]
+    )
     text = _build_youtube_prompt(video_info)
     return text, InlineKeyboardMarkup(keyboard)
 
@@ -562,6 +581,55 @@ def _button_row(label: str, session_token: str, scope: str, action: str, value=N
             callback_data=_make_callback_data(session_token, scope, action, value),
         )
     ]
+
+
+SUBTITLE_FORMAT_LABELS = {"srt": "SRT", "vtt": "VTT", "txt": "Текст"}
+
+
+def _build_cancel_markup(session_token: str) -> InlineKeyboardMarkup:
+    """Клавиатура из одной кнопки отмены — для экранов ожидания."""
+    return InlineKeyboardMarkup([_button_row(BTN_CANCEL, session_token, "main", "cancel")])
+
+
+def _build_subtitle_language_menu(
+    video_info: dict, session_token: str
+) -> InlineKeyboardMarkup | None:
+    """Меню языков субтитров.
+
+    Returns:
+        None, если ни русских, ни английских субтитров у видео нет.
+    """
+    languages = available_subtitle_languages(video_info)
+    if not languages:
+        return None
+
+    keyboard = [
+        _button_row(
+            language.label, session_token, "format", "subs_lang", language.code
+        )
+        for language in languages
+    ]
+    keyboard.append(_button_row(BTN_BACK, session_token, "main", "more"))
+    return InlineKeyboardMarkup(keyboard)
+
+
+def _build_subtitle_format_menu(
+    language: str, session_token: str
+) -> InlineKeyboardMarkup:
+    """Меню форматов субтитров для выбранного языка."""
+    keyboard = [
+        _button_row(
+            SUBTITLE_FORMAT_LABELS[subtitle_format],
+            session_token,
+            "format",
+            "subs",
+            f"{language}:{subtitle_format}",
+        )
+        for subtitle_format in SUBTITLE_FORMATS
+    ]
+    # Назад ведёт к выбору языка, а не в главное меню: иначе каскад теряет смысл.
+    keyboard.append(_button_row(BTN_BACK, session_token, "main", "subtitles"))
+    return InlineKeyboardMarkup(keyboard)
 
 
 def _build_more_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup:
@@ -1098,6 +1166,53 @@ def _cache_format_id_for_format_selection(
     return cache_key_for_format_selection(content_type, format_id)
 
 
+async def _begin_processing(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    platform: str,
+) -> tuple[telegram.Message, str, str]:
+    """Показывает экран ожидания с кнопкой отмены и заводит сессию заранее.
+
+    Сессия создаётся до разбора ссылки намеренно: без неё кнопке отмены не за
+    что зацепиться, и передумавшему оставалось бы только ждать.
+    """
+    session_id = f"{update.effective_user.id}_{uuid.uuid4()}"
+    create_temp_dir(session_id)
+    session_token = _store_session(
+        context,
+        url=url,
+        video_info={},
+        session_id=session_id,
+        platform=platform,
+        formats={},
+    )
+    message = await update.message.reply_text(
+        PROCESSING_MESSAGE, reply_markup=_build_cancel_markup(session_token)
+    )
+    return message, session_token, session_id
+
+
+def _finish_processing(
+    context: ContextTypes.DEFAULT_TYPE,
+    session_token: str,
+    video_info: dict,
+    formats: dict,
+) -> bool:
+    """Дописывает сессию разобранными данными.
+
+    Returns:
+        False, если сессии уже нет: пользователь нажал «Отмена», пока шёл
+        разбор ссылки, и показывать меню поверх этого нельзя.
+    """
+    session = _get_session(context, session_token)
+    if session is None:
+        return False
+    session["video_info"] = video_info
+    session["formats"] = formats
+    return True
+
+
 async def _cleanup_user_session(
     user_id: int,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1274,23 +1389,16 @@ async def process_url(
 
     # Проверка YouTube
     if is_valid_youtube_url(url):
-        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
-        session_id: str | None = None
+        processing_message, session_token, session_id = await _begin_processing(
+            update, context, url, "youtube"
+        )
         try:
             video_info = await run_blocking(
                 get_video_info, url, description="get_video_info"
             )
-            session_id = str(user_id) + "_" + str(uuid.uuid4())
-            create_temp_dir(session_id)
             formats = get_available_formats(video_info)
-            session_token = _store_session(
-                context,
-                url=url,
-                video_info=video_info,
-                session_id=session_id,
-                platform="youtube",
-                formats=formats,
-            )
+            if not _finish_processing(context, session_token, video_info, formats):
+                return
             text, reply_markup = _build_main_menu(
                 "youtube", video_info, session_token, formats
             )
@@ -1365,25 +1473,18 @@ async def process_url(
         return
     # Проверка TikTok
     if is_valid_tiktok_url(url):
-        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
-        session_id = None
+        processing_message, session_token, session_id = await _begin_processing(
+            update, context, url, "tiktok"
+        )
         try:
             video_info = await run_blocking(
                 get_tiktok_info, url, description="get_tiktok_info"
             )
-            session_id = str(user_id) + "_" + str(uuid.uuid4())
-            create_temp_dir(session_id)
             from utils.tiktok_instagram_utils import get_available_formats_tiktok
 
             formats = get_available_formats_tiktok(video_info)
-            session_token = _store_session(
-                context,
-                url=url,
-                video_info=video_info,
-                session_id=session_id,
-                platform="tiktok",
-                formats=formats,
-            )
+            if not _finish_processing(context, session_token, video_info, formats):
+                return
             text, reply_markup = _build_main_menu("tiktok", video_info, session_token)
             await processing_message.edit_text(
                 text, reply_markup=reply_markup, parse_mode="Markdown"
@@ -1424,22 +1525,15 @@ async def process_url(
         return
     # Проверка Instagram
     if is_valid_instagram_url(url):
-        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
-        session_id = None
+        processing_message, session_token, session_id = await _begin_processing(
+            update, context, url, "instagram"
+        )
         try:
             video_info = await run_blocking(
                 get_instagram_info, url, description="get_instagram_info"
             )
-            session_id = str(user_id) + "_" + str(uuid.uuid4())
-            create_temp_dir(session_id)
-            session_token = _store_session(
-                context,
-                url=url,
-                video_info=video_info,
-                session_id=session_id,
-                platform="instagram",
-                formats={},
-            )
+            if not _finish_processing(context, session_token, video_info, {}):
+                return
             text, reply_markup = _build_main_menu(
                 "instagram", video_info, session_token
             )
@@ -1466,23 +1560,16 @@ async def process_url(
         return
     # Проверка Rutube
     if is_valid_rutube_url(url):
-        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
-        session_id = None
+        processing_message, session_token, session_id = await _begin_processing(
+            update, context, url, "rutube"
+        )
         try:
             video_info = await run_blocking(
                 get_rutube_info, url, description="get_rutube_info"
             )
-            session_id = str(user_id) + "_" + str(uuid.uuid4())
-            create_temp_dir(session_id)
             formats = get_available_formats_rutube(video_info)
-            session_token = _store_session(
-                context,
-                url=url,
-                video_info=video_info,
-                session_id=session_id,
-                platform="rutube",
-                formats=formats,
-            )
+            if not _finish_processing(context, session_token, video_info, formats):
+                return
             text, reply_markup = _build_main_menu("rutube", video_info, session_token)
             await processing_message.edit_text(
                 text, reply_markup=reply_markup, parse_mode="Markdown"
@@ -1507,21 +1594,14 @@ async def process_url(
         return
     # Проверка VK
     if is_valid_vk_url(url):
-        processing_message = await update.message.reply_text(PROCESSING_MESSAGE)
-        session_id = None
+        processing_message, session_token, session_id = await _begin_processing(
+            update, context, url, "vk"
+        )
         try:
             video_info = await run_blocking(get_vk_info, url, description="get_vk_info")
-            session_id = str(user_id) + "_" + str(uuid.uuid4())
-            create_temp_dir(session_id)
             formats = get_available_formats_vk(video_info)
-            session_token = _store_session(
-                context,
-                url=url,
-                video_info=video_info,
-                session_id=session_id,
-                platform="vk",
-                formats=formats,
-            )
+            if not _finish_processing(context, session_token, video_info, formats):
+                return
             text, reply_markup = _build_main_menu("vk", video_info, session_token)
             await processing_message.edit_text(
                 text, reply_markup=reply_markup, parse_mode="Markdown"
@@ -1566,6 +1646,8 @@ async def _handle_main_callback(
     session_id = session_data["session_id"]
     platform = session_data.get("platform", "youtube")
     back_markup = _build_back_markup(session_token)
+    # Пока идёт скачивание, отмена — единственное осмысленное действие.
+    cancel_markup = _build_cancel_markup(session_token)
 
     match action:
         case "tiktok_download":
@@ -1603,7 +1685,9 @@ async def _handle_main_callback(
                         logger.warning("file_id устарел (key=%s): %s", cache_key, e)
                         telegram_cache.delete_by_file_id(cached.file_id)
 
-            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+            )
             from utils.tiktok_instagram_utils import (
                 download_tiktok_video,
                 resolve_tiktok_video_handoff,
@@ -1672,7 +1756,9 @@ async def _handle_main_callback(
                 await _cleanup_user_session(user_id, context, session_token)
                 return
 
-            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+            )
             from utils.tiktok_instagram_utils import (
                 download_tiktok_audio,
                 resolve_tiktok_audio_handoff,
@@ -1768,7 +1854,9 @@ async def _handle_main_callback(
                         logger.warning("file_id устарел (key=%s): %s", cache_key, e)
                         telegram_cache.delete_by_file_id(cached.file_id)
 
-            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+            )
             from utils.tiktok_instagram_utils import (
                 download_instagram_video,
                 resolve_instagram_video_handoff,
@@ -1840,7 +1928,9 @@ async def _handle_main_callback(
                 await _cleanup_user_session(user_id, context, session_token)
                 return
 
-            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+            )
             from utils.tiktok_instagram_utils import download_instagram_audio
 
             try:
@@ -1909,7 +1999,9 @@ async def _handle_main_callback(
                         logger.warning("file_id устарел (key=%s): %s", cache_key, e)
                         telegram_cache.delete_by_file_id(cached.file_id)
 
-            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+            )
             try:
                 file_path = await run_blocking(
                     download_rutube_video,
@@ -1956,7 +2048,9 @@ async def _handle_main_callback(
                 await _cleanup_user_session(user_id, context, session_token)
                 return
 
-            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+            )
             try:
                 file_path = await run_blocking(
                     download_rutube_audio,
@@ -2013,7 +2107,9 @@ async def _handle_main_callback(
                         logger.warning("file_id устарел (key=%s): %s", cache_key, e)
                         telegram_cache.delete_by_file_id(cached.file_id)
 
-            await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+            )
             try:
                 file_path = await run_blocking(
                     download_vk_video,
@@ -2060,7 +2156,9 @@ async def _handle_main_callback(
                 await _cleanup_user_session(user_id, context, session_token)
                 return
 
-            await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+            await safe_edit_message_text(
+                query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+            )
             try:
                 file_path = await run_blocking(
                     download_vk_audio,
@@ -2120,7 +2218,9 @@ async def _handle_main_callback(
                     "Нативные форматы не найдены. Доступные: %s. Конвертируем в m4a.",
                     [f.get("ext") for f in audio_only],
                 )
-                await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+                await safe_edit_message_text(
+                query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+            )
                 file_path = await run_blocking(
                     functools.partial(download_audio, preferred_codec="m4a"),
                     url,
@@ -2129,7 +2229,9 @@ async def _handle_main_callback(
                     description="download_audio_bestaudio",
                 )
             elif native_audio:
-                await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+                await safe_edit_message_text(
+                query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+            )
                 file_path = await run_blocking(
                     download_audio_native,
                     url,
@@ -2202,7 +2304,9 @@ async def _handle_main_callback(
                     MAX_FILE_SIZE / 1024 / 1024,
                 )
 
-                await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+                await safe_edit_message_text(
+                query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+            )
 
                 # Готовый файл до 20 МБ Telegram забирает по ссылке сам.
                 # Пары «видео + аудио» так отдать нельзя: их ещё нужно склеить
@@ -2273,7 +2377,9 @@ async def _handle_main_callback(
                     )
 
             if tg_video:
-                await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+                await safe_edit_message_text(
+                query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+            )
                 file_path = await download_content(
                     url, tg_video["format_id"], session_id, "combined"
                 )
@@ -2336,38 +2442,25 @@ async def _handle_main_callback(
             return
 
         case "subtitles":
-            await safe_edit_message_text(query, DOWNLOADING_SUBTITLES_MESSAGE)
-            try:
-                subtitle_file = await run_blocking(
-                    download_subtitles,
-                    url,
-                    session_id,
-                    description="download_subtitles",
+            markup = _build_subtitle_language_menu(
+                session_data.get("video_info") or {}, session_token
+            )
+            if markup is None:
+                await safe_edit_message_text(
+                    query, NO_SUBTITLE_LANGUAGES_MESSAGE, reply_markup=back_markup
                 )
-                if subtitle_file and subtitle_file.exists():
-                    await query.edit_message_text(FILE_PREPARING)
-                    with open(subtitle_file, "rb") as srt_file:
-                        await query.message.reply_document(
-                            document=srt_file,
-                            caption=SUBTITLE_CAPTION,
-                        )
-                    await query.edit_message_text(FILE_SENT)
-                    try:
-                        subtitle_file.unlink()
-                    except Exception as e:
-                        logger.error(f"Ошибка удаления файла субтитров: {e}")
-                    await _cleanup_user_session(user_id, context, session_token)
-                else:
-                    await query.edit_message_text(
-                        NO_SUBTITLES_AVAILABLE,
-                        reply_markup=back_markup,
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка скачивания субтитров: {e}", exc_info=True)
-                await query.edit_message_text(
-                    NO_SUBTITLES_AVAILABLE,
-                    reply_markup=back_markup,
-                )
+                return
+            await safe_edit_message_text(
+                query, CHOOSE_SUBTITLE_LANGUAGE_MESSAGE, reply_markup=markup
+            )
+            return
+
+        case "cancel":
+            # Отмена обязана останавливать саму работу, а не прятать результат:
+            # признак читает progress hook yt-dlp и прерывает загрузку.
+            request_cancellation(session_id)
+            await safe_edit_message_text(query, CANCELLED_MESSAGE)
+            await _cleanup_user_session(user_id, context, session_token)
             return
 
         case "back":
@@ -2388,6 +2481,63 @@ async def _handle_main_callback(
             return
 
 
+async def _download_and_send_subtitles(
+    query: telegram.CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    session_token: str,
+    session_data: dict,
+    choice: str,
+) -> None:
+    """Скачивает субтитры выбранного языка и формата и отправляет их."""
+    back_markup = _build_back_markup(session_token)
+    parsed = parse_subtitle_choice(choice)
+    if not parsed:
+        # Значение пришло из callback_data, то есть от пользователя: молча
+        # доверять ему нельзя.
+        logger.warning("Некорректный выбор субтитров: %s", choice)
+        await safe_edit_message_text(query, ERROR_MESSAGE, reply_markup=back_markup)
+        return
+
+    language, subtitle_format = parsed
+    await safe_edit_message_text(
+        query,
+        DOWNLOADING_SUBTITLES_MESSAGE,
+        reply_markup=_build_cancel_markup(session_token),
+    )
+    try:
+        subtitle_file = await run_blocking(
+            download_subtitles,
+            session_data["url"],
+            session_data["session_id"],
+            language,
+            subtitle_format,
+            description="download_subtitles",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка скачивания субтитров: {e}", exc_info=True)
+        await safe_edit_message_text(
+            query, NO_SUBTITLES_AVAILABLE, reply_markup=back_markup
+        )
+        return
+
+    if not (subtitle_file and subtitle_file.exists()):
+        await safe_edit_message_text(
+            query, NO_SUBTITLES_AVAILABLE, reply_markup=back_markup
+        )
+        return
+
+    await safe_edit_message_text(query, FILE_PREPARING)
+    with open(subtitle_file, "rb") as handle:
+        await query.message.reply_document(
+            document=handle,
+            caption=f"{SUBTITLE_CAPTION} · {language.upper()} · {subtitle_format.upper()}",
+        )
+    await safe_edit_message_text(query, FILE_SENT)
+    subtitle_file.unlink(missing_ok=True)
+    await _cleanup_user_session(user_id, context, session_token)
+
+
 async def _handle_format_callback(
     query: telegram.CallbackQuery,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2405,11 +2555,30 @@ async def _handle_format_callback(
     url = session_data["url"]
     session_id = session_data["session_id"]
     formats = session_data.get("formats", {})
+    cancel_markup = _build_cancel_markup(session_token)
+
+    if content_type == "subs_lang":
+        await safe_edit_message_text(
+            query,
+            CHOOSE_SUBTITLE_FORMAT_MESSAGE,
+            reply_markup=_build_subtitle_format_menu(format_id, session_token),
+        )
+        return
+
+    if content_type == "subs":
+        await _download_and_send_subtitles(
+            query, context, user_id, session_token, session_data, format_id
+        )
+        return
 
     if content_type == "audio_only":
-        await safe_edit_message_text(query, DOWNLOADING_AUDIO_MESSAGE)
+        await safe_edit_message_text(
+            query, DOWNLOADING_AUDIO_MESSAGE, reply_markup=cancel_markup
+        )
     else:
-        await safe_edit_message_text(query, DOWNLOADING_MESSAGE)
+        await safe_edit_message_text(
+            query, DOWNLOADING_MESSAGE, reply_markup=cancel_markup
+        )
 
     try:
         file_path = None
@@ -2560,6 +2729,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.answer("Некорректная оценка")
         else:
             await query.edit_message_text(SESSION_EXPIRED)
+    except CancelledByUser:
+        # Не ошибка, а сигнал управления: сообщение об отмене пользователь уже
+        # видит, работа прервана в самом загрузчике.
+        logger.info("Задача прервана пользователем")
+        if session_token:
+            await _cleanup_user_session(user_id, context, session_token)
+        return
     except Exception as e:
         logger.error(f"Ошибка в button_callback: {e}", exc_info=True)
         error_msg = str(e)

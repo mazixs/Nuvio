@@ -9,6 +9,7 @@ from typing import Any
 
 import yt_dlp
 from config import MAX_FILE_SIZE
+from utils.cancellation import cancellation_hook
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -69,9 +70,19 @@ def classify_download_error_kind(message: str) -> str:
     return "UNKNOWN"
 
 
-def apply_network_opts(options: dict[str, Any]) -> None:
-    """Applies default network options to yt-dlp config dict."""
+def apply_network_opts(options: dict[str, Any], session_id: str | None = None) -> None:
+    """Applies default network options to yt-dlp config dict.
+
+    Args:
+        session_id: сессия, чья отмена должна прерывать загрузку. Без него
+            хук не ставится: разбор информации о видео идёт до появления
+            сессии и отменять там нечего.
+    """
     options.update(DEFAULT_YTDLP_NETWORK_OPTS)
+    if session_id:
+        hooks = list(options.get("progress_hooks") or [])
+        hooks.append(cancellation_hook(session_id))
+        options["progress_hooks"] = hooks
 
 
 def execute_with_backoff(
