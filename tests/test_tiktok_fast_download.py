@@ -116,6 +116,55 @@ def test_resolve_tiktok_url_uses_bounded_timeouts(monkeypatch):
 
 
 @pytest.mark.unit
+def test_resolve_skips_network_for_canonical_url(monkeypatch):
+    """Полный адрес разворачивать нечего — HEAD к нему был чистой потерей.
+
+    Замер в продакшене: этот запрос стоил 0.84 с на каждой ссылке вида
+    `www.tiktok.com/@user/video/<id>`, хотя редиректа за ней нет. Пользователь
+    ждал его внутри «⏳ Обрабатываю ссылку...».
+    """
+
+    def _forbidden(*args, **kwargs):
+        pytest.fail("для полного адреса сетевой запрос не нужен")
+
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "head", _forbidden)
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _forbidden)
+
+    for url in (
+        "https://www.tiktok.com/@tester/video/7639073022762175764",
+        "https://www.tiktok.com/@tester/video/7639073022762175764?is_from_webapp=1",
+        "https://www.tiktok.com/@tester/photo/7639073022762175764",
+        "https://tiktok.com/@tester/video/7639073022762175764",
+    ):
+        assert tiktok_instagram_utils._resolve_tiktok_url(url) == url
+
+
+@pytest.mark.unit
+def test_resolve_still_expands_short_links(monkeypatch):
+    """Короткие ссылки без запроса развернуть нельзя — оптимизация их не трогает."""
+    canonical = "https://www.tiktok.com/@tester/video/7639073022762175764"
+    calls: list[str] = []
+
+    class _Response:
+        status_code = 200
+        url = canonical
+
+    def _fake_head(url, **kwargs):
+        calls.append(url)
+        return _Response()
+
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "head", _fake_head)
+
+    for short_url in (
+        "https://vt.tiktok.com/ZSxGKk3yb/",
+        "https://vm.tiktok.com/ZSxGKk3yb/",
+    ):
+        assert tiktok_instagram_utils._resolve_tiktok_url(short_url) == canonical
+
+    assert len(calls) == 2, "короткие ссылки обязаны разворачиваться запросом"
+
+
+@pytest.mark.unit
 def test_tiktok_resolver_stops_retrying_within_budget(monkeypatch):
     """Число попыток к резолверу ограничено — дальше ждёт откат на yt-dlp."""
     timeouts: list = []

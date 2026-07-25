@@ -43,6 +43,11 @@ logger = setup_logger(__name__)
 TIKTOK_URL_PATTERN = (
     r"(?:https?:\/\/)?(?:(?:www\.|vt\.)?tiktok\.com|vm\.tiktok\.com)\/.+"
 )
+# Адрес публикации, за которым редиректа нет: разворачивать его не нужно.
+_TIKTOK_CANONICAL_MEDIA_PATTERN = re.compile(
+    r"^https?://(?:www\.)?tiktok\.com/@[^/]+/(?:video|photo)/\d+",
+    re.IGNORECASE,
+)
 INSTAGRAM_URL_PATTERN = r"(?:https?:\/\/)?(?:www\.)?instagram\.com\/.+"
 INSTAGRAM_AUDIO_URL_PATTERN = (
     r"(?:https?:\/\/)?(?:www\.)?instagram\.com\/reels\/audio\/\d+\/?"
@@ -293,13 +298,24 @@ def _get_tiktok_base_configs() -> list[dict]:
     ]
 
 
+def _is_canonical_tiktok_media_url(url: str) -> bool:
+    """Проверяет, что адрес уже указывает на публикацию напрямую."""
+    return bool(_TIKTOK_CANONICAL_MEDIA_PATTERN.match(url or ""))
+
+
 def _resolve_tiktok_url(url: str) -> str:
     """Разворачивает короткие TikTok-ссылки до конечного адреса.
+
+    Полный адрес возвращается сразу: редиректа за ним нет, а запрос к нему
+    измеримо стоил 0.84 с внутри «Обрабатываю ссылку...» на каждой публикации.
 
     Для прохождения редиректов достаточно заголовков ответа, поэтому сначала
     выполняется HEAD. Тело страницы скачивается только если сервер HEAD не
     принял — иначе на каждый запрос уходил бы лишний HTML.
     """
+    if _is_canonical_tiktok_media_url(url):
+        return url
+
     headers = {"User-Agent": HTTP_USER_AGENT}
 
     try:
