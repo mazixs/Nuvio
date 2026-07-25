@@ -57,6 +57,67 @@ def fake_downloads(monkeypatch):
 
 
 @pytest.mark.unit
+def test_added_latency_before_ytdlp_fallback_is_bounded():
+    """Недоступный резолвер не должен стоить пользователю минуты ожидания.
+
+    Пока быстрый путь ждёт сокеты, воркер занят, а пользователь видит
+    «Скачиваю…». Бюджет добавленной задержки до откатa — примерно 15 секунд.
+    """
+    worst_case = (
+        tiktok_instagram_utils.TIKTOK_RESOLVER_TIMEOUT_SECONDS
+        * tiktok_instagram_utils.TIKTOK_RESOLVER_MAX_ATTEMPTS
+    )
+
+    assert worst_case <= 15, f"добавленная задержка до откатa {worst_case} с"
+
+
+@pytest.mark.unit
+def test_resolve_tiktok_url_uses_bounded_timeouts(monkeypatch):
+    """HEAD и запасной GET вместе не должны съедать бюджет ожидания."""
+    timeouts: list = []
+
+    def _record(url, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise RuntimeError("сеть недоступна")
+
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "head", _record)
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _record)
+
+    assert (
+        tiktok_instagram_utils._resolve_tiktok_url("https://vt.tiktok.com/example/")
+        == "https://vt.tiktok.com/example/"
+    )
+    assert timeouts, "запросы должны получать явный таймаут"
+    assert sum(timeouts) <= 15, f"развёртывание ссылки стоит {sum(timeouts)} с"
+
+
+@pytest.mark.unit
+def test_tiktok_resolver_stops_retrying_within_budget(monkeypatch):
+    """Число попыток к резолверу ограничено — дальше ждёт откат на yt-dlp."""
+    timeouts: list = []
+
+    def _failing_get(url, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise RuntimeError("резолвер недоступен")
+
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _failing_get)
+    monkeypatch.setattr(
+        tiktok_instagram_utils.time,
+        "sleep",
+        lambda seconds: pytest.fail("пауза на пути быстрой доставки недопустима"),
+    )
+
+    with pytest.raises(RuntimeError):
+        tiktok_instagram_utils._call_tiktok_resolver(
+            "https://www.tiktok.com/@tester/video/1"
+        )
+
+    assert len(timeouts) == tiktok_instagram_utils.TIKTOK_RESOLVER_MAX_ATTEMPTS
+    assert len(timeouts) <= 2
+    assert max(timeouts) <= 8
+
+
+@pytest.mark.unit
 def test_fetch_tiktok_fast_media_parses_resolver_response(monkeypatch):
     monkeypatch.setattr(
         tiktok_instagram_utils,
