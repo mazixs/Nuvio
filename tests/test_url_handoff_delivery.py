@@ -141,3 +141,42 @@ def test_photo_is_not_cached(monkeypatch):
     )
 
     assert saved == []
+
+
+# --- память отказов CDN -----------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def clean_refusal_memory(monkeypatch):
+    """Каждый тест начинает с чистой памятью отказов."""
+    from utils.url_delivery import HandoffRefusals
+
+    monkeypatch.setattr(telegram_utils, "_HANDOFF_REFUSALS", HandoffRefusals())
+
+
+def test_refused_cdn_is_not_asked_again():
+    """0.3 с на заведомо провальную попытку — потеря на каждом запросе."""
+    reply_video = AsyncMock(
+        side_effect=telegram.error.BadRequest("failed to get HTTP URL content")
+    )
+    plan = UrlHandoff(url=MEDIA_URL, kind="video", size=2 * MB)
+    query = _query(reply_video=reply_video)
+
+    assert _deliver(query, plan) is False
+    assert _deliver(query, plan) is False
+
+    assert reply_video.await_count == 1, "вторая попытка не должна была уйти"
+
+
+def test_refusal_for_video_does_not_block_pictures():
+    """Измерено: картинки TikTok уходили, когда видео того же CDN отказывало."""
+    reply_video = AsyncMock(side_effect=telegram.error.BadRequest("отказ"))
+    reply_photo = AsyncMock(return_value=_sent("photo"))
+
+    _deliver(_query(reply_video=reply_video), UrlHandoff(MEDIA_URL, "video", 2 * MB))
+    delivered = _deliver(
+        _query(reply_photo=reply_photo),
+        UrlHandoff("https://p16-sign.tiktokcdn-us.com/obj/image.jpeg", "photo", MB),
+    )
+
+    assert delivered is True
