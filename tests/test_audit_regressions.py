@@ -1140,6 +1140,11 @@ def test_handle_main_callback_reports_missing_instagram_photo_audio_without_fail
         "_schedule_platform_failure_log",
         lambda *args, **kwargs: logged.append((args, kwargs)),
     )
+    # Изолируем тест от реального telegram_cache.db: обработчик "instagram_audio"
+    # теперь читает кэш перед скачиванием, а _DummyQuery.message не умеет reply_audio.
+    monkeypatch.setattr(
+        telegram_utils.telegram_cache, "get", lambda *args, **kwargs: None
+    )
 
     asyncio.run(
         telegram_utils._handle_main_callback(
