@@ -13,6 +13,8 @@ DEV_REQUIREMENTS = ROOT / "requirements-dev.txt"
 RUFF_CONFIG = ROOT / "pyproject.toml"
 DOCKERFILE = ROOT / "Dockerfile"
 BOT_API_DOCKERFILE = ROOT / "Dockerfile.telegram-bot-api"
+COMPOSE_FILE = ROOT / "compose.yaml"
+RELEASE_NOTES_SCRIPT = ROOT / "scripts" / "release_notes.py"
 
 
 def _job_body(workflow: str, job_name: str) -> str:
@@ -177,6 +179,37 @@ def test_release_requires_main_commit_and_production_environment():
     assert "name: production" in docker_job
     assert "provenance: mode=max" in docker_job
     assert "sbom: true" in docker_job
+
+
+def test_release_notes_are_generated_by_the_tested_script():
+    """Changelog собирается скриптом, а не `git log --grep` по всему сообщению.
+
+    Тело коммита часто содержит слова другой категории, поэтому прежняя
+    реализация относила один коммит сразу к двум разделам: на диапазоне
+    v1.2.2..HEAD так двоились `feat: быстрый путь TikTok` и
+    `fix: валидировать ссылки резолвера TikTok`.
+    """
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    release_job = _job_body(workflow, "release")
+
+    assert "python3 scripts/release_notes.py" in release_job
+    assert "--invert-grep" not in workflow
+    assert '--grep="добавл"' not in workflow
+    assert RELEASE_NOTES_SCRIPT.exists()
+
+
+def test_latest_tag_is_never_assigned_to_a_prerelease():
+    """`compose.yaml` по умолчанию тянет latest, поэтому RC туда попасть не должен.
+
+    VALID_TAG_REGEX допускает теги вида v1.3.0-rc.1, а `latest=auto` оставляет
+    решение на усмотрение docker/metadata-action — здесь оно задано явно.
+    """
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+
+    assert "flavor: latest=auto" not in workflow
+    assert "flavor: latest=${{ !contains(github.ref_name, '-') }}" in workflow
+    assert "${TAG:-latest}" in compose
 
 
 def test_docker_base_images_are_pinned_by_digest():
