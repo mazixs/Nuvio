@@ -14,7 +14,9 @@ logger = setup_logger(__name__)
 
 # Кодеки, которые Telegram проигрывает в MP4 без перекодирования.
 TELEGRAM_READY_VIDEO_CODECS = frozenset({"h264", "avc1"})
-TELEGRAM_READY_AUDIO_CODECS = frozenset({"aac", "mp3"})
+# MP3 сюда не входит: MP3-дорожка внутри MP4 ненадёжно играется плеером
+# Telegram на iOS, поэтому её всегда перекодируем в AAC.
+TELEGRAM_READY_AUDIO_CODECS = frozenset({"aac"})
 
 # Результат проверки FFmpeg кэшируется: бинарь не появляется и не исчезает
 # в течение жизни процесса, а проверка вызывается на каждую операцию.
