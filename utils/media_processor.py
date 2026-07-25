@@ -18,6 +18,9 @@ TELEGRAM_READY_AUDIO_CODECS = frozenset({"aac", "mp3"})
 
 # Результат проверки FFmpeg кэшируется: бинарь не появляется и не исчезает
 # в течение жизни процесса, а проверка вызывается на каждую операцию.
+# Кэшируются только устойчивые исходы: успех и отсутствие бинаря. Транзиентный
+# отказ порождения процесса (EAGAIN/ENOMEM/EMFILE при DOWNLOAD_WORKERS=8)
+# не кэшируется, иначе один такой сбой навсегда отключил бы FFmpeg в процессе.
 _ffmpeg_available: bool | None = None
 
 
@@ -31,7 +34,9 @@ def check_ffmpeg_installed() -> bool:
     """
     Проверяет, установлен ли FFmpeg в системе.
 
-    Результат кэшируется на время жизни процесса.
+    Положительный результат кэшируется на время жизни процесса. Отрицательный
+    кэшируется только для отсутствующего бинаря: остальные отказы означают, что
+    процесс не удалось породить, и на следующем вызове проверку нужно повторить.
 
     Returns:
         bool: True, если FFmpeg установлен, иначе False.
@@ -47,12 +52,27 @@ def check_ffmpeg_installed() -> bool:
             stderr=subprocess.PIPE,
             text=True,
         )
-        _ffmpeg_available = result.returncode == 0
-    except Exception as e:
-        logger.error(f"Ошибка при проверке FFmpeg: {e}", exc_info=True)
+    except FileNotFoundError as e:
+        logger.error(f"FFmpeg не найден в системе: {e}", exc_info=True)
         _ffmpeg_available = False
+        return False
+    except Exception as e:
+        # Транзиентный сбой (нет свободных процессов/памяти/дескрипторов) —
+        # результат не кэшируем, чтобы следующий вызов попробовал снова.
+        logger.error(
+            f"Не удалось запустить проверку FFmpeg, результат не кэшируем: {e}",
+            exc_info=True,
+        )
+        return False
 
-    return _ffmpeg_available
+    if result.returncode != 0:
+        # Ненулевой код возврата может быть следствием нехватки ресурсов,
+        # поэтому тоже трактуется как транзиентный и не кэшируется.
+        logger.error(f"Проверка FFmpeg вернула код {result.returncode}")
+        return False
+
+    _ffmpeg_available = True
+    return True
 
 
 def _probe_codec(file_path: Path, stream_selector: str) -> str | None:

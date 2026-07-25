@@ -58,6 +58,46 @@ def test_check_ffmpeg_installed_handles_missing_binary(monkeypatch):
     assert media_processor.check_ffmpeg_installed() is False
 
 
+@pytest.mark.unit
+def test_check_ffmpeg_installed_retries_after_transient_spawn_failure(monkeypatch):
+    """Сбой порождения процесса транзиентен и не должен кэшироваться.
+
+    При DOWNLOAD_WORKERS=8 subprocess.run падает по EAGAIN/ENOMEM/EMFILE.
+    Если такой отказ закэшировать, ffmpeg останется «не установлен» до конца
+    жизни процесса: HEVC перестанет перекодироваться (ADR-001), а
+    has_audio_stream начнёт возвращать False для всех файлов.
+    """
+    calls: list = []
+
+    def _run(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise BlockingIOError("Resource temporarily unavailable")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(media_processor.subprocess, "run", _run)
+
+    assert media_processor.check_ffmpeg_installed() is False
+    assert media_processor.check_ffmpeg_installed() is True
+    assert len(calls) == 2, "после транзиентного сбоя нужна повторная проверка"
+
+
+@pytest.mark.unit
+def test_check_ffmpeg_installed_caches_missing_binary(monkeypatch):
+    """Отсутствие бинаря стабильно, поэтому этот отказ кэшировать можно."""
+    calls: list = []
+
+    def _missing(*args, **kwargs):
+        calls.append(args)
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(media_processor.subprocess, "run", _missing)
+
+    assert media_processor.check_ffmpeg_installed() is False
+    assert media_processor.check_ffmpeg_installed() is False
+    assert len(calls) == 1
+
+
 def test_get_video_codec_reads_first_stream(monkeypatch, tmp_path):
     monkeypatch.setattr(media_processor, "check_ffmpeg_installed", lambda: True)
     monkeypatch.setattr(
