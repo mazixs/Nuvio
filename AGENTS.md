@@ -96,6 +96,9 @@ Nuvio/
 │   ├── PRD.md                   # Product Requirements Document
 │   └── screenshots/             # Скриншоты
 │
+├── scripts/                     # Служебные скрипты вне рантайма бота
+│   └── release_notes.py         # Сборка changelog для GitHub Release
+│
 └── .github/workflows/           # CI/CD
     ├── ci.yml                   # Линтинг (ruff), тесты, проверка Docker-сборки
     └── release.yml              # Релиз: тесты → GHCR → changelog → GitHub Release
@@ -269,8 +272,11 @@ ruff check --output-format=github .
 1. **Тесты** — проверка semver-тега и его принадлежности `main`, полный набор, ruff и порог покрытия.
 2. **Docker → GHCR** — публикация canonical digest с SBOM/provenance,
    Trivy- и smoke-проверка этого digest и только затем создание тегов
-   (`latest`, `major.minor`, `major`).
-3. **GitHub Release** — генерация changelog и создание релиза только после успешной публикации образа.
+   (`latest`, `major.minor`, `major`). Тег `latest` не выдаётся предрелизам:
+   `compose.yaml` по умолчанию тянет `${TAG:-latest}`, и RC попал бы всем.
+3. **GitHub Release** — changelog собирает `scripts/release_notes.py`
+   (классификация по теме коммита, каждый коммит ровно в одном разделе),
+   релиз создаётся только после успешной публикации образа.
 
 ---
 
