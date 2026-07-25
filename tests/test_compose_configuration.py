@@ -22,6 +22,21 @@ def test_compose_has_local_bot_api_and_shared_media():
 
 
 @pytest.mark.unit
+def test_local_api_is_not_pulled_from_a_registry():
+    """`docker compose pull` не должен ходить в реестр за собственным образом.
+
+    Сервис собирается из исходников, и в реестре его нет. Без `pull_policy`
+    Compose при связке `build` + `image` сначала пробует pull — он падает с
+    «pull access denied», а ненулевой код возврата обрывает обновление всего
+    стека, включая уже скачанный образ бота.
+    """
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    bot_api_block = compose.split("  bot:")[0]
+
+    assert "pull_policy: build" in bot_api_block
+
+
+@pytest.mark.unit
 def test_local_api_source_revision_is_pinned():
     dockerfile = (ROOT / "Dockerfile.telegram-bot-api").read_text(
         encoding="utf-8"
