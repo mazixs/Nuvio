@@ -13,9 +13,6 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 
-# Предел Bot API на скачивание файла по URL силами Telegram (не-фото).
-URL_HANDOFF_LIMIT_BYTES = 20_000_000
-
 # Допустимое расхождение длительности звука и видео, секунды.
 AUDIO_DURATION_TOLERANCE_SECONDS = 2
 
@@ -72,7 +69,6 @@ class FastMedia:
     size: int
     duration: int
     title: str
-    cover: str | None
     audio_url: str | None
     audio_is_video_sound: bool
 
@@ -100,11 +96,6 @@ def audio_matches_video(music_info: dict, video_duration: int) -> bool:
         return False
 
     return drift <= AUDIO_DURATION_TOLERANCE_SECONDS
-
-
-def fits_url_handoff(size: int) -> bool:
-    """Уложится ли файл в лимит Telegram на скачивание по URL."""
-    return 0 < size <= URL_HANDOFF_LIMIT_BYTES
 
 
 def parse_fast_media(payload: dict) -> FastMedia:
@@ -150,7 +141,6 @@ def parse_fast_media(payload: dict) -> FastMedia:
         size=int(data.get("size") or 0),
         duration=duration,
         title=str(data.get("title") or ""),
-        cover=data.get("cover") or data.get("origin_cover"),
         audio_url=audio_url,
         audio_is_video_sound=audio_is_video_sound,
     )

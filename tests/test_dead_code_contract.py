@@ -1,13 +1,36 @@
 """Контракт отсутствия подтверждённого мёртвого кода."""
 
+import dataclasses
 from pathlib import Path
 
+import pytest
+
 import messages
-from utils import telegram_utils
+from utils import telegram_utils, tiktok_fast_path
 from utils.video_cache import CachedVideo
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.unit
+def test_url_handoff_leftovers_are_removed():
+    """Передачи файла по URL в sendVideo в коде нет — остатки не нужны.
+
+    URL_HANDOFF_LIMIT_BYTES, fits_url_handoff и FastMedia.cover использовались
+    только тестами, а CLAUDE.md при этом обещал «проверку лимита передачи
+    по URL», которой в поведении бота не существует.
+    """
+    assert not hasattr(tiktok_fast_path, "URL_HANDOFF_LIMIT_BYTES")
+    assert not hasattr(tiktok_fast_path, "fits_url_handoff")
+
+    field_names = {
+        field.name for field in dataclasses.fields(tiktok_fast_path.FastMedia)
+    }
+    assert "cover" not in field_names
+
+    guide = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "лимита передачи по URL" not in guide
 
 
 def test_obsolete_message_constants_are_removed():
