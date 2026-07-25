@@ -204,3 +204,73 @@ def test_download_tiktok_video_skips_fast_path_when_disabled(
 
     assert calls == []
     assert result == Path("/tmp/ytdlp.mp4")
+
+
+@pytest.mark.unit
+def test_fast_video_reuses_already_resolved_url(monkeypatch, tmp_path):
+    """Ссылку уже развернул вызывающий код — повторный запрос лишний."""
+    resolves: list[str] = []
+
+    def _resolve(url):
+        resolves.append(url)
+        return "https://www.tiktok.com/@tester/video/1"
+
+    monkeypatch.setattr(tiktok_instagram_utils, "_resolve_tiktok_url", _resolve)
+
+    def _fake_download(url, destination, referer=None):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"media")
+        return destination
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "_download_remote_file", _fake_download
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(),
+    )
+
+    tiktok_instagram_utils.download_tiktok_video_fast(
+        "https://vt.tiktok.com/short/",
+        "session-reuse",
+        output_dir=tmp_path,
+        resolved_url="https://www.tiktok.com/@tester/video/1",
+    )
+
+    assert resolves == []
+
+
+@pytest.mark.unit
+def test_download_tiktok_video_resolves_url_once(monkeypatch, tmp_path):
+    """На одну доставку должно приходиться одно развёртывание ссылки."""
+    resolves: list[str] = []
+
+    def _resolve(url):
+        resolves.append(url)
+        return "https://www.tiktok.com/@tester/video/1"
+
+    monkeypatch.setattr(tiktok_instagram_utils, "_resolve_tiktok_url", _resolve)
+
+    def _fake_download(url, destination, referer=None):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"media")
+        return destination
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "_download_remote_file", _fake_download
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_call_tiktok_resolver",
+        lambda url: _resolver_payload(),
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils, "TIKTOK_FAST_PATH", True, raising=False
+    )
+
+    tiktok_instagram_utils.download_tiktok_video(
+        "https://vt.tiktok.com/short/", "session-once", output_dir=tmp_path
+    )
+
+    assert len(resolves) == 1

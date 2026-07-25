@@ -464,6 +464,7 @@ def download_tiktok_video_fast(
     session_id: str,
     output_dir: Path | None = None,
     force_local: bool = False,
+    resolved_url: str | None = None,
 ) -> Path:
     """Скачивает TikTok-видео по прямой ссылке резолвера.
 
@@ -473,8 +474,7 @@ def download_tiktok_video_fast(
     Raises:
         FastPathUnavailable: резолвер не дал пригодной прямой ссылки.
     """
-    resolved_url = _resolve_tiktok_url(url)
-    media = fetch_tiktok_fast_media(resolved_url)
+    media = fetch_tiktok_fast_media(resolved_url or _resolve_tiktok_url(url))
     destination = _fast_destination(media, session_id, output_dir, ".mp4")
     downloaded = _download_remote_file(
         media.video_url, destination, referer="https://www.tiktok.com/"
@@ -490,6 +490,7 @@ def download_tiktok_audio_fast(
     session_id: str,
     output_dir: Path | None = None,
     force_local: bool = False,
+    resolved_url: str | None = None,
 ) -> Path:
     """Скачивает звук TikTok-публикации без перекодирования.
 
@@ -500,8 +501,7 @@ def download_tiktok_audio_fast(
     Raises:
         FastPathUnavailable: резолвер не дал пригодной прямой ссылки.
     """
-    resolved_url = _resolve_tiktok_url(url)
-    media = fetch_tiktok_fast_media(resolved_url)
+    media = fetch_tiktok_fast_media(resolved_url or _resolve_tiktok_url(url))
 
     if media.audio_url:
         destination = _fast_destination(
@@ -1432,7 +1432,7 @@ def download_tiktok_video(
     if TIKTOK_FAST_PATH:
         try:
             return download_tiktok_video_fast(
-                url, session_id, output_dir, force_local
+                url, session_id, output_dir, force_local, resolved_url=resolved_url
             )
         except FileSizeLimitError:
             raise
@@ -1921,7 +1921,7 @@ def download_tiktok_audio(
     if TIKTOK_FAST_PATH:
         try:
             return download_tiktok_audio_fast(
-                url, session_id, output_dir, force_local
+                url, session_id, output_dir, force_local, resolved_url=resolved_url
             )
         except FileSizeLimitError:
             raise
