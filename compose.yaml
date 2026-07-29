@@ -55,6 +55,11 @@ services:
     volumes:
       - bot-data:/app/data
       - shared-media:/app/media
+      # Файлы, загруженные админом в чат, локальный Bot API кладёт себе, а
+      # `getFile` возвращает абсолютный путь вместо URL. PTB считает путь
+      # локальным только если видит файл у себя — без этого тома загрузка
+      # cookies падает с «Not Found». Только чтение: PTB копирует из него.
+      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
       - ./logs:/app/logs
       - ./.secrets:/app/.secrets
     logging:

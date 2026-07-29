@@ -37,6 +37,29 @@ def test_local_api_is_not_pulled_from_a_registry():
 
 
 @pytest.mark.unit
+def test_bot_can_read_files_uploaded_through_the_local_api():
+    """Бот обязан видеть том Bot API, иначе загрузка cookies падает с «Not Found».
+
+    В локальном режиме `getFile` возвращает не URL, а абсолютный путь на файловой
+    системе Bot API. PTB решает, локальный ли это файл, простым `path.is_file()`
+    у себя: не увидев файла, он считает путь ссылкой и получает от локального
+    Bot API честный 404. Том нужен только на чтение — PTB копирует из него.
+    """
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    bot_block = compose.split("  bot:")[1].split("  web:")[0]
+
+    assert "telegram-bot-api-data:/var/lib/telegram-bot-api:ro" in bot_block
+
+
+@pytest.mark.unit
+def test_local_api_stores_files_where_the_bot_looks_for_them():
+    """Путь монтирования обязан совпадать с `--dir`, который отдаёт Bot API."""
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+    assert "--dir=/var/lib/telegram-bot-api" in compose
+
+
+@pytest.mark.unit
 def test_local_api_source_revision_is_pinned():
     dockerfile = (ROOT / "Dockerfile.telegram-bot-api").read_text(
         encoding="utf-8"
