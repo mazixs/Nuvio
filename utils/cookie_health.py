@@ -16,6 +16,11 @@ logger = setup_logger(__name__)
 
 COOKIE_HEALTH_CACHE_TTL_SECONDS = 600
 HTTP_PROBE_TIMEOUT_SECONDS = 8
+# Сколько тела ответа читать в поисках признаков неавторизованности. Раньше
+# читалось 8192 байта, и проба ошибочно рапортовала «valid»: на замеренной
+# странице YouTube размером 583 077 байт `accounts.google.com` лежал на позиции
+# 18107, а `ServiceLogin` — на 18391, то есть сразу за прежним окном.
+PROBE_BODY_READ_BYTES = 96 * 1024
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -35,7 +40,15 @@ AUTH_COOKIE_NAMES = {
 PROBE_CONFIG = {
     "youtube": {
         "url": "https://www.youtube.com/feed/subscriptions",
-        "unauth_markers": ("accounts.google.com", "ServiceLogin", "Sign in"),
+        # `consent.youtube.com` — стена согласия, на которую перебрасывает
+        # только неавторизованного посетителя. В теле такой страницы признаков
+        # логина может не быть вовсе, поэтому маркер нужен именно по URL.
+        "unauth_markers": (
+            "accounts.google.com",
+            "ServiceLogin",
+            "consent.youtube.com",
+            "Sign in",
+        ),
         "rate_limit_markers": ("unusual traffic", "try again later"),
     },
     "instagram": {
@@ -155,9 +168,9 @@ def _probe_authenticated_session(platform: str, file_path: Path) -> str:
     try:
         with opener.open(request, timeout=HTTP_PROBE_TIMEOUT_SECONDS) as response:
             final_url = response.geturl()
-            body = response.read(8192).decode("utf-8", errors="ignore")
+            body = response.read(PROBE_BODY_READ_BYTES).decode("utf-8", errors="ignore")
     except urllib.error.HTTPError as exc:
-        body = exc.read(4096).decode("utf-8", errors="ignore")
+        body = exc.read(PROBE_BODY_READ_BYTES).decode("utf-8", errors="ignore")
         if exc.code in {401, 403}:
             return "stale"
         if exc.code == 429:

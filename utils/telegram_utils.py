@@ -267,8 +267,20 @@ def _track_tg_user(update: Update) -> None:
         logger.debug("analytics: не удалось записать пользователя %s", user.id)
 
 
-async def run_blocking(func, *args, description: str = "blocking task"):
-    """Запускает sync-функцию в executor с таймаутом."""
+async def run_blocking(
+    func, *args, description: str = "blocking task", session_id: str | None = None
+):
+    """Запускает sync-функцию в executor с таймаутом.
+
+    `wait_for` отменяет только ожидание — поток в пуле продолжает работать. Для
+    скачивания это означает занятый воркер и трафик ради файла, который уже
+    никому не отдадут: замерено, что загрузка завершилась через 4 минуты после
+    своего таймаута. Поэтому по таймауту сессия помечается отменённой, и
+    progress hook обрывает yt-dlp изнутри.
+
+    Args:
+        session_id: Сессия задачи. Без неё остановить работу нечем.
+    """
     loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
@@ -279,6 +291,12 @@ async def run_blocking(func, *args, description: str = "blocking task"):
         logger.error(
             f"{description} превысил таймаут {BLOCKING_TASK_TIMEOUT}с", exc_info=True
         )
+        if session_id:
+            request_cancellation(session_id)
+            logger.info(
+                "Запрошена отмена сессии %s: задача осталась в пуле после таймаута",
+                session_id,
+            )
         raise exc
 
 
@@ -775,13 +793,29 @@ def _should_rate_limit_callback(callback_data: str | None) -> bool:
 async def safe_edit_message_text(
     query: telegram.CallbackQuery, text: str, **kwargs
 ) -> bool:
-    """Безопасно вызывает edit_message_text, игнорируя ошибку 'Message is not modified'."""
+    """Безопасно правит сообщение, отличая «нечего править» от настоящей поломки.
+
+    Два исхода не считаются ошибкой:
+
+    * текст и разметка не изменились — править нечего;
+    * сообщения больше нет, пользователь его удалил. Это его право, и работу
+      это не отменяет: файл уйдёт отдельным сообщением. Раньше такая правка
+      поднимала исключение, обработчик ошибки пытался сообщить о ней той же
+      правкой, падал так же, и всё уезжало в глобальный обработчик.
+
+    Returns:
+        `True`, если правка прошла, иначе `False`.
+    """
     try:
         await query.edit_message_text(text, **kwargs)
         return True
     except telegram.error.BadRequest as e:
-        if "message is not modified" in str(e).lower():
+        reason = str(e).lower()
+        if "message is not modified" in reason:
             logger.debug("edit_message_text пропущен: текст и разметка без изменений")
+            return False
+        if "message to edit not found" in reason:
+            logger.info("Сообщение удалено пользователем — правка статуса пропущена")
             return False
         raise
 
@@ -2710,7 +2744,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif event and event.scope == "csi" and event.value:
             rating = int(event.value)
             csi_id = save_csi_rating(user_id, rating)
-            await query.edit_message_text(CSI_THANKS_MESSAGE)
+            await safe_edit_message_text(query, CSI_THANKS_MESSAGE)
             if rating < 7:
                 context.user_data["awaiting_csi_feedback_id"] = csi_id
                 await context.bot.send_message(
@@ -2728,7 +2762,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             except ValueError:
                 await query.answer("Некорректная оценка")
         else:
-            await query.edit_message_text(SESSION_EXPIRED)
+            await safe_edit_message_text(query, SESSION_EXPIRED)
     except CancelledByUser:
         # Не ошибка, а сигнал управления: сообщение об отмене пользователь уже
         # видит, работа прервана в самом загрузчике.
@@ -2742,18 +2776,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         if "Can't parse entities" in error_msg:
             try:
-                await query.edit_message_text(
+                await safe_edit_message_text(
+                    query,
                     "❌ Ошибка отображения информации о видео.\n"
                     "Попробуйте другую ссылку или повторите попытку.",
                     parse_mode=None,
                 )
             except Exception:
-                await query.edit_message_text(ERROR_FALLBACK)
+                await safe_edit_message_text(query, ERROR_FALLBACK)
         elif classified := _classify_youtube_error(error_msg):
             try:
-                await query.edit_message_text(classified, parse_mode="Markdown")
+                await safe_edit_message_text(query, classified, parse_mode="Markdown")
             except Exception:
-                await query.edit_message_text(ERROR_FALLBACK)
+                await safe_edit_message_text(query, ERROR_FALLBACK)
         else:
             error_code = _make_error_code("bot", "CALLBACK")
             _schedule_platform_failure_log(
@@ -2765,11 +2800,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 session_id=session_token,
             )
             try:
-                await query.edit_message_text(
+                await safe_edit_message_text(
+                    query,
                     USER_ERROR_WITH_CODE.format(error_code=error_code)
                 )
             except Exception:
-                await query.edit_message_text(ERROR_FALLBACK)
+                await safe_edit_message_text(query, ERROR_FALLBACK)
 
         if session_token:
             await _cleanup_user_session(user_id, context, session_token)
@@ -2791,6 +2827,7 @@ async def download_content(
                 format_id,
                 session_id,
                 description="download_video_combined",
+                session_id=session_id,
             )
         if content_type == "combined":
             return await run_blocking(
@@ -2799,6 +2836,7 @@ async def download_content(
                 format_id,
                 session_id,
                 description="download_video_combined_simple",
+                session_id=session_id,
             )
         if content_type == "audio_only":
             return await run_blocking(
@@ -2807,6 +2845,7 @@ async def download_content(
                 format_id,
                 session_id,
                 description="download_audio_only",
+                session_id=session_id,
             )
         raise ValueError(f"Неподдерживаемый content_type: {content_type}")
     except Exception as e:
@@ -2841,7 +2880,7 @@ async def send_file(
     url = session_data.get("url")
     success = False
     try:
-        await query.edit_message_text(FILE_PREPARING)
+        await safe_edit_message_text(query, FILE_PREPARING)
         await asyncio.sleep(1)
         success = await send_single_file(
             query,
@@ -2851,7 +2890,7 @@ async def send_file(
             cache_format_id=cache_format_id,
         )
         if success:
-            await query.edit_message_text(FILE_SENT)
+            await safe_edit_message_text(query, FILE_SENT)
     except (FileNotFoundError, PermissionError) as e:
         error_code = _make_error_code("file", "ACCESS")
         _schedule_platform_failure_log(
@@ -2862,7 +2901,8 @@ async def send_file(
             exc=e,
             session_id=session_data.get("session_id"),
         )
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             USER_FILE_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
@@ -2876,7 +2916,8 @@ async def send_file(
             exc=e,
             session_id=session_data.get("session_id"),
         )
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
@@ -2890,7 +2931,8 @@ async def send_file(
             exc=e,
             session_id=session_data.get("session_id"),
         )
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
@@ -2904,7 +2946,8 @@ async def send_file(
             exc=e,
             session_id=session_data.get("session_id"),
         )
-        await query.edit_message_text(
+        await safe_edit_message_text(
+            query,
             USER_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )

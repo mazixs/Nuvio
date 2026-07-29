@@ -19,6 +19,7 @@ import httpx
 import yt_dlp
 from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
 from yt_dlp.networking.impersonate import ImpersonateTarget
+from utils.cookie_workfile import working_cookie_file
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.ytdlp_common import FileSizeLimitError, finalize_downloaded_file
@@ -60,6 +61,22 @@ INSTAGRAM_STORY_URL_PATTERN = r"(?:https?:\/\/)?(?:www\.)?instagram\.com\/storie
 # Пути к файлам cookies
 INSTAGRAM_COOKIES_FILE = INSTAGRAM_COOKIES_PATH
 TIKTOK_COOKIES_FILE = TIKTOK_COOKIES_PATH
+
+
+def _tiktok_cookiefile(use_cookies: bool = True) -> str | None:
+    """Путь к cookies TikTok для yt-dlp — рабочая копия, не оригинал."""
+    if not use_cookies:
+        return None
+    working = working_cookie_file(TIKTOK_COOKIES_FILE)
+    return str(working) if working else None
+
+
+def _instagram_cookiefile(use_cookies: bool = True) -> str | None:
+    """Путь к cookies Instagram для yt-dlp — рабочая копия, не оригинал."""
+    if not use_cookies:
+        return None
+    working = working_cookie_file(INSTAGRAM_COOKIES_FILE)
+    return str(working) if working else None
 
 # Константы для retry механизма
 MAX_RETRY_ATTEMPTS = 3
@@ -1273,13 +1290,14 @@ def _fetch_instagram_photo_post_media(url: str) -> dict[str, Any]:
     canonical_url = f"https://www.instagram.com/p/{shortcode}/"
 
     product_media = None
-    if INSTAGRAM_COOKIES_FILE.exists():
+    instagram_cookiefile = _instagram_cookiefile()
+    if instagram_cookiefile:
         try:
             with yt_dlp.YoutubeDL(
                 {
                     "quiet": True,
                     "no_warnings": True,
-                    "cookiefile": str(INSTAGRAM_COOKIES_FILE),
+                    "cookiefile": instagram_cookiefile,
                 }
             ) as ydl:
                 ie = ydl.get_info_extractor("Instagram")
@@ -1531,9 +1549,10 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
         opts = config.copy()
         opts["skip_download"] = True
 
-        if use_cookies and TIKTOK_COOKIES_FILE.exists():
-            opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
-            logger.info(f"Использование cookies: {TIKTOK_COOKIES_FILE}")
+        cookiefile = _tiktok_cookiefile(use_cookies)
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+            logger.info(f"Использование cookies: {cookiefile}")
 
         with create_tiktok_ytdl(opts) as ydl:
             return ydl.extract_info(resolved_url, download=False)
@@ -1649,11 +1668,10 @@ def get_instagram_info(url: str) -> dict[str, Any]:
             },
         }
 
-        if use_cookies and INSTAGRAM_COOKIES_FILE.exists():
-            ydl_opts["cookiefile"] = str(INSTAGRAM_COOKIES_FILE)
-            logger.info(
-                f"Использование файла cookies для Instagram: {INSTAGRAM_COOKIES_FILE}"
-            )
+        cookiefile = _instagram_cookiefile(use_cookies)
+        if cookiefile:
+            ydl_opts["cookiefile"] = cookiefile
+            logger.info(f"Использование файла cookies для Instagram: {cookiefile}")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -1843,8 +1861,9 @@ def download_tiktok_video(
         meta_opts = config.copy()
         meta_opts["quiet"] = True
         meta_opts["no_warnings"] = True
-        if use_cookies and TIKTOK_COOKIES_FILE.exists():
-            meta_opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
+        meta_cookiefile = _tiktok_cookiefile(use_cookies)
+        if meta_cookiefile:
+            meta_opts["cookiefile"] = meta_cookiefile
 
         with create_tiktok_ytdl(meta_opts) as ydl:
             info = ydl.extract_info(resolved_url, download=False)
@@ -1888,8 +1907,9 @@ def download_tiktok_video(
             opts["quiet"] = False
             opts["no_warnings"] = True
 
-            if use_cookies and TIKTOK_COOKIES_FILE.exists():
-                opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
+            download_cookiefile = _tiktok_cookiefile(use_cookies)
+            if download_cookiefile:
+                opts["cookiefile"] = download_cookiefile
 
             downloaded_file = None
             try:
@@ -2056,10 +2076,11 @@ def download_instagram_video(
             },
         }
 
-        if use_cookies and INSTAGRAM_COOKIES_FILE.exists():
-            ydl_opts["cookiefile"] = str(INSTAGRAM_COOKIES_FILE)
+        download_cookiefile = _instagram_cookiefile(use_cookies)
+        if download_cookiefile:
+            ydl_opts["cookiefile"] = download_cookiefile
             logger.info(
-                f"Использование файла cookies для скачивания Instagram: {INSTAGRAM_COOKIES_FILE}"
+                f"Использование файла cookies для скачивания Instagram: {download_cookiefile}"
             )
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -2317,8 +2338,9 @@ def download_tiktok_audio(
         meta_opts = config.copy()
         meta_opts["quiet"] = True
         meta_opts["no_warnings"] = True
-        if use_cookies and TIKTOK_COOKIES_FILE.exists():
-            meta_opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
+        meta_cookiefile = _tiktok_cookiefile(use_cookies)
+        if meta_cookiefile:
+            meta_opts["cookiefile"] = meta_cookiefile
 
         with yt_dlp.YoutubeDL(meta_opts) as ydl:
             info = ydl.extract_info(resolved_url, download=False)
@@ -2360,8 +2382,9 @@ def download_tiktok_audio(
             opts["quiet"] = False
             opts["no_warnings"] = True
 
-            if use_cookies and TIKTOK_COOKIES_FILE.exists():
-                opts["cookiefile"] = str(TIKTOK_COOKIES_FILE)
+            download_cookiefile = _tiktok_cookiefile(use_cookies)
+            if download_cookiefile:
+                opts["cookiefile"] = download_cookiefile
 
             downloaded_file = None
             base_filename = None
