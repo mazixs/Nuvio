@@ -82,7 +82,7 @@ Docker-стек отправляет файлы до 2 ГБ через лока�
 - `rutube_vk_utils.py` — Rutube и VK Video; для VK стратегия `best[protocol=https]` в обход фрагментированного HLS
 - `media_processor.py` — FFmpeg: извлечение аудио (MP3 192k), конвертация WebM→MP4, мерж аудио/видео
 - `video_cache.py` — SQLite-кэш `file_id`, ключ `(url, format_id)`, WAL, TTL 90 дней
-- `analytics_db.py` — SQLite-аналитика: `users`, `events`, `csi_responses` (WAL, миграции через `PRAGMA table_info`)
+- `analytics_db.py` — SQLite-аналитика: `users`, `events`, `csi_responses`, `settings` (WAL, миграции через `PRAGMA table_info`). `settings` — общее место записи для бота и WebUI: это разные процессы, у которых совпадает только том `DATA_DIR`. Настройка `csi_interval_days` читается на каждой рассылке, поэтому смена частоты опроса не требует перезапуска; испорченное или выходящее за диапазон 1–365 значение молча заменяется на 14 дней — рассылка не должна падать из-за настройки
 - `ytdlp_runtime.py` — авто-обновление yt-dlp, CLI fallback (`python -m yt_dlp`)
 - `cookie_manager.py` / `cookie_health.py` — админский интерфейс загрузки и валидации cookies. Проба читает `PROBE_BODY_READ_BYTES` тела ответа: признаки неавторизованности у YouTube лежат за 18-й тысячей байт, а на редирект `consent.youtube.com` попадает только незалогиненный, поэтому маркер нужен и по URL
 - `cookie_workfile.py` — рабочая копия cookie-файла. yt-dlp перезаписывает переданный `cookiefile` содержимым своего jar после запроса, поэтому платформа может удалить из файла cookie своим ответом: замерено, что один прогон YouTube убирает `YSC` (15 записей становятся 14), а у TikTok и Instagram на тех же прогонах не пропадает ничего. Загрузчики отдают yt-dlp копию в `DATA_DIR/cookie-work`, а загруженный админом оригинал остаётся целым. Ни один загрузчик не должен передавать оригинал напрямую
@@ -96,6 +96,9 @@ Docker-стек отправляет файлы до 2 ГБ через лока�
 **WebUI** (`web/`): FastAPI + Jinja2 + Uvicorn. Логин с PBKDF2 и timing-safe
 сравнением, in-memory fail2ban с уведомлением админов в Telegram, `/health`
 для healthcheck'ов Compose и CI-smoke. Swagger/ReDoc отключены. Порт — `WEB_PORT`.
+`/settings` — единственная страница, которая пишет: любой новый POST-роут здесь
+опирается на cookie сессии со `SameSite=lax` вместо отдельного CSRF-токена, и
+отдельная защита понадобится, если у cookie когда-нибудь сменят `same_site`.
 
 **Поток обработки запроса**: URL → валидация (regex) → `get_video_info` в
 ThreadPoolExecutor → inline-меню выбора формата → callback → проверка кэша

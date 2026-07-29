@@ -9,6 +9,7 @@
   и защита от upgrade deadlock при конкурентной записи.
 """
 
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -22,6 +23,8 @@ _DATA_DIR = Path(
 )
 _DB_PATH = Path(_DATA_DIR) / "analytics.db"
 _local = threading.local()
+
+logger = logging.getLogger(__name__)
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -117,6 +120,17 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_csi_created ON csi_responses(created_at)"
         )
 
+        # Настройки, которые оператор меняет из WebUI. Таблица нужна именно в
+        # этой БД: бот и WebUI — разные процессы, и analytics.db — их единственное
+        # общее место записи (том DATA_DIR смонтирован в оба контейнера).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            )
+        """)
+
         # Миграция: добавляем last_csi_sent в users если колонка отсутствует
         cur.execute("PRAGMA table_info(users)")
         existing_cols = {row[1] for row in cur.fetchall()}
@@ -175,10 +189,94 @@ def track_event(
         )
 
 
+# ── Настройки ───────────────────────────────────────────────────
+
+CSI_INTERVAL_DAYS_DEFAULT = 14
+CSI_INTERVAL_DAYS_MIN = 1
+CSI_INTERVAL_DAYS_MAX = 365
+
+_SETTING_CSI_INTERVAL = "csi_interval_days"
+
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    """Возвращает значение настройки или default, если её ещё не задавали."""
+    with _cursor_read() as cur:
+        cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    """Записывает настройку, перетирая прежнее значение."""
+    now = datetime.utcnow().isoformat()
+    with _cursor_write() as cur:
+        cur.execute(
+            """
+            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                           updated_at = excluded.updated_at
+            """,
+            (key, value, now),
+        )
+
+
+def get_csi_interval_days() -> int:
+    """Как часто одному пользователю приходит CSI-опрос, в днях.
+
+    Читается на каждой рассылке, поэтому смена настройки в WebUI применяется
+    без перезапуска бота. Испорченное значение не должно ронять рассылку —
+    возвращаем значение по умолчанию.
+    """
+    raw = get_setting(_SETTING_CSI_INTERVAL)
+    if raw is None:
+        return CSI_INTERVAL_DAYS_DEFAULT
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Настройка %s содержит не число (%r), используется %s дней",
+            _SETTING_CSI_INTERVAL,
+            raw,
+            CSI_INTERVAL_DAYS_DEFAULT,
+        )
+        return CSI_INTERVAL_DAYS_DEFAULT
+    if not CSI_INTERVAL_DAYS_MIN <= days <= CSI_INTERVAL_DAYS_MAX:
+        logger.warning(
+            "Настройка %s вне допустимого диапазона (%s), используется %s дней",
+            _SETTING_CSI_INTERVAL,
+            days,
+            CSI_INTERVAL_DAYS_DEFAULT,
+        )
+        return CSI_INTERVAL_DAYS_DEFAULT
+    return days
+
+
+def set_csi_interval_days(days: int) -> None:
+    """Задаёт интервал CSI-опросов.
+
+    Нижняя граница не декоративна: рассылка запускается раз в сутки, и при
+    нулевом интервале опрос уходил бы каждому активному пользователю каждый
+    день.
+    """
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        raise ValueError("интервал должен быть целым числом дней") from None
+    if not CSI_INTERVAL_DAYS_MIN <= days <= CSI_INTERVAL_DAYS_MAX:
+        raise ValueError(
+            f"интервал должен быть от {CSI_INTERVAL_DAYS_MIN} "
+            f"до {CSI_INTERVAL_DAYS_MAX} дней"
+        )
+    set_setting(_SETTING_CSI_INTERVAL, str(days))
+    logger.info("Интервал CSI-опросов изменён на %s дней", days)
+
+
 # ── CSI (Customer Satisfaction Index) ───────────────────────────
 
 
-def get_users_for_csi(days_since_last: int = 7, min_active_days: int = 1) -> list[int]:
+def get_users_for_csi(
+    days_since_last: int = CSI_INTERVAL_DAYS_DEFAULT, min_active_days: int = 1
+) -> list[int]:
     """
     Возвращает ID пользователей, которым пора отправить CSI-опрос.
 
