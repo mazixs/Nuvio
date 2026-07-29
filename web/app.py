@@ -26,10 +26,16 @@ import sys  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from utils.analytics_db import (  # noqa: E402
+    CSI_INTERVAL_DAYS_MAX,
+    CSI_INTERVAL_DAYS_MIN,
     init_db,
     dashboard_summary,
     get_all_users,
+    get_csi_interval_days,
+    get_csi_metrics,
     get_user_detail,
+    get_users_for_csi,
+    set_csi_interval_days,
 )
 
 logger = logging.getLogger("nuvio.web")
@@ -312,6 +318,159 @@ async def user_detail(request: Request, user_id: int, _=Depends(require_auth)):
     if not user:
         return HTMLResponse("Пользователь не найден", status_code=404)
     return templates.TemplateResponse(request, "user_detail.html", {"user": user})
+
+
+# ── Настройки ───────────────────────────────────────────────────
+
+# Готовые варианты частоты опроса. Ручной ввод тоже разрешён — пресеты нужны,
+# чтобы не приходилось считать дни в неделях.
+CSI_INTERVAL_PRESETS = [
+    (7, "неделя"),
+    (14, "2 недели"),
+    (30, "месяц"),
+    (90, "квартал"),
+]
+
+# Горизонт дорожки отправок. 90 дней — тот масштаб, на котором разница между
+# «раз в неделю» и «раз в месяц» видна глазами: 13 отправок против 3.
+CSI_TRACK_HORIZON_DAYS = 90
+
+# Границы зон. Недельный опрос — та частота, из-за которой бота блокируют;
+# реже раза в полтора месяца обратная связь перестаёт успевать за релизами.
+CSI_ZONE_DENSE_MAX = 7
+CSI_ZONE_BALANCED_MAX = 45
+
+
+def _csi_zone(days: int) -> tuple[str, str]:
+    """Зона частоты: машинное имя для стиля и слово для оператора."""
+    if days <= CSI_ZONE_DENSE_MAX:
+        return "dense", "часто"
+    if days <= CSI_ZONE_BALANCED_MAX:
+        return "balanced", "сбалансированно"
+    return "sparse", "редко"
+
+
+def _csi_cadence_phrase(days: int) -> str:
+    """Интервал словами. Считается на сервере, чтобы формулировка была одна.
+
+    Страница пересчитывает подпись через `/api/csi/preview`, а не дублирует
+    правило в JavaScript.
+    """
+    named = {
+        1: "каждый день",
+        7: "раз в неделю",
+        14: "раз в две недели",
+        21: "раз в три недели",
+        30: "раз в месяц",
+        60: "раз в два месяца",
+        90: "раз в квартал",
+        180: "раз в полгода",
+        365: "раз в год",
+    }
+    return named.get(days, f"раз в {days} дней")
+
+
+def _csi_dispatch_offsets(days: int) -> list[int]:
+    """Дни внутри горизонта, в которые опрос уйдёт одному человеку."""
+    if days < 1:
+        return [0]
+    return list(range(0, CSI_TRACK_HORIZON_DAYS + 1, days))
+
+
+def _csi_queue_size(days: int) -> int | None:
+    """Сколько человек получит опрос при следующей рассылке.
+
+    Тот же запрос, которым пользуется рассылка, поэтому число точное, а не
+    оценочное. При сбое БД возвращаем None — страница покажет прочерк вместо
+    выдуманной цифры.
+    """
+    try:
+        return len(get_users_for_csi(days_since_last=days, min_active_days=1))
+    except Exception:
+        logger.exception("Не удалось посчитать очередь CSI для интервала %s", days)
+        return None
+
+
+def _settings_context(*, error: str | None = None, saved: bool = False) -> dict:
+    days = get_csi_interval_days()
+    zone, zone_label = _csi_zone(days)
+    try:
+        csi = get_csi_metrics()
+    except Exception:
+        logger.exception("Не удалось получить метрики CSI")
+        csi = {"total_responses": 0, "avg_rating": 0.0}
+    return {
+        "csi_interval_days": days,
+        "csi_interval_min": CSI_INTERVAL_DAYS_MIN,
+        "csi_interval_max": CSI_INTERVAL_DAYS_MAX,
+        "csi_interval_presets": CSI_INTERVAL_PRESETS,
+        "csi_zone": zone,
+        "csi_zone_label": zone_label,
+        "csi_cadence": _csi_cadence_phrase(days),
+        "csi_track_horizon": CSI_TRACK_HORIZON_DAYS,
+        "csi_dispatch_offsets": _csi_dispatch_offsets(days),
+        "csi_queue_size": _csi_queue_size(days),
+        "csi_per_year": round(365 / days) if days else 0,
+        "csi_total_responses": csi.get("total_responses", 0),
+        "csi_avg_rating": csi.get("avg_rating", 0.0),
+        "error": error,
+        "saved": saved,
+    }
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, _=Depends(require_auth)):
+    saved = request.query_params.get("saved") == "1"
+    return templates.TemplateResponse(
+        request, "settings.html", _settings_context(saved=saved)
+    )
+
+
+@app.get("/api/csi/preview")
+async def api_csi_preview(days: int, _=Depends(require_auth)):
+    """Пересчёт последствий интервала до сохранения.
+
+    Нужен, чтобы оператор видел размер очереди на том значении, которое он
+    только примеряет ползунком, а не на уже сохранённом.
+    """
+    if not CSI_INTERVAL_DAYS_MIN <= days <= CSI_INTERVAL_DAYS_MAX:
+        raise HTTPException(status_code=422, detail="интервал вне диапазона")
+    zone, zone_label = _csi_zone(days)
+    return {
+        "days": days,
+        "zone": zone,
+        "zone_label": zone_label,
+        "cadence": _csi_cadence_phrase(days),
+        "queue_size": _csi_queue_size(days),
+        "per_year": round(365 / days),
+        "offsets": _csi_dispatch_offsets(days),
+    }
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def settings_submit(
+    request: Request,
+    csi_interval_days: str = Form(...),
+    _=Depends(require_auth),
+):
+    """Меняет частоту CSI-опросов.
+
+    Защита от CSRF — cookie сессии со `SameSite=lax`, которую браузер не
+    отправляет при межсайтовом POST.
+    """
+    try:
+        set_csi_interval_days(int(_sanitize_input(csi_interval_days)))
+    except ValueError as exc:
+        message = (
+            str(exc)
+            if str(exc).startswith("интервал")
+            else f"интервал должен быть от {CSI_INTERVAL_DAYS_MIN} "
+            f"до {CSI_INTERVAL_DAYS_MAX} дней"
+        )
+        return templates.TemplateResponse(
+            request, "settings.html", _settings_context(error=message)
+        )
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 # ── API (JSON) ──────────────────────────────────────────────────

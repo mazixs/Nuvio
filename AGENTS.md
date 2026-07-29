@@ -16,7 +16,7 @@
 - Временные медиа удаляются после отправки или ошибки
 - Защита от спама (4 запроса за 5 секунд → cooldown 10 секунд)
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin`
-- WebUI-дашборд аналитики (FastAPI + Jinja2)
+- WebUI-дашборд аналитики (FastAPI + Jinja2) и страница `/settings` с частотой CSI-опросов
 - Опциональное автообновление yt-dlp (канал nightly по умолчанию)
 
 ---
@@ -72,7 +72,7 @@ Nuvio/
 │   └── temp_file_manager.py     # Управление временными файлами при скачивании
 │
 ├── web/                         # WebUI дашборд
-│   ├── app.py                   # FastAPI-приложение: логин, дашборд, API
+│   ├── app.py                   # FastAPI-приложение: логин, дашборд, настройки, API
 │   ├── __main__.py              # Точка входа: `python -m web`
 │   ├── templates/               # Jinja2-шаблоны
 │   └── static/                  # CSS, JS, изображения

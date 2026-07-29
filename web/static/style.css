@@ -681,6 +681,390 @@ h3 { font-size: 0.95rem; font-weight: 600; color: var(--text-secondary); }
     border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+.alert-success {
+    background: var(--accent-glow);
+    color: var(--accent);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* ── Settings: прибор диспетчера ──────────────────────────── */
+
+/* Зонный цвет — факт о выбранном значении, а не украшение: он меняется
+   вместе с интервалом и больше нигде на странице не используется. */
+.tuner {
+    --zone: var(--accent);
+    --zone-glow: var(--accent-glow);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    max-width: 1000px;
+}
+
+.tuner[data-zone="dense"]  { --zone: var(--danger); --zone-glow: var(--danger-glow); }
+.tuner[data-zone="sparse"] { --zone: var(--text-muted); --zone-glow: rgba(99, 107, 133, 0.12); }
+
+.tuner-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.75rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.eyebrow {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.zone-tag {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--zone);
+    background: var(--zone-glow);
+    border: 1px solid var(--zone);
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    transition: color var(--transition), background var(--transition), border-color var(--transition);
+}
+
+.tuner-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 15rem;
+}
+
+.tuner-control { padding: 1.75rem; }
+
+.control-title {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin: 0 0 1.25rem;
+    letter-spacing: 0;
+}
+
+/* ── Показание прибора ───────────────────────────────────── */
+
+.readout {
+    display: flex;
+    align-items: baseline;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.75rem;
+}
+
+.readout-value {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 3.75rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: var(--text);
+    width: 3.4ch;
+    padding: 0;
+    background: none;
+    border: none;
+    border-bottom: 2px solid var(--border);
+    border-radius: 0;
+    outline: none;
+    transition: border-color var(--transition);
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.readout-value::-webkit-outer-spin-button,
+.readout-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+.readout-value:hover { border-bottom-color: var(--border-light); }
+.readout-value:focus-visible { border-bottom-color: var(--zone); }
+
+.readout-unit {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+}
+
+.readout-phrase {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    padding-left: 0.75rem;
+    margin-left: 0.25rem;
+    border-left: 1px solid var(--border);
+}
+
+/* ── Ползунок ────────────────────────────────────────────── */
+
+.slider-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.slider {
+    width: 100%;
+    height: 1.5rem;
+    margin: 0 0 1.25rem;
+    background: none;
+    -webkit-appearance: none;
+    appearance: none;
+    cursor: pointer;
+}
+
+/* Без JS ползунок ничего не меняет — прячем его до включения. */
+.tuner:not(.tuner-live) .slider { display: none; }
+
+.slider::-webkit-slider-runnable-track {
+    height: 2px;
+    background: var(--border);
+    border-radius: 2px;
+}
+
+.slider::-moz-range-track {
+    height: 2px;
+    background: var(--border);
+    border-radius: 2px;
+}
+
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 1.1rem;
+    height: 1.1rem;
+    margin-top: calc(-0.55rem + 1px);
+    background: var(--primary);
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--primary);
+    transition: box-shadow var(--transition);
+}
+
+.slider::-moz-range-thumb {
+    width: 1.1rem;
+    height: 1.1rem;
+    background: var(--primary);
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--primary);
+}
+
+.slider:hover::-webkit-slider-thumb { box-shadow: 0 0 0 5px var(--primary-glow); }
+.slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 5px var(--primary-glow); }
+.slider:focus-visible { outline: none; }
+
+/* ── Пресеты ─────────────────────────────────────────────── */
+
+.presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 2rem;
+}
+
+.preset {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    padding: 0.35rem 0.7rem;
+    color: var(--text-muted);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.preset:hover { color: var(--text); border-color: var(--border-light); }
+.preset:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.preset-on {
+    color: var(--text);
+    border-color: var(--text-muted);
+}
+
+/* ── Дорожка отправок ────────────────────────────────────── */
+
+.track { margin: 0; }
+
+.track-caption {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.85rem;
+}
+
+.track-count {
+    color: var(--zone);
+    font-size: 0.8rem;
+    transition: color var(--transition);
+}
+
+.track-count::after {
+    content: ' отправок';
+    color: var(--text-muted);
+    font-size: 0.68rem;
+}
+
+.track-rail {
+    position: relative;
+    height: 2.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Тик стоит там, где опрос действительно уйдёт: считается из интервала,
+   а не расставляется на глаз. */
+.tick {
+    position: absolute;
+    bottom: 0;
+    width: 2px;
+    height: 1.1rem;
+    margin-left: -1px;
+    background: var(--zone);
+    opacity: 0.75;
+    border-radius: 1px;
+    transition: background var(--transition);
+}
+
+.tick-now {
+    height: 2.25rem;
+    opacity: 1;
+}
+
+.track-scale {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-top: 0.5rem;
+}
+
+.pressure-note {
+    display: none;
+    margin-top: 1.5rem;
+    padding-left: 0.85rem;
+    border-left: 2px solid var(--danger);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.tuner[data-zone="dense"] .pressure-note { display: block; }
+
+/* ── Следствия справа ────────────────────────────────────── */
+
+.tuner-effect {
+    border-left: 1px solid var(--border);
+    background: rgba(11, 13, 19, 0.35);
+    display: flex;
+    flex-direction: column;
+}
+
+.metric {
+    padding: 1.5rem 1.75rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.metric:last-child { border-bottom: none; }
+
+.metric-label {
+    display: block;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.62rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.6rem;
+    line-height: 1.5;
+}
+
+.metric-value {
+    display: block;
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 2rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--text);
+}
+
+.metric-approx {
+    color: var(--text-muted);
+    font-size: 1.15rem;
+    margin-right: 0.1em;
+}
+
+.metric-empty { color: var(--text-muted); }
+
+.metric-hint {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+    line-height: 1.45;
+}
+
+/* ── Подвал прибора ──────────────────────────────────────── */
+
+.tuner-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 1.25rem 1.75rem;
+    border-top: 1px solid var(--border);
+    background: rgba(11, 13, 19, 0.35);
+}
+
+.foot-note {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 34rem;
+}
+
+@media (max-width: 860px) {
+    .tuner-body { grid-template-columns: 1fr; }
+    .tuner-effect {
+        border-left: none;
+        border-top: 1px solid var(--border);
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+    .metric {
+        flex: 1 1 10rem;
+        border-bottom: none;
+        border-right: 1px solid var(--border);
+    }
+    .metric:last-child { border-right: none; }
+    .readout-value { font-size: 3rem; }
+    .readout-phrase { margin-left: 0; width: 100%; }
+    .tuner-foot { flex-direction: column; align-items: stretch; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tick, .track-count, .zone-tag { transition: none; }
+}
+
 /* ── Stats Divider ───────────────────────────────────────── */
 
 .stats-divider {

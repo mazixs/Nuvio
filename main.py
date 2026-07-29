@@ -52,7 +52,10 @@ from utils.cookie_manager import (
     handle_document_upload,
 )  # noqa: E402
 from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version  # noqa: E402
-from utils.analytics_db import get_users_for_csi  # noqa: E402
+from utils.analytics_db import (  # noqa: E402
+    get_csi_interval_days,
+    get_users_for_csi,
+)
 
 # Настройка логирования
 logger = setup_logger(__name__, level=LOG_LEVEL)
@@ -140,18 +143,29 @@ async def scheduled_cache_vacuum(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def scheduled_csi_dispatch(context: ContextTypes.DEFAULT_TYPE):
-    """Ежедневная рассылка CSI-опросов активным пользователям."""
+    """Ежедневная рассылка CSI-опросов активным пользователям.
+
+    Сам job'а ходит раз в сутки, а частоту опроса для одного пользователя
+    задаёт оператор в WebUI. Настройка читается на каждом запуске, поэтому
+    перезапуск бота после её смены не нужен.
+    """
     try:
         from utils.telegram_utils import send_csi_request
 
-        user_ids = get_users_for_csi(days_since_last=7, min_active_days=1)
+        interval_days = get_csi_interval_days()
+        user_ids = get_users_for_csi(
+            days_since_last=interval_days, min_active_days=1
+        )
         for user_id in user_ids:
             try:
                 await send_csi_request(user_id, context)
             except Exception as e:
                 logger.error(f"Ошибка отправки CSI пользователю {user_id}: {e}")
         if user_ids:
-            logger.info(f"📊 Разослано {len(user_ids)} CSI-опросов")
+            logger.info(
+                f"📊 Разослано {len(user_ids)} CSI-опросов "
+                f"(интервал {interval_days} дн.)"
+            )
     except Exception as e:
         logger.error(f"Ошибка при рассылке CSI: {e}")
 
