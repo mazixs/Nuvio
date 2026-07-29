@@ -60,6 +60,18 @@ from utils.analytics_db import (  # noqa: E402
 # Настройка логирования
 logger = setup_logger(__name__, level=LOG_LEVEL)
 
+# Сколько апдейтов бот обрабатывает одновременно.
+#
+# По умолчанию PTB обрабатывает апдейты строго по одному: фетчер ждёт завершения
+# текущего обработчика. Из-за этого нажатие «Отменить» лежало в очереди всё
+# скачивание и обрабатывалось, когда файл уже отправлен, а вторая ссылка не
+# читалась вовсе.
+#
+# Значение заведомо выше DOWNLOAD_WORKERS: скачивания занимают слоты надолго, и
+# на навигацию по меню с отменой должно оставаться место, иначе ограничение
+# вернёт ту же поломку под нагрузкой.
+UPDATE_CONCURRENCY = 32
+
 
 def _classify_polling_error(exc: telegram.error.TelegramError) -> tuple[str, str]:
     """Классифицирует типичные сбои polling по шаблону ошибки."""
@@ -176,6 +188,7 @@ def _configure_application_builder(
     """Настраивает клиент облачного или локального Telegram Bot API."""
     builder = (
         builder.token(TELEGRAM_TOKEN)
+        .concurrent_updates(UPDATE_CONCURRENCY)
         .connect_timeout(10.0)
         .read_timeout(120.0)
         .write_timeout(120.0)
