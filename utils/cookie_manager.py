@@ -175,7 +175,7 @@ def _build_broadcast_instruction() -> str:
 def _format_health_icon(status: str) -> str:
     if status == "valid":
         return "✅"
-    if status in {"expired", "stale", "invalid_format"}:
+    if status in {"expired", "stale", "invalid_format", "degraded"}:
         return "❌"
     if status in {"rate_limited", "probe_failed"}:
         return "⚠️"
@@ -193,6 +193,7 @@ def _build_cookie_health_text(
 
     STATUS_TRANSLATIONS = {
         "valid": "активны",
+        "degraded": "набор неполон, нужна перезагрузка",
         "stale": "устарели (неавторизован)",
         "rate_limited": "ограничение запросов",
         "expired": "истёк срок",
@@ -208,6 +209,7 @@ def _build_cookie_health_text(
         "required auth cookies are missing": "отсутствуют сессионные cookies",
         "all auth cookies are expired": "срок действия всех сессионных cookies истёк",
         "auth cookies are active and probe succeeded": "cookies активны, тест авторизации пройден",
+        "auth cookie set is incomplete, re-upload is needed": "часть сессионных cookies потеряна, загрузите файл заново",
         "auth cookies exist but authenticated probe failed": "cookies есть, но тест авторизации не прошёл",
         "platform temporarily rate-limited the validation probe": "платформа временно ограничила запросы проверки",
         "auth cookies are active; live probe is not available for this platform": "cookies активны; автопроверка недоступна для платформы",
