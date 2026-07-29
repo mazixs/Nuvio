@@ -735,6 +735,10 @@ def _build_audio_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup
 # Telegram гасит отметку активности через пять секунд, поэтому её обновляем чаще.
 _CHAT_ACTION_REFRESH_SECONDS = 4
 
+# Сколько подряд неудачных отметок терпим молча. Одна — рядовой сбой на длинной
+# выгрузке; серия означает, что шапка чата пуста всё время работы.
+_CHAT_ACTION_FAILURES_BEFORE_WARNING = 3
+
 
 def _chat_action_for(action: str) -> str:
     """Подбирает отметку активности под характер работы."""
@@ -749,19 +753,33 @@ async def _pulsing_chat_action(chat, action: str, enabled: bool = True):
 
     Это единственная анимация, доступная боту: рисовать «крутилку» правкой
     текста значило бы запрос на каждый кадр и затирание статусов. Отметка —
-    украшение, поэтому её отказ работу не роняет.
+    украшение, поэтому её отказ работу не роняет и не прекращает попыток:
+    прежний цикл выходил навсегда после первой ошибки, и на длинной отправке
+    шапка чата пустела до самого конца.
     """
     if not enabled:
         yield
         return
 
     async def _pulse() -> None:
+        failures = 0
         while True:
             try:
                 await chat.send_action(action)
+                failures = 0
             except telegram.error.TelegramError as error:
-                logger.debug("Отметка активности не отправлена: %s", error)
-                return
+                failures += 1
+                # Первый сбой — рядовое дело на длинной выгрузке, поэтому шумим
+                # только когда отметка не проходит подряд: это уже означает, что
+                # пользователь всё время видит пустую шапку.
+                if failures == _CHAT_ACTION_FAILURES_BEFORE_WARNING:
+                    logger.warning(
+                        "Отметка активности не проходит %s раз подряд: %s",
+                        failures,
+                        error,
+                    )
+                else:
+                    logger.debug("Отметка активности не отправлена: %s", error)
             await asyncio.sleep(_CHAT_ACTION_REFRESH_SECONDS)
 
     task = asyncio.create_task(_pulse())
