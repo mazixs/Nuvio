@@ -14,6 +14,7 @@ from config import (
     YOUTUBE_COOKIES_FILE,
     YTDLP_CLI_FALLBACK,
 )
+from utils.cookie_workfile import working_cookie_file
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.media_processor import convert_webm_to_mp4
@@ -73,13 +74,10 @@ def get_video_info(url: str) -> dict[str, Any]:
             "skip_download": True,
         }
         apply_network_opts(ydl_opts)
-        if (
-            use_cookies
-            and YOUTUBE_COOKIES_FILE
-            and Path(YOUTUBE_COOKIES_FILE).is_file()
-        ):
-            logger.info(f"Использование файла cookies: {YOUTUBE_COOKIES_FILE}")
-            ydl_opts["cookiefile"] = YOUTUBE_COOKIES_FILE
+        cookiefile = _cookiefile_if_available(use_cookies)
+        if cookiefile:
+            logger.info(f"Использование файла cookies: {cookiefile}")
+            ydl_opts["cookiefile"] = cookiefile
         elif use_cookies:
             logger.warning(
                 f"Файл cookies указан ({YOUTUBE_COOKIES_FILE}), но не найден. Запрос будет выполнен без cookies."
@@ -248,10 +246,15 @@ def _resolve_output_template(session_id: str, output_dir: Path | None) -> Path:
 
 
 def _cookiefile_if_available(use_cookies: bool) -> str | None:
-    """Возвращает путь к cookies, если он реально доступен."""
-    if use_cookies and YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
-        return YOUTUBE_COOKIES_FILE
-    return None
+    """Возвращает путь к cookies, если он реально доступен.
+
+    Отдаётся рабочая копия: yt-dlp перезаписывает переданный файл и теряет при
+    этом сессионные cookies, а загруженный админом набор должен остаться целым.
+    """
+    if not use_cookies:
+        return None
+    working = working_cookie_file(YOUTUBE_COOKIES_FILE)
+    return str(working) if working else None
 
 
 def _build_cli_download_command(
@@ -884,13 +887,10 @@ def download_subtitles(
         }
         apply_network_opts(ydl_opts, session_id=session_id)
 
-        if (
-            use_cookies
-            and YOUTUBE_COOKIES_FILE
-            and Path(YOUTUBE_COOKIES_FILE).is_file()
-        ):
-            logger.info(f"Использование cookies для субтитров: {YOUTUBE_COOKIES_FILE}")
-            ydl_opts["cookiefile"] = YOUTUBE_COOKIES_FILE
+        subtitle_cookiefile = _cookiefile_if_available(use_cookies)
+        if subtitle_cookiefile:
+            logger.info(f"Использование cookies для субтитров: {subtitle_cookiefile}")
+            ydl_opts["cookiefile"] = subtitle_cookiefile
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)

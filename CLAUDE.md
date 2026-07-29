@@ -84,7 +84,8 @@ Docker-стек отправляет файлы до 2 ГБ через лока�
 - `video_cache.py` — SQLite-кэш `file_id`, ключ `(url, format_id)`, WAL, TTL 90 дней
 - `analytics_db.py` — SQLite-аналитика: `users`, `events`, `csi_responses` (WAL, миграции через `PRAGMA table_info`)
 - `ytdlp_runtime.py` — авто-обновление yt-dlp, CLI fallback (`python -m yt_dlp`)
-- `cookie_manager.py` / `cookie_health.py` — админский интерфейс загрузки и валидации cookies
+- `cookie_manager.py` / `cookie_health.py` — админский интерфейс загрузки и валидации cookies. Проба читает `PROBE_BODY_READ_BYTES` тела ответа: признаки неавторизованности у YouTube лежат за 18-й тысячей байт, а на редирект `consent.youtube.com` попадает только незалогиненный, поэтому маркер нужен и по URL
+- `cookie_workfile.py` — рабочая копия cookie-файла. yt-dlp перезаписывает переданный `cookiefile` и теряет при этом сессионные cookies (замерено: один прогон убирает `YSC`), поэтому загрузчики отдают ему копию в `DATA_DIR/cookie-work`, а загруженный админом оригинал остаётся целым. Ни один загрузчик не должен передавать оригинал напрямую
 - `logger.py`, `cache_commands.py`, `temp_file_manager.py`
 
 **Расположение БД** зависит от `DATA_DIR`: локально — корень репозитория
@@ -119,7 +120,8 @@ ThreadPoolExecutor → inline-меню выбора формата → callback 
 
 ## Key Patterns
 
-- **Async + ThreadPoolExecutor**: блокирующие операции (yt-dlp, FFmpeg) выполняются в пуле (`DOWNLOAD_WORKERS=8`, `BLOCKING_TASK_TIMEOUT=600`)
+- **Async + ThreadPoolExecutor**: блокирующие операции (yt-dlp, FFmpeg) выполняются в пуле (`DOWNLOAD_WORKERS=8`, `BLOCKING_TASK_TIMEOUT=600`). `run_blocking` по таймауту помечает сессию отменённой: `wait_for` отменяет только ожидание, а поток продолжает качать — замерено, что загрузка дожила до конца через 4 минуты после своего таймаута. Поэтому вызовы, принадлежащие сессии, обязаны передавать `session_id=`
+- **Правка сообщений**: только через `safe_edit_message_text`. Она считает неошибкой два исхода — «текст не изменился» и «сообщение удалено пользователем». Прямой `query.edit_message_text` в обработчике ошибки даёт каскад: правка падает, сообщение об этой ошибке падает так же, и всё уезжает в глобальный хэндлер
 - **match-case**: разбор callback-событий, выбор платформы/формата
 - **Exception.add_note()**: обогащение ошибок контекстом
 - **Коды ошибок**: `<PREFIX>-<CATEGORY>-<RANDOM6>` — префиксы YT/TT/IG/RU/VK/TG/FILE/BOT, категории ACCESS/NETWORK/TIMEOUT/FORMAT_UNAVAILABLE/FFMPEG_MISSING/EXTRACTOR_RUNTIME/UNKNOWN. Пользователь видит только безопасный текст + код; cookies, пути и traceback уходят в админский лог
