@@ -8,8 +8,12 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+import yt_dlp
 
 from config import INSTAGRAM_COOKIES_PATH, TIKTOK_COOKIES_PATH, YOUTUBE_COOKIES_PATH
+from utils.cookie_workfile import working_cookie_file
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -37,20 +41,28 @@ AUTH_COOKIE_NAMES = {
     "instagram": {"sessionid", "csrftoken", "ds_user_id"},
     "tiktok": {"sessionid", "sessionid_ss", "sid_tt", "uid_tt"},
 }
+# Платформы, cookies которых проверяются попыткой извлечь видео. Для YouTube
+# HTTP-проба непригодна: с датацентрового адреса `/feed/subscriptions` отдаёт
+# стену согласия `consent.youtube.com` независимо от авторизации, и на самой
+# этой странице присутствуют `accounts.google.com` и `ServiceLogin`. С полным
+# рабочим набором cookies такая проба всё равно рапортовала «stale».
+# Извлечение видео меряет ровно то, ради чего cookies и нужны.
+YTDLP_PROBE_URLS = {
+    # Первое видео в истории YouTube (2005) — вряд ли когда-нибудь исчезнет.
+    "youtube": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+}
+YTDLP_PROBE_TIMEOUT_SECONDS = 20
+# Сообщения, которые означают именно проблему с авторизацией.
+YTDLP_AUTH_FAILURE_MARKERS = (
+    "sign in to confirm",
+    "not a bot",
+    "login required",
+    "private video",
+    "confirm your age",
+)
+YTDLP_RATE_LIMIT_MARKERS = ("429", "too many requests", "rate-limit", "rate limit")
+
 PROBE_CONFIG = {
-    "youtube": {
-        "url": "https://www.youtube.com/feed/subscriptions",
-        # `consent.youtube.com` — стена согласия, на которую перебрасывает
-        # только неавторизованного посетителя. В теле такой страницы признаков
-        # логина может не быть вовсе, поэтому маркер нужен именно по URL.
-        "unauth_markers": (
-            "accounts.google.com",
-            "ServiceLogin",
-            "consent.youtube.com",
-            "Sign in",
-        ),
-        "rate_limit_markers": ("unusual traffic", "try again later"),
-    },
     "instagram": {
         "url": "https://www.instagram.com/accounts/edit/",
         "unauth_markers": ("/accounts/login", "loginForm", "Log in"),
@@ -144,7 +156,47 @@ def _cache_result(
     return result
 
 
+def _extract_with_cookies(url: str, cookiefile: Path | str | None) -> None:
+    """Пробует получить информацию о видео. Поднимает исключение при неудаче."""
+    options: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "socket_timeout": YTDLP_PROBE_TIMEOUT_SECONDS,
+    }
+    if cookiefile:
+        options["cookiefile"] = str(cookiefile)
+    with yt_dlp.YoutubeDL(options) as ydl:
+        ydl.extract_info(url, download=False)
+
+
+def _probe_with_ytdlp(platform: str, file_path: Path) -> str:
+    """Проверяет cookies тем же способом, которым ими пользуются загрузчики.
+
+    Отдаётся рабочая копия: проверять надо именно тот файл, с которым работает
+    скачивание, а оригинал админа не должен меняться от проверки.
+    """
+    try:
+        _extract_with_cookies(
+            YTDLP_PROBE_URLS[platform], working_cookie_file(file_path)
+        )
+    except Exception as exc:  # noqa: BLE001
+        reason = str(exc).lower()
+        if any(marker in reason for marker in YTDLP_RATE_LIMIT_MARKERS):
+            return "rate_limited"
+        if any(marker in reason for marker in YTDLP_AUTH_FAILURE_MARKERS):
+            return "stale"
+        # Удалённое видео или сетевой сбой — не повод объявлять cookies мёртвыми:
+        # ложная тревога обесценивает проверку так же, как ложное «всё хорошо».
+        logger.warning("Cookie probe for %s failed for another reason: %s", platform, exc)
+        return "probe_failed"
+    return "valid"
+
+
 def _probe_authenticated_session(platform: str, file_path: Path) -> str:
+    if platform in YTDLP_PROBE_URLS:
+        return _probe_with_ytdlp(platform, file_path)
+
     config = PROBE_CONFIG.get(platform)
     if not config:
         return "not_supported"
@@ -271,6 +323,24 @@ def check_cookie_health(platform: str, *, force: bool = False) -> CookieHealthRe
                 "all auth cookies are expired",
                 auth_cookie_count=len(auth_records),
                 active_auth_cookie_count=0,
+            ),
+        )
+
+    # Неполный набор — самый устойчивый признак того, что файл пора обновить.
+    # Сетевая проба отвечает на другой вопрос («скачивается ли сейчас») и может
+    # быть зелёной на анонимном доступе: замерено, что одно и то же видео за
+    # день и отбивалось бот-чеком, и извлекалось вообще без cookies. Полнота же
+    # деградирует необратимо — с шести из шести до одной.
+    if len(auth_records) * 2 < len(auth_names):
+        return _cache_result(
+            platform,
+            file_path,
+            _result(
+                platform,
+                "degraded",
+                "auth cookie set is incomplete, re-upload is needed",
+                auth_cookie_count=len(auth_records),
+                active_auth_cookie_count=len(active_auth_records),
             ),
         )
 
