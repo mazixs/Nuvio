@@ -46,15 +46,17 @@ class SessionStore:
         *,
         key: str = "sessions",
         max_active: int = 5,
+        hard_limit: int = 25,
         token_factory: Callable[[], str] | None = None,
-        cleanup_session: Callable[[str], None] | None = None,
+        is_disposable: Callable[[str], bool] | None = None,
         clock: Callable[[], float] = time.time,
     ):
         self._user_data = user_data
         self._key = key
         self._max_active = max_active
+        self._hard_limit = hard_limit
         self._token_factory = token_factory or (lambda: uuid.uuid4().hex[:8])
-        self._cleanup_session = cleanup_session
+        self._is_disposable = is_disposable or (lambda _session_id: True)
         self._clock = clock
 
     @property
@@ -88,16 +90,40 @@ class SessionStore:
             "created_at": self._clock(),
         }
 
-        while len(store) > self._max_active:
-            oldest = min(
-                store,
-                key=lambda current: float(store[current].get("created_at", 0.0)),
-            )
-            evicted = store.pop(oldest)
-            evicted_session_id = evicted.get("session_id")
-            if evicted_session_id and self._cleanup_session:
-                self._cleanup_session(evicted_session_id)
+        self._evict(store)
         return token
+
+    def _evict(self, store: dict[str, dict[str, Any]]) -> None:
+        """Освобождает место, не задевая сессии, которые ещё работают.
+
+        Вытеснение НЕ удаляет временные файлы. Прежняя версия вызывала
+        ``cleanup_temp_files`` для вытесненной сессии, и на проде это сносило
+        каталог загрузки, которая шла прямо в этот момент: скачанный файл
+        исчезал между готовностью и отправкой. Удаление файлов принадлежит
+        владельцу работы, а не соседней сессии, которой понадобилось место.
+
+        Занятые сессии пропускаются ещё и потому, что запись хранит
+        ``session_id``: потеряв её, успешный путь не узнает, что удалять, и
+        файл утечёт до перезапуска процесса.
+        """
+
+        def _age(token: str) -> float:
+            return float(store[token].get("created_at", 0.0))
+
+        while len(store) > self._max_active:
+            disposable = [
+                token
+                for token in store
+                if self._is_disposable(store[token].get("session_id"))
+            ]
+            if not disposable:
+                break
+            store.pop(min(disposable, key=_age))
+
+        # Страховка от неограниченного роста, если занято вообще всё: утечка
+        # одного каталога переживается уборкой при старте, а рост памяти — нет.
+        while len(store) > self._hard_limit:
+            store.pop(min(store, key=_age))
 
     def get(self, token: str) -> dict[str, Any] | None:
         return self.data.get(token)
