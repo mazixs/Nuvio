@@ -79,6 +79,13 @@ cp .env.example .secrets/.env
 # отредактируйте .secrets/.env
 ```
 
+Запуск бота и, отдельным процессом, WebUI-дашборда:
+
+```bash
+python main.py     # бот
+python -m web      # дашборд на http://localhost:8080
+```
+
 Прямой запуск `python main.py` использует облачный Bot API с лимитом 50 МБ.
 Для больших файлов используйте полный Docker-стек ниже.
 
@@ -149,6 +156,18 @@ git push origin v1.0.0
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут операции обновления yt-dlp (секунды) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | Использовать CLI-режим yt-dlp как запасной путь |
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (секунды) |
+| `DATA_DIR` | нет | корень репозитория | Каталог баз данных (`analytics.db`, `telegram_cache.db`). В Docker задаёт compose: `/app/data` |
+| `TEMP_DIR` | нет | `./temp` | Каталог временных медиа. В Docker задаёт compose: `/app/media` (общий том с Bot API) |
+| `YOUTUBE_COOKIES_FILE` | нет | `www.youtube.com_cookies.txt` | Имя файла cookies YouTube внутри `.secrets/` |
+| `TIKTOK_COOKIES_FILE` | нет | `www.tiktok.com_cookies.txt` | Имя файла cookies TikTok внутри `.secrets/` |
+| `INSTAGRAM_COOKIES_FILE` | нет | `www.instagram.com_cookies.txt` | Имя файла cookies Instagram внутри `.secrets/` |
+| `TELEGRAM_LOCAL_MODE` | нет | `false` | Локальный Bot API вместо облачного. В Docker задаёт compose: `true` |
+| `TELEGRAM_BOT_API_BASE_URL` | нет | -- | URL локального Bot API. Задаёт compose, вручную не нужен |
+| `TELEGRAM_BOT_API_FILE_URL` | нет | -- | URL файлового эндпоинта локального Bot API. Задаёт compose |
+| `TELEGRAM_MAX_FILE_SIZE_MB` | нет | `50` | Желаемый лимит отправки. Жёстко зажимается режимом доставки: 2000 при `TELEGRAM_LOCAL_MODE=true`, иначе 50 |
+
+Последние четыре переменные задаёт `compose.yaml`; в `.env.example` их нет
+намеренно — при прямом запуске они не нужны, а в Docker их не надо трогать.
 
 ### TIKTOK_FAST_PATH и кэш
 
@@ -215,27 +234,47 @@ Nuvio/
 ├── config.py
 ├── messages.py
 ├── utils/
-│   ├── telegram_utils.py
+│   ├── telegram_utils.py        # хэндлеры, антиспам, отправка файлов
+│   ├── callback_fsm.py          # разбор callback-данных и хранилище сессий
+│   ├── cancellation.py          # отмена длительных задач по session_id
+│   ├── platform_actions.py      # связь действий пользователя с платформой
+│   ├── public_errors.py         # безопасная классификация ошибок
 │   ├── youtube_utils.py
 │   ├── tiktok_instagram_utils.py
 │   ├── rutube_vk_utils.py
+│   ├── ytdlp_common.py          # общие сетевые опции yt-dlp и backoff
+│   ├── fast_path.py             # общие примитивы быстрых путей
+│   ├── tiktok_fast_path.py
+│   ├── instagram_fast_path.py
+│   ├── url_delivery.py          # отдать ссылку вместо файла
+│   ├── file_delivery.py         # выбор метода отправки по расширению
+│   ├── tg_video_choice.py       # выбор формата под лимит доставки
+│   ├── subtitles.py
 │   ├── media_processor.py
 │   ├── video_cache.py
 │   ├── analytics_db.py
 │   ├── ytdlp_runtime.py
 │   ├── cookie_manager.py
 │   ├── cookie_health.py
+│   ├── cookie_workfile.py       # рабочая копия cookies для yt-dlp
 │   ├── logger.py
 │   ├── cache_commands.py
 │   └── temp_file_manager.py
 ├── web/
 │   ├── app.py
+│   ├── __main__.py          # точка входа: `python -m web`
 │   ├── templates/
 │   └── static/
 ├── tests/
 ├── docs/
+├── scripts/                 # генерация release notes
 ├── .secrets/
-├── pyproject.toml              # конфигурация ruff (per-file-ignores и т.д.)
+├── CLAUDE.md                # инструкции для Claude Code
+├── AGENTS.md                # расширенный справочник по проекту
+├── LICENSE
+├── init_env.sh              # подготовка окружения для headless/systemd
+├── pyproject.toml           # конфигурация ruff (per-file-ignores и т.д.)
+├── pytest.ini               # маркеры и настройки pytest
 ├── .github/workflows/       # CI/CD (тесты, линтинг, релиз, GHCR)
 ├── Dockerfile
 ├── Dockerfile.telegram-bot-api
@@ -258,14 +297,28 @@ Nuvio/
 | `rutube_vk_utils.py` | Rutube и VK Video: видео и аудио через yt-dlp |
 | `media_processor.py` | FFmpeg: извлечение аудио, конвертация WebM в MP4, мерж аудио/видео |
 | `video_cache.py` | SQLite-кэш file_id для мгновенной повторной отправки (WAL mode, TTL 90 дней) |
-| `analytics_db.py` | SQLite-аналитика: таблицы users, events (WAL mode) |
+| `analytics_db.py` | SQLite-аналитика: таблицы `users`, `events`, `csi_responses`, `settings` (WAL mode) |
 | `ytdlp_runtime.py` | Автообновление yt-dlp, CLI fallback |
 | `cookie_manager.py` | Админский интерфейс загрузки cookies |
 | `cookie_health.py` | Валидация и проверка здоровья cookies |
 | `logger.py` | Настройка логирования (rotating file handler, 10MB, 5 backups) |
 | `cache_commands.py` | Обработчики админских команд для управления кэшем |
 | `temp_file_manager.py` | Управление временными файлами при скачивании |
+| `callback_fsm.py` | Разбор `callback_data` и хранилище сессий (LRU, до 5 на пользователя) |
+| `cancellation.py` | Отмена длительных задач по `session_id` через `progress_hooks` |
+| `platform_actions.py` | Чистые решения: действие пользователя → платформа и ключ кэша |
+| `public_errors.py` | Классификация ошибок в безопасный текст без внутренних деталей |
+| `ytdlp_common.py` | Общие сетевые опции yt-dlp, exponential backoff, проверка лимита размера |
+| `fast_path.py` | Общие примитивы быстрых путей: allowlist домена и отказ от пути |
+| `tiktok_fast_path.py` | Прямая H.264-ссылка TikTok вместо yt-dlp (флаг `TIKTOK_FAST_PATH`) |
+| `instagram_fast_path.py` | Прямая ссылка Instagram из GraphQL (флаг `INSTAGRAM_FAST_PATH`) |
+| `url_delivery.py` | Решение отдать медиа ссылкой вместо файла (до 20 МБ, фото до 5 МБ) |
+| `file_delivery.py` | Выбор метода отправки Telegram по расширению файла |
+| `tg_video_choice.py` | Выбор формата YouTube под лимит доставки (каскад по разрешению) |
+| `subtitles.py` | Языки субтитров и сборка TXT из SRT |
+| `cookie_workfile.py` | Рабочая копия cookie-файла: yt-dlp перезаписывает переданный файл |
 | `web/app.py` | FastAPI-приложение: логин, дашборд, список и детали пользователей, страница настроек |
+| `web/__main__.py` | Точка входа WebUI: `python -m web` |
 
 ---
 

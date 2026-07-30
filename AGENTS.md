@@ -323,6 +323,18 @@ ruff check --output-format=github .
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут обновления yt-dlp (сек) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | CLI fallback при сбое API |
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (сек) |
+| `DATA_DIR` | нет | корень репозитория | Каталог баз (`analytics.db`, `telegram_cache.db`); в Docker `/app/data` |
+| `TEMP_DIR` | нет | `./temp` | Каталог временных медиа; в Docker `/app/media` — общий том с Bot API |
+| `YOUTUBE_COOKIES_FILE` | нет | `www.youtube.com_cookies.txt` | Имя файла cookies YouTube в `.secrets/` |
+| `TIKTOK_COOKIES_FILE` | нет | `www.tiktok.com_cookies.txt` | Имя файла cookies TikTok в `.secrets/` |
+| `INSTAGRAM_COOKIES_FILE` | нет | `www.instagram.com_cookies.txt` | Имя файла cookies Instagram в `.secrets/` |
+| `TELEGRAM_LOCAL_MODE` | нет | `false` | Локальный Bot API вместо облачного; в Docker `true` |
+| `TELEGRAM_BOT_API_BASE_URL` | нет | — | URL локального Bot API; задаёт `compose.yaml` |
+| `TELEGRAM_BOT_API_FILE_URL` | нет | — | URL файлового эндпоинта; задаёт `compose.yaml` |
+| `TELEGRAM_MAX_FILE_SIZE_MB` | нет | `50` | Желаемый лимит; зажимается режимом: 2000 при локальном Bot API, иначе 50 |
+
+Четыре последние задаёт `compose.yaml`, поэтому в `.env.example` их нет: при
+прямом запуске они не нужны, а в Docker их не надо трогать.
 
 ---
 
