@@ -30,14 +30,18 @@ def test_callback_event_rejects_unknown_shape():
 
 
 def test_session_store_evicts_oldest_session():
+    """Вытеснение убирает запись, но файлов не касается.
+
+    Прежде оно вызывало `cleanup_temp_files` для вытесненной сессии, и на проде
+    это сносило каталог работающей загрузки. Подробности и замеры — в
+    tests/test_session_eviction_safety.py.
+    """
     user_data = {}
-    cleaned = []
     tokens = iter(("one", "two", "three"))
     store = SessionStore(
         user_data,
         max_active=2,
         token_factory=lambda: next(tokens),
-        cleanup_session=lambda session_id: cleaned.append(session_id),
         clock=iter((1.0, 2.0, 3.0)).__next__,
     )
 
@@ -52,4 +56,3 @@ def test_session_store_evicts_oldest_session():
     assert store.get("one") is None
     assert store.get(second)["url"] == "2"
     assert store.get(third)["url"] == "3"
-    assert cleaned == ["s1"]

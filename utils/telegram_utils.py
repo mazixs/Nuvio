@@ -21,6 +21,7 @@ from config import (
     DOWNLOAD_WORKERS,
     MAX_FILE_SIZE,
     TELEGRAM_LOCAL_MODE,
+    TEMP_DIR,
 )
 from utils.logger import setup_logger
 from utils.cancellation import CancelledByUser, request_cancellation
@@ -321,13 +322,40 @@ def _check_spam(user_id: int, context: ContextTypes.DEFAULT_TYPE, now: float) ->
     return False
 
 
+def _session_is_disposable(session_id: str | None) -> bool:
+    """Сообщает, можно ли вытеснить сессию, не потеряв ничьей работы.
+
+    Признак занятости — файлы в её временном каталоге. Пустой каталог означает
+    брошенное меню: формат не выбирали, качать нечего. Непустой означает либо
+    идущую загрузку, либо готовый файл, который ещё не отправлен, — и такую
+    запись терять нельзя: в ней лежит `session_id`, по которому владелец потом
+    удалит файлы.
+    """
+    if not session_id:
+        return True
+    directory = TEMP_DIR / session_id
+    try:
+        return not any(directory.iterdir())
+    except FileNotFoundError:
+        return True
+    except OSError as error:
+        # Не смогли посмотреть — считаем занятой: вытеснение обратимо ожиданием,
+        # а потеря скачанного файла нет.
+        logger.warning(
+            "Не удалось проверить каталог сессии %s (%s), сессия сохранена",
+            session_id,
+            error,
+        )
+        return False
+
+
 def _get_session_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
     """Возвращает хранилище активных сессий пользователя."""
     return SessionStore(
         context.user_data,
         key=_SESSION_STORE_KEY,
         max_active=_MAX_ACTIVE_SESSIONS,
-        cleanup_session=cleanup_temp_files,
+        is_disposable=_session_is_disposable,
     ).data
 
 
@@ -345,7 +373,7 @@ def _store_session(
         context.user_data,
         key=_SESSION_STORE_KEY,
         max_active=_MAX_ACTIVE_SESSIONS,
-        cleanup_session=cleanup_temp_files,
+        is_disposable=_session_is_disposable,
     ).create(
         url=url,
         video_info=video_info,
@@ -3136,6 +3164,24 @@ async def _send_photo_post_assets(
         cleanup_temp_files(session_id)
 
 
+def _file_ready_to_send(file_path: Path) -> bool:
+    """Проверяет, что отправлять действительно есть что.
+
+    В локальном режиме путь уходит в PTB как объект, а `resolve()` файловую
+    систему не трогает. Пропавший файл в этом случае превращался в
+    `TypeError: Object of type PosixPath is not JSON serializable`: PTB
+    конвертирует путь в ссылку только когда `is_file()` истинно, иначе кладёт
+    объект в тело запроса. Пользователь получал «ошибку сети» вместо «нет
+    файла».
+
+    Нулевой размер считается отсутствием: Telegram пустой файл не примет.
+    """
+    try:
+        return file_path.is_file() and file_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 async def send_single_file(
     query: telegram.CallbackQuery,
     file_path: Path,
@@ -3149,6 +3195,24 @@ async def send_single_file(
     back_markup = _build_back_markup(session_token)
     platform = session_data.get("platform", "bot")
     url = session_data.get("url")
+
+    # Повторять нечего: файла нет, и от третьей попытки он не появится.
+    if not _file_ready_to_send(file_path):
+        error_code = _make_error_code("file", "ACCESS")
+        _schedule_platform_failure_log(
+            platform=platform,
+            stage="send_single_file_missing",
+            url=url,
+            error_code=error_code,
+            exc=FileNotFoundError(str(file_path)),
+            session_id=session_data.get("session_id"),
+        )
+        await safe_edit_message_text(
+            query,
+            USER_FILE_ERROR_WITH_CODE.format(error_code=error_code),
+            reply_markup=back_markup,
+        )
+        return False
 
     for attempt in range(1, max_retries + 1):
         try:
