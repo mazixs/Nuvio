@@ -528,6 +528,39 @@ def test_tiktok_photo_resolver_removes_tracking_query(monkeypatch):
     assert data["images"] == ["https://cdn.example/1.jpg"]
 
 
+def test_tiktok_photo_resolver_switches_api_host_after_forbidden(monkeypatch):
+    resolved_url = "https://www.tiktok.com/@user/photo/1"
+    requested_endpoints: list[str] = []
+
+    class _Response:
+        def raise_for_status(self):
+            if requested_endpoints[-1] == tiktok_instagram_utils.TIKWM_API_URL:
+                raise RuntimeError("Client error '403 Forbidden'")
+
+        def json(self):
+            return {"code": 0, "data": {"images": ["https://cdn.example/1.jpg"]}}
+
+    def _get(endpoint, *, params, **_kwargs):
+        assert params["url"] == resolved_url
+        requested_endpoints.append(endpoint)
+        return _Response()
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda _url: resolved_url,
+    )
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
+
+    data = tiktok_instagram_utils._fetch_tiktok_photo_post_data(resolved_url)
+
+    assert requested_endpoints == [
+        tiktok_instagram_utils.TIKWM_API_URL,
+        tiktok_instagram_utils.TIKWM_FALLBACK_API_URL,
+    ]
+    assert data["images"] == ["https://cdn.example/1.jpg"]
+
+
 def test_tiktok_photo_resolver_falls_back_to_original_short_url(monkeypatch):
     short_url = "https://vt.tiktok.com/ZSVYA4PyM/"
     resolved_url = "https://www.tiktok.com/@user/photo/1"
