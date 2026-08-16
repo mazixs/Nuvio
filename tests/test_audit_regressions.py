@@ -474,7 +474,7 @@ def test_tiktok_photo_info_uses_fallback_when_yt_dlp_cannot_parse(monkeypatch):
     monkeypatch.setattr(
         tiktok_instagram_utils,
         "_fetch_tiktok_photo_post_data",
-        lambda url: {
+        lambda url, original_url=None: {
             "id": "1",
             "title": "Фото-пост",
             "cover": "https://cdn.example/cover.jpg",
@@ -491,6 +491,110 @@ def test_tiktok_photo_info_uses_fallback_when_yt_dlp_cannot_parse(monkeypatch):
     assert info["uploader"] == "tester"
     assert len(info["_nuvio_tiktok_images"]) == 2
     assert info["duration"] == 12
+
+
+def test_tiktok_photo_resolver_removes_tracking_query(monkeypatch):
+    resolved_url = (
+        "https://www.tiktok.com/@user/photo/1?"
+        "is_from_webapp=1&sender_device=pc"
+    )
+    clean_url = "https://www.tiktok.com/@user/photo/1"
+    requested_urls: list[str] = []
+
+    class _Response:
+        def raise_for_status(self):
+            if requested_urls[-1] != clean_url:
+                raise RuntimeError("Client error '403 Forbidden'")
+
+        def json(self):
+            return {"code": 0, "data": {"images": ["https://cdn.example/1.jpg"]}}
+
+    def _get(_url, *, params, **_kwargs):
+        requested_urls.append(params["url"])
+        return _Response()
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda _url: resolved_url,
+    )
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
+
+    data = tiktok_instagram_utils._fetch_tiktok_photo_post_data(
+        "https://vt.tiktok.com/ZSVYA4PyM/"
+    )
+
+    assert requested_urls == [clean_url]
+    assert data["images"] == ["https://cdn.example/1.jpg"]
+
+
+def test_tiktok_photo_resolver_falls_back_to_original_short_url(monkeypatch):
+    short_url = "https://vt.tiktok.com/ZSVYA4PyM/"
+    resolved_url = "https://www.tiktok.com/@user/photo/1"
+    requested_urls: list[str] = []
+
+    class _Response:
+        def raise_for_status(self):
+            if requested_urls[-1] == resolved_url:
+                raise RuntimeError("Client error '403 Forbidden'")
+
+        def json(self):
+            return {"code": 0, "data": {"images": ["https://cdn.example/1.jpg"]}}
+
+    def _get(_url, *, params, **_kwargs):
+        requested_urls.append(params["url"])
+        return _Response()
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda _url: resolved_url,
+    )
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
+
+    data = tiktok_instagram_utils._fetch_tiktok_photo_post_data(short_url)
+
+    assert requested_urls == [resolved_url, short_url]
+    assert data["images"] == ["https://cdn.example/1.jpg"]
+
+
+def test_get_tiktok_info_keeps_original_short_url_for_photo_fallback(monkeypatch):
+    short_url = "https://vt.tiktok.com/ZSVYA4PyM/"
+    resolved_url = "https://www.tiktok.com/@user/photo/1"
+    requested_urls: list[str] = []
+
+    class _Response:
+        def raise_for_status(self):
+            if requested_urls[-1] == resolved_url:
+                raise RuntimeError("Client error '403 Forbidden'")
+
+        def json(self):
+            return {
+                "code": 0,
+                "data": {
+                    "id": "1",
+                    "title": "Фото-пост",
+                    "images": ["https://cdn.example/1.jpg"],
+                    "author": {"unique_id": "tester"},
+                    "music_info": {"duration": 12},
+                },
+            }
+
+    def _get(_url, *, params, **_kwargs):
+        requested_urls.append(params["url"])
+        return _Response()
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda _url: resolved_url,
+    )
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
+
+    info = tiktok_instagram_utils.get_tiktok_info(short_url)
+
+    assert requested_urls == [resolved_url, short_url]
+    assert info["_nuvio_tiktok_images"] == ["https://cdn.example/1.jpg"]
 
 
 def test_tiktok_photo_video_download_is_rejected():

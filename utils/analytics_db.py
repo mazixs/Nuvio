@@ -13,7 +13,7 @@ import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import os
@@ -44,6 +44,17 @@ def _get_connection() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         _local.conn = conn
     return conn
+
+
+def close_connection() -> None:
+    """Закрывает соединение аналитики текущего потока."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        return
+    try:
+        conn.close()
+    finally:
+        delattr(_local, "conn")
 
 
 @contextmanager
@@ -156,7 +167,7 @@ def track_user(
     language_code: str | None = None,
 ) -> None:
     """Создаёт или обновляет пользователя."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
     with _cursor_write() as cur:
         cur.execute(
             """
@@ -181,7 +192,7 @@ def track_event(
     metadata: str | None = None,
 ) -> None:
     """Записывает событие."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
     with _cursor_write() as cur:
         cur.execute(
             "INSERT INTO events (user_id, event, platform, url, metadata, ts) VALUES (?, ?, ?, ?, ?, ?)",
@@ -208,7 +219,7 @@ def get_setting(key: str, default: str | None = None) -> str | None:
 
 def set_setting(key: str, value: str) -> None:
     """Записывает настройку, перетирая прежнее значение."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
     with _cursor_write() as cur:
         cur.execute(
             """
@@ -284,8 +295,8 @@ def get_users_for_csi(
     - Пользователь активен за последние min_active_days дней
     - CSI не отправлялся ранее ИЛИ прошло более days_since_last дней
     """
-    active_since = (datetime.utcnow() - timedelta(days=min_active_days)).isoformat()
-    last_csi_since = (datetime.utcnow() - timedelta(days=days_since_last)).isoformat()
+    active_since = (datetime.now(UTC) - timedelta(days=min_active_days)).isoformat()
+    last_csi_since = (datetime.now(UTC) - timedelta(days=days_since_last)).isoformat()
     with _cursor_read() as cur:
         cur.execute(
             """
@@ -301,7 +312,7 @@ def get_users_for_csi(
 
 def update_last_csi_sent(user_id: int) -> None:
     """Обновляет время последней отправки CSI для пользователя."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
     with _cursor_write() as cur:
         cur.execute(
             "UPDATE users SET last_csi_sent = ? WHERE user_id = ?",
@@ -316,7 +327,7 @@ def save_csi_rating(user_id: int, rating: int) -> int:
     Returns:
         ID созданной записи
     """
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
     with _cursor_write() as cur:
         cur.execute(
             "INSERT INTO csi_responses (user_id, rating, created_at) VALUES (?, ?, ?)",
@@ -395,14 +406,14 @@ def total_users() -> int:
 
 
 def new_users(days: int = 1) -> int:
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users WHERE first_seen >= ?", (since,))
         return cur.fetchone()[0]
 
 
 def active_users(days: int = 1) -> int:
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         cur.execute(
             "SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?", (since,)
@@ -440,7 +451,7 @@ def retention(day: int) -> float:
 
 def churn_rate(days: int = 30) -> float:
     """Churn: % пользователей, которые были активны ранее, но не активны за последние days дней."""
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
@@ -491,7 +502,7 @@ def popular_videos(limit: int = 20) -> list[dict]:
 
 
 def downloads_per_day(days: int = 30) -> list[dict]:
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         cur.execute(
             """
@@ -507,7 +518,7 @@ def downloads_per_day(days: int = 30) -> list[dict]:
 
 
 def new_users_per_day(days: int = 30) -> list[dict]:
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         cur.execute(
             """
@@ -670,7 +681,7 @@ def engagement_per_day(days: int = 30) -> list[dict]:
 
     Возвращает: [{day: "2026-03-22", dau: 5, stickiness: 25.0}, ...]
     """
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with _cursor_read() as cur:
         # MAU для каждого дня = уникальные пользователи за 30 дней до этого дня
         cur.execute(

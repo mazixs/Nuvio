@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.analytics_db import (  # noqa: E402
     CSI_INTERVAL_DAYS_MAX,
     CSI_INTERVAL_DAYS_MIN,
+    close_connection,
     init_db,
     dashboard_summary,
     get_all_users,
@@ -176,8 +177,11 @@ def _sanitize_input(value: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    yield
+    try:
+        init_db()
+        yield
+    finally:
+        close_connection()
 
 
 app = FastAPI(title="Nuvio Analytics", docs_url=None, redoc_url=None, lifespan=lifespan)

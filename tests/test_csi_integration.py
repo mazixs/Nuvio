@@ -4,7 +4,8 @@
 Интеграционные тесты для CSI (Customer Satisfaction Index) метрик.
 """
 
-from datetime import datetime, timedelta
+import warnings
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -47,10 +48,31 @@ def test_init_db_creates_csi_schema(fresh_analytics_db):
 
 
 @pytest.mark.integration
+def test_analytics_timestamps_use_a_non_deprecated_utc_clock(fresh_analytics_db):
+    """Запись аналитики не должна обращаться к удалённому utcnow()."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        fresh_analytics_db.track_user(1, "user1")
+        fresh_analytics_db.track_event(1, "start")
+        fresh_analytics_db.update_last_csi_sent(1)
+        fresh_analytics_db.save_csi_rating(1, 5)
+
+
+@pytest.mark.integration
+def test_close_connection_releases_the_thread_local_connection(fresh_analytics_db):
+    """Жизненный цикл приложения может закрыть соединение своего потока."""
+    assert hasattr(fresh_analytics_db._local, "conn")
+
+    fresh_analytics_db.close_connection()
+
+    assert not hasattr(fresh_analytics_db._local, "conn")
+
+
+@pytest.mark.integration
 def test_get_users_for_csi(fresh_analytics_db):
     """Проверяет выборку пользователей для CSI-опроса."""
     db = fresh_analytics_db
-    old = (datetime.utcnow() - timedelta(days=10)).isoformat()
+    old = (datetime.now(UTC) - timedelta(days=10)).isoformat()
 
     db.track_user(1, "user1")
     db.track_user(2, "user2")

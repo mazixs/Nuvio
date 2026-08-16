@@ -476,11 +476,11 @@ Nuvio/
 |---|---|
 | `python-telegram-bot[job-queue]` 22.8 | Telegram Bot API (async) |
 | `yt-dlp[default]` 2026.7.4 | Загрузка видео с платформ |
-| `curl_cffi` 0.15.0 | Имперсонация браузерных HTTP-запросов |
+| `curl_cffi` 0.16.0 | Имперсонация браузерных HTTP-запросов |
 | `httpx` 0.28.1 | HTTP-клиент |
 | `python-dotenv` 1.2.2 | Загрузка настроек окружения |
-| `fastapi` 0.139.2 | WebUI |
-| `uvicorn[standard]` 0.51.0 | ASGI-сервер для WebUI |
+| `fastapi` 0.141.1 | WebUI |
+| `uvicorn[standard]` 0.52.3 | ASGI-сервер для WebUI |
 | `jinja2` 3.1.6 | Шаблонизатор |
 | `itsdangerous` 2.2.0 | Подпись сессий |
 | `python-multipart` 0.0.32 | Обработка форм |

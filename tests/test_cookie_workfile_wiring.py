@@ -5,6 +5,8 @@
 потеряет сессионные cookies.
 """
 
+from pathlib import Path
+
 import pytest
 
 from utils import tiktok_instagram_utils, youtube_utils
@@ -29,7 +31,7 @@ def _is_working_copy(path, original) -> bool:
     return (
         resolved != str(original)
         and WORK_DIR_NAME in resolved
-        and open(resolved, encoding="utf-8").read() == CONTENT
+        and Path(resolved).read_text(encoding="utf-8") == CONTENT
     )
 
 
