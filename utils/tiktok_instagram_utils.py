@@ -83,7 +83,10 @@ MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY_BASE = 1  # секунды
 HTTP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 INSTAGRAM_PUBLIC_PAGE_USER_AGENT = HTTP_USER_AGENT
-TIKWM_API_URL = "https://www.tikwm.com/api/"
+# У TikWM два публичных host-фронтенда. Cloudflare может отказать одному из
+# них для конкретного IP, хотя второй обслуживает тот же запрос.
+TIKWM_API_URL = "https://tikwm.com/api/"
+TIKWM_FALLBACK_API_URL = "https://www.tikwm.com/api/"
 
 # === Бюджет ожидания на пути быстрой доставки ===
 # Пока быстрый путь ждёт сокеты, воркер занят, а пользователь видит
@@ -394,6 +397,11 @@ def _tiktok_resolver_url(url: str) -> str:
     return parsed._replace(query="", fragment="").geturl()
 
 
+def _tiktok_resolver_api_urls() -> tuple[str, ...]:
+    """Возвращает адреса TikWM в порядке отказоустойчивого обращения."""
+    return tuple(dict.fromkeys((TIKWM_API_URL, TIKWM_FALLBACK_API_URL)))
+
+
 def _audio_format_sort_key(fmt: dict[str, Any]) -> tuple[float, float, int]:
     """Ключ сортировки аудиокандидатов TikTok. Применять с ``reverse=True``.
 
@@ -557,37 +565,48 @@ def _fetch_tiktok_photo_post_data(
         resolver_urls.append(fallback_url)
 
     last_exception: Exception | None = None
-    for resolver_url in resolver_urls:
-        def _request() -> dict[str, Any]:
-            response = httpx.get(
-                TIKWM_API_URL,
-                params={"url": resolver_url},
-                headers={"User-Agent": HTTP_USER_AGENT},
-                follow_redirects=True,
-                timeout=TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if payload.get("code") != 0:
-                raise Exception(
-                    f"TikTok фото-пост недоступен: {payload.get('msg') or 'неизвестная ошибка'}"
+    for api_url in _tiktok_resolver_api_urls():
+        for resolver_url in resolver_urls:
+            def _request(
+                api_url: str = api_url, resolver_url: str = resolver_url
+            ) -> dict[str, Any]:
+                response = httpx.get(
+                    api_url,
+                    params={"url": resolver_url},
+                    headers={
+                        "User-Agent": HTTP_USER_AGENT,
+                        "Accept": "application/json, text/plain, */*",
+                    },
+                    follow_redirects=True,
+                    timeout=TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS,
                 )
-            data = payload.get("data") or {}
-            if not data.get("images"):
-                raise Exception("Сервис не вернул изображения для TikTok фото-поста.")
-            return data
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("code") != 0:
+                    raise Exception(
+                        f"TikTok фото-пост недоступен: {payload.get('msg') or 'неизвестная ошибка'}"
+                    )
+                data = payload.get("data") or {}
+                if not data.get("images"):
+                    raise Exception(
+                        "Сервис не вернул изображения для TikTok фото-поста."
+                    )
+                return data
 
-        try:
-            return _smart_retry(
-                _request, max_attempts=3, context="TikTok photo fallback"
-            )
-        except Exception as error:
-            last_exception = error
-            logger.warning(
-                "TikWM не обработал URL фото-поста %s: %s",
-                resolver_url,
-                error,
-            )
+            try:
+                return _smart_retry(
+                    _request,
+                    max_attempts=3,
+                    context=f"TikTok photo fallback ({api_url})",
+                )
+            except Exception as error:
+                last_exception = error
+                logger.warning(
+                    "TikWM не обработал URL фото-поста %s через %s: %s",
+                    resolver_url,
+                    api_url,
+                    error,
+                )
 
     if last_exception is not None:
         raise last_exception
@@ -624,22 +643,42 @@ def _call_tiktok_resolver(url: str) -> dict[str, Any]:
         logger.debug("Ответ резолвера TikTok переиспользован")
         return remembered
 
-    def _request() -> dict[str, Any]:
-        response = httpx.get(
-            TIKWM_API_URL,
-            params={"url": url},
-            headers={"User-Agent": HTTP_USER_AGENT},
-            follow_redirects=True,
-            timeout=TIKTOK_RESOLVER_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        return response.json()
+    last_exception: Exception | None = None
+    for api_url in _tiktok_resolver_api_urls():
+        def _request(api_url: str = api_url) -> dict[str, Any]:
+            response = httpx.get(
+                api_url,
+                params={"url": url},
+                headers={
+                    "User-Agent": HTTP_USER_AGENT,
+                    "Accept": "application/json, text/plain, */*",
+                },
+                follow_redirects=True,
+                timeout=TIKTOK_RESOLVER_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            return response.json()
 
-    payload = _smart_retry(
-        _request,
-        max_attempts=TIKTOK_RESOLVER_MAX_ATTEMPTS,
-        context="TikTok resolver",
-    )
+        try:
+            payload = _smart_retry(
+                _request,
+                max_attempts=TIKTOK_RESOLVER_MAX_ATTEMPTS,
+                context=f"TikTok resolver ({api_url})",
+            )
+            break
+        except CriticalExtractorError as error:
+            last_exception = error
+            logger.warning(
+                "TikWM не обработал URL %s через %s, пробуем следующий host: %s",
+                url,
+                api_url,
+                error,
+            )
+    else:
+        if last_exception is not None:
+            raise last_exception
+        raise ValueError("Не удалось подготовить URL TikTok для резолвера.")
+
     # Запоминается только пригодный ответ: отказ резолвера залипать не должен.
     if payload.get("code") == 0:
         with _RESOLVER_MEMO_LOCK:
