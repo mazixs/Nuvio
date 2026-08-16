@@ -96,8 +96,8 @@ def test_dev_tools_are_pinned_and_not_installed_in_runtime_image():
     assert "pytest==" not in runtime
     assert "coverage==" not in runtime
     assert "pytest==9.1.1" in dev
-    assert "coverage==7.15.2" in dev
-    assert "ruff==0.16.0" in dev
+    assert "coverage==7.15.4" in dev
+    assert "ruff==0.16.3" in dev
     assert "--hash=sha256:" in runtime
     assert "--hash=sha256:" in dev
     assert 'select = ["E4", "E7", "E9", "F"]' in ruff_config

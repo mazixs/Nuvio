@@ -1,11 +1,13 @@
 """Smoke-тесты WebUI без запуска внешнего сервера."""
 
+import asyncio
 import hashlib
 
 import pytest
 from fastapi.testclient import TestClient as FastAPITestClient
 
 from web import app as web_app
+from utils import analytics_db
 
 
 @pytest.fixture
@@ -15,6 +17,22 @@ def client(monkeypatch):
     web_app._notified_ips.clear()
     with FastAPITestClient(web_app.app) as test_client:
         yield test_client
+
+
+def test_web_lifespan_closes_analytics_connection(tmp_path, monkeypatch):
+    """Завершение WebUI должно освобождать его SQLite-соединение."""
+    monkeypatch.setattr(analytics_db, "_DB_PATH", tmp_path / "analytics.db")
+    if hasattr(analytics_db._local, "conn"):
+        analytics_db._local.conn.close()
+        delattr(analytics_db._local, "conn")
+
+    async def scenario():
+        async with web_app.lifespan(web_app.app):
+            assert hasattr(analytics_db._local, "conn")
+
+        assert not hasattr(analytics_db._local, "conn")
+
+    asyncio.run(scenario())
 
 
 def test_health_endpoint_is_public(client):

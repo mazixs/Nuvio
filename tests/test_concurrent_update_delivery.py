@@ -16,7 +16,6 @@
 """
 
 import asyncio
-import contextlib
 
 import pytest
 from telegram import User
@@ -67,14 +66,14 @@ def _run_two_updates(concurrency) -> dict[str, float]:
         app.add_handler(TypeHandler(_LongTask, long_task))
         app.add_handler(TypeHandler(_Press, press))
 
-        fetcher = asyncio.create_task(app._update_fetcher())
-        await app.update_queue.put(_LongTask())
-        await asyncio.sleep(PRESS_AFTER_SECONDS)
-        await app.update_queue.put(_Press())
-        await asyncio.sleep(LONG_TASK_SECONDS + 0.4)
-        fetcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await fetcher
+        await app.start()
+        try:
+            await app.update_queue.put(_LongTask())
+            await asyncio.sleep(PRESS_AFTER_SECONDS)
+            await app.update_queue.put(_Press())
+            await asyncio.sleep(LONG_TASK_SECONDS + 0.4)
+        finally:
+            await app.stop()
 
     asyncio.run(scenario())
     return marks

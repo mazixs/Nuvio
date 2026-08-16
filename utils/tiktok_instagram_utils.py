@@ -384,6 +384,16 @@ def _resolve_tiktok_url(url: str) -> str:
         return url
 
 
+def _tiktok_resolver_url(url: str) -> str:
+    """Оставляет для внешнего резолвера только адрес публикации.
+
+    Параметры TikTok вроде ``is_from_webapp``, ``sender_device``, ``_r`` и
+    ``_t`` не нужны для поиска публикации и иногда приводят к 403 у tikwm.
+    """
+    parsed = urlparse(url)
+    return parsed._replace(query="", fragment="").geturl()
+
+
 def _audio_format_sort_key(fmt: dict[str, Any]) -> tuple[float, float, int]:
     """Ключ сортировки аудиокандидатов TikTok. Применять с ``reverse=True``.
 
@@ -537,29 +547,51 @@ def _download_remote_file(
     return destination
 
 
-def _fetch_tiktok_photo_post_data(url: str) -> dict[str, Any]:
-    resolved_url = _resolve_tiktok_url(url)
+def _fetch_tiktok_photo_post_data(
+    url: str, *, original_url: str | None = None
+) -> dict[str, Any]:
+    resolved_url = _tiktok_resolver_url(_resolve_tiktok_url(url))
+    resolver_urls = [resolved_url]
+    fallback_url = _tiktok_resolver_url(original_url or url)
+    if fallback_url not in resolver_urls:
+        resolver_urls.append(fallback_url)
 
-    def _request() -> dict[str, Any]:
-        response = httpx.get(
-            TIKWM_API_URL,
-            params={"url": resolved_url},
-            headers={"User-Agent": HTTP_USER_AGENT},
-            follow_redirects=True,
-            timeout=TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("code") != 0:
-            raise Exception(
-                f"TikTok фото-пост недоступен: {payload.get('msg') or 'неизвестная ошибка'}"
+    last_exception: Exception | None = None
+    for resolver_url in resolver_urls:
+        def _request() -> dict[str, Any]:
+            response = httpx.get(
+                TIKWM_API_URL,
+                params={"url": resolver_url},
+                headers={"User-Agent": HTTP_USER_AGENT},
+                follow_redirects=True,
+                timeout=TIKTOK_PHOTO_RESOLVER_TIMEOUT_SECONDS,
             )
-        data = payload.get("data") or {}
-        if not data.get("images"):
-            raise Exception("Сервис не вернул изображения для TikTok фото-поста.")
-        return data
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") != 0:
+                raise Exception(
+                    f"TikTok фото-пост недоступен: {payload.get('msg') or 'неизвестная ошибка'}"
+                )
+            data = payload.get("data") or {}
+            if not data.get("images"):
+                raise Exception("Сервис не вернул изображения для TikTok фото-поста.")
+            return data
 
-    return _smart_retry(_request, max_attempts=3, context="TikTok photo fallback")
+        try:
+            return _smart_retry(
+                _request, max_attempts=3, context="TikTok photo fallback"
+            )
+        except Exception as error:
+            last_exception = error
+            logger.warning(
+                "TikWM не обработал URL фото-поста %s: %s",
+                resolver_url,
+                error,
+            )
+
+    if last_exception is not None:
+        raise last_exception
+    raise ValueError("Не удалось подготовить URL TikTok фото-поста для резолвера.")
 
 
 def reset_tiktok_resolver_memo() -> None:
@@ -1541,7 +1573,8 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
     if is_tiktok_photo_url(resolved_url):
         logger.info("Определён TikTok фото-пост: %s", resolved_url)
         return _build_tiktok_photo_info(
-            resolved_url, _fetch_tiktok_photo_post_data(resolved_url)
+            resolved_url,
+            _fetch_tiktok_photo_post_data(resolved_url, original_url=url),
         )
 
     def _try_get_info(use_cookies: bool, config: dict) -> dict[str, Any]:
@@ -1600,7 +1633,8 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
                     "yt-dlp не поддержал TikTok фото-пост, используем запасной путь"
                 )
                 return _build_tiktok_photo_info(
-                    resolved_url, _fetch_tiktok_photo_post_data(resolved_url)
+                    resolved_url,
+                    _fetch_tiktok_photo_post_data(resolved_url, original_url=url),
                 )
 
             # Если это последняя конфигурация, выдаем детальную ошибку

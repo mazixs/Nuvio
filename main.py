@@ -53,6 +53,7 @@ from utils.cookie_manager import (
 )  # noqa: E402
 from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version  # noqa: E402
 from utils.analytics_db import (  # noqa: E402
+    close_connection,
     get_csi_interval_days,
     get_users_for_csi,
 )
@@ -291,6 +292,7 @@ async def _shutdown_application(application: Application) -> None:
         await application.stop()
     with suppress(RuntimeError):
         await application.shutdown()
+    close_connection()
 
 
 def _prepare_runtime_storage() -> None:
