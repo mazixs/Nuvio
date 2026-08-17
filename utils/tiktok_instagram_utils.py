@@ -97,6 +97,8 @@ TIKWM_FALLBACK_API_URL = "https://www.tikwm.com/api/"
 TIKTOK_REDIRECT_TIMEOUT_SECONDS = 6
 # Один запрос к стороннему резолверу прямых ссылок.
 TIKTOK_RESOLVER_TIMEOUT_SECONDS = 6
+# Один запрос к странице TikTok, содержащей JSON фото-поста.
+TIKTOK_PHOTO_PAGE_TIMEOUT_SECONDS = 10
 # Попыток к резолверу до откатa на yt-dlp: 2 × 6 с = 12 с в худшем случае.
 TIKTOK_RESOLVER_MAX_ATTEMPTS = 2
 # Один запрос к GraphQL Instagram за прямой ссылкой. На реальных рилсах ответ
@@ -402,6 +404,132 @@ def _tiktok_resolver_api_urls() -> tuple[str, ...]:
     return tuple(dict.fromkeys((TIKWM_API_URL, TIKWM_FALLBACK_API_URL)))
 
 
+def _tiktok_photo_page_url(url: str) -> str | None:
+    """Преобразует URL фото-поста в страницу TikTok с данными публикации.
+
+    Для фото-поста TikTok не кладёт ``itemStruct`` в HTML страницы ``/photo/``.
+    Тот же идентификатор в маршруте ``/video/`` возвращает его в
+    ``__UNIVERSAL_DATA_FOR_REHYDRATION__``; это официальный HTML TikTok, а не
+    сторонний резолвер.
+    """
+    parsed = urlparse(_tiktok_resolver_url(url))
+    if (parsed.hostname or "").lower() not in {"tiktok.com", "www.tiktok.com"}:
+        return None
+
+    parts = parsed.path.strip("/").split("/")
+    if len(parts) != 3 or parts[1].lower() != "photo" or not parts[2].isdigit():
+        return None
+    if not parts[0].startswith("@") or len(parts[0]) == 1:
+        return None
+
+    return parsed._replace(
+        path=f"/{parts[0]}/video/{parts[2]}",
+        query="",
+        fragment="",
+    ).geturl()
+
+
+def _parse_tiktok_photo_page_data(html: str) -> dict[str, Any] | None:
+    """Извлекает нормализованные данные фото-поста из HTML TikTok."""
+    match = re.search(
+        r'<script[^>]+id=["\']__UNIVERSAL_DATA_FOR_REHYDRATION__["\'][^>]*>'
+        r"(?P<data>.*?)</script>",
+        html,
+        re.DOTALL,
+    )
+    if not match:
+        return None
+
+    payload = json.loads(match.group("data"))
+    scope = payload.get("__DEFAULT_SCOPE__") or {}
+    detail = scope.get("webapp.video-detail") or {}
+    item = (detail.get("itemInfo") or {}).get("itemStruct") or {}
+    if not isinstance(item, dict):
+        return None
+
+    image_post = item.get("imagePost") or {}
+    images: list[str] = []
+    for image in image_post.get("images") or []:
+        urls = ((image or {}).get("imageURL") or {}).get("urlList") or []
+        image_url = next(
+            (
+                candidate
+                for candidate in urls
+                if isinstance(candidate, str) and candidate.startswith("https://")
+            ),
+            None,
+        )
+        if image_url and image_url not in images:
+            images.append(image_url)
+    if not images:
+        return None
+
+    cover_urls = ((image_post.get("cover") or {}).get("imageURL") or {}).get(
+        "urlList"
+    ) or []
+    cover = next(
+        (
+            candidate
+            for candidate in cover_urls
+            if isinstance(candidate, str) and candidate.startswith("https://")
+        ),
+        images[0],
+    )
+    music = item.get("music") or {}
+    author = item.get("author") or {}
+    music_url = music.get("playUrl")
+
+    return {
+        "id": item.get("id"),
+        "title": str(item.get("desc") or image_post.get("title") or "").strip(),
+        "cover": cover,
+        "origin_cover": cover,
+        "music": music_url,
+        "images": images,
+        "author": {
+            "unique_id": author.get("uniqueId"),
+            "nickname": author.get("nickname"),
+        },
+        "music_info": {
+            "duration": music.get("duration") or 0,
+            "play": music_url,
+        },
+    }
+
+
+def _fetch_tiktok_photo_post_from_page(url: str) -> dict[str, Any] | None:
+    """Получает фото-пост из встроенных данных страницы TikTok."""
+    page_url = _tiktok_photo_page_url(url)
+    if not page_url:
+        return None
+
+    def _request() -> dict[str, Any]:
+        response = httpx.get(
+            page_url,
+            headers={
+                "User-Agent": HTTP_USER_AGENT,
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;"
+                    "q=0.9,image/avif,image/webp,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            follow_redirects=True,
+            timeout=TIKTOK_PHOTO_PAGE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = _parse_tiktok_photo_page_data(response.text)
+        if data is None:
+            raise ValueError("TikTok не вернул данные фото-поста в HTML страницы.")
+        return data
+
+    return _smart_retry(
+        _request,
+        max_attempts=2,
+        context="TikTok photo page",
+    )
+
+
 def _audio_format_sort_key(fmt: dict[str, Any]) -> tuple[float, float, int]:
     """Ключ сортировки аудиокандидатов TikTok. Применять с ``reverse=True``.
 
@@ -559,6 +687,20 @@ def _fetch_tiktok_photo_post_data(
     url: str, *, original_url: str | None = None
 ) -> dict[str, Any]:
     resolved_url = _tiktok_resolver_url(_resolve_tiktok_url(url))
+
+    try:
+        page_data = _fetch_tiktok_photo_post_from_page(resolved_url)
+    except Exception as error:
+        logger.warning(
+            "TikTok не обработал фото-пост через собственную страницу %s: %s",
+            resolved_url,
+            error,
+        )
+    else:
+        if page_data is not None:
+            logger.info("TikTok фото-пост получен из HTML TikTok: %s", resolved_url)
+            return page_data
+
     resolver_urls = [resolved_url]
     fallback_url = _tiktok_resolver_url(original_url or url)
     if fallback_url not in resolver_urls:
