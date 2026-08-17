@@ -3,6 +3,7 @@
 """Regression tests for audit fixes."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -518,6 +519,11 @@ def test_tiktok_photo_resolver_removes_tracking_query(monkeypatch):
         "_resolve_tiktok_url",
         lambda _url: resolved_url,
     )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_tiktok_photo_post_from_page",
+        lambda _url: None,
+    )
     monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
 
     data = tiktok_instagram_utils._fetch_tiktok_photo_post_data(
@@ -550,6 +556,11 @@ def test_tiktok_photo_resolver_switches_api_host_after_forbidden(monkeypatch):
         "_resolve_tiktok_url",
         lambda _url: resolved_url,
     )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_tiktok_photo_post_from_page",
+        lambda _url: None,
+    )
     monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
 
     data = tiktok_instagram_utils._fetch_tiktok_photo_post_data(resolved_url)
@@ -559,6 +570,95 @@ def test_tiktok_photo_resolver_switches_api_host_after_forbidden(monkeypatch):
         tiktok_instagram_utils.TIKWM_FALLBACK_API_URL,
     ]
     assert data["images"] == ["https://cdn.example/1.jpg"]
+
+
+def test_tiktok_photo_resolver_reads_photo_data_from_tiktok_page(monkeypatch):
+    photo_url = "https://www.tiktok.com/@user/photo/1"
+    video_page_url = "https://www.tiktok.com/@user/video/1"
+    universal_data = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.video-detail": {
+                "itemInfo": {
+                    "itemStruct": {
+                        "id": "1",
+                        "desc": "#тест",
+                        "author": {
+                            "uniqueId": "tester",
+                            "nickname": "Тестер",
+                        },
+                        "imagePost": {
+                            "cover": {
+                                "imageURL": {
+                                    "urlList": [
+                                        "https://p16.tiktokcdn.com/cover.jpg"
+                                    ]
+                                }
+                            },
+                            "images": [
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16.tiktokcdn.com/1.jpg"
+                                        ]
+                                    }
+                                },
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16.tiktokcdn.com/2.jpg"
+                                        ]
+                                    }
+                                },
+                            ],
+                        },
+                        "music": {
+                            "duration": 24,
+                            "playUrl": "https://v45.tiktokcdn.com/audio.mp3",
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    class _Response:
+        text = (
+            '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">'
+            + json.dumps(universal_data)
+            + "</script>"
+        )
+
+        def raise_for_status(self):
+            return None
+
+    requested_urls: list[str] = []
+
+    def _get(url, *, headers, follow_redirects, timeout):
+        requested_urls.append(url)
+        assert headers["Accept"].startswith("text/html")
+        assert follow_redirects is True
+        assert timeout == tiktok_instagram_utils.TIKTOK_PHOTO_PAGE_TIMEOUT_SECONDS
+        return _Response()
+
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_resolve_tiktok_url",
+        lambda _url: photo_url,
+    )
+    monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
+
+    data = tiktok_instagram_utils._fetch_tiktok_photo_post_data(photo_url)
+
+    assert requested_urls == [video_page_url]
+    assert data["id"] == "1"
+    assert data["title"] == "#тест"
+    assert data["author"] == {"unique_id": "tester", "nickname": "Тестер"}
+    assert data["images"] == [
+        "https://p16.tiktokcdn.com/1.jpg",
+        "https://p16.tiktokcdn.com/2.jpg",
+    ]
+    assert data["music"] == "https://v45.tiktokcdn.com/audio.mp3"
+    assert data["music_info"]["duration"] == 24
 
 
 def test_tiktok_photo_resolver_falls_back_to_original_short_url(monkeypatch):
@@ -582,6 +682,11 @@ def test_tiktok_photo_resolver_falls_back_to_original_short_url(monkeypatch):
         tiktok_instagram_utils,
         "_resolve_tiktok_url",
         lambda _url: resolved_url,
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_tiktok_photo_post_from_page",
+        lambda _url: None,
     )
     monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
 
@@ -621,6 +726,11 @@ def test_get_tiktok_info_keeps_original_short_url_for_photo_fallback(monkeypatch
         tiktok_instagram_utils,
         "_resolve_tiktok_url",
         lambda _url: resolved_url,
+    )
+    monkeypatch.setattr(
+        tiktok_instagram_utils,
+        "_fetch_tiktok_photo_post_from_page",
+        lambda _url: None,
     )
     monkeypatch.setattr(tiktok_instagram_utils.httpx, "get", _get)
 
