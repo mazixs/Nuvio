@@ -882,7 +882,7 @@ def _classify_youtube_error(error_msg: str) -> str | None:
             "Попробуйте другую ссылку или повторите попытку позже."
         )
 
-    if error_code == "NETWORK_TIMEOUT":
+    if error_code in {"NETWORK_TIMEOUT", "MEDIA_FORBIDDEN"}:
         return ERROR_NETWORK
 
     if error_code == "EXTRACTOR_RUNTIME":
@@ -931,7 +931,11 @@ def _should_notify_admins_platform_failure(
     platform: str, category: str, stage: str
 ) -> bool:
     """Отделяет ожидаемые пользовательские ограничения платформ от настоящих аварий."""
-    if stage.endswith("_timeout") or category in {"NETWORK", "NETWORK_TIMEOUT"}:
+    if stage.endswith("_timeout") or category in {
+        "NETWORK",
+        "NETWORK_TIMEOUT",
+        "MEDIA_FORBIDDEN",
+    }:
         return False
     return True
 

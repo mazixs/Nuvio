@@ -48,6 +48,23 @@ def test_youtube_error_code_access_restricted():
     assert _youtube_error_code("HTTP Error 403: Forbidden") == "ACCESS_RESTRICTED"
 
 
+def test_youtube_error_code_media_forbidden_is_not_access_restricted():
+    """403 на самом медиафайле — временная ошибка, а не запрет доступа к видео."""
+    assert (
+        _youtube_error_code(
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        )
+        == "MEDIA_FORBIDDEN"
+    )
+
+
+def test_media_forbidden_reported_as_network_problem():
+    message = _classify_youtube_error(
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+    )
+    assert message == "🌐 Проблемы с сетью. Попробуйте позже."
+
+
 def test_youtube_error_code_network_timeout():
     assert _youtube_error_code("Connection timed out") == "NETWORK_TIMEOUT"
 

@@ -80,7 +80,17 @@ def test_download_video_smoke_returns_local_file(monkeypatch, tmp_path):
     assert result.read_text() == "stub video content"
 
 
-def test_get_video_info_uses_cookiefile_option(monkeypatch):
+def _capture_options(monkeypatch, ydl_class):
+    """Включает cookie-файл и подменяет YoutubeDL на перехватывающий вариант."""
+    monkeypatch.setattr(youtube_utils.yt_dlp, "YoutubeDL", ydl_class)
+    monkeypatch.setattr(youtube_utils, "YOUTUBE_COOKIES_FILE", "cookies.txt")
+    monkeypatch.setattr(
+        youtube_utils.Path, "is_file", lambda *args, **kwargs: True, raising=False
+    )
+
+
+def test_get_video_info_tries_without_cookies_first(monkeypatch):
+    """Анонимный запрос идёт первым: только ему достаётся клиент без PO-токена."""
     captured_options = []
 
     class CapturingYDL(FakeYDL):
@@ -88,14 +98,57 @@ def test_get_video_info_uses_cookiefile_option(monkeypatch):
             captured_options.append(options.copy())
             super().__init__(options)
 
-    monkeypatch.setattr(youtube_utils.yt_dlp, "YoutubeDL", CapturingYDL)
-    monkeypatch.setattr(youtube_utils, "YOUTUBE_COOKIES_FILE", "cookies.txt")
-    monkeypatch.setattr(
-        youtube_utils.Path, "is_file", lambda *args, **kwargs: True, raising=False
-    )
+    _capture_options(monkeypatch, CapturingYDL)
 
     youtube_utils.get_video_info("https://youtu.be/abc123def45")
 
-    assert captured_options, "YoutubeDL options were not captured"
-    assert captured_options[0].get("cookiefile") == "cookies.txt"
-    assert "cookies" not in captured_options[0]
+    assert len(captured_options) == 1, "лишняя попытка с cookies"
+    assert "cookiefile" not in captured_options[0]
+
+
+def test_get_video_info_falls_back_to_cookies(monkeypatch):
+    """Cookies уходят во вторую попытку — для видео с ограничениями."""
+    captured_options = []
+
+    class AnonFailingYDL(FakeYDL):
+        def __init__(self, options):
+            captured_options.append(options.copy())
+            super().__init__(options)
+
+        def extract_info(self, url, download=False):
+            if "cookiefile" not in self.options:
+                raise youtube_utils.yt_dlp.utils.DownloadError("Private video")
+            return super().extract_info(url, download=download)
+
+    _capture_options(monkeypatch, AnonFailingYDL)
+
+    info = youtube_utils.get_video_info("https://youtu.be/abc123def45")
+
+    assert info["title"] == "smoke_video"
+    assert len(captured_options) == 2
+    assert "cookiefile" not in captured_options[0]
+    assert captured_options[1].get("cookiefile") == "cookies.txt"
+    assert "cookies" not in captured_options[1]
+
+
+def test_download_video_tries_without_cookies_first(monkeypatch, tmp_path):
+    """Порядок у видео тот же, что у аудио: без cookies — первым."""
+    captured_options = []
+
+    class CapturingYDL(FakeYDL):
+        def __init__(self, options):
+            captured_options.append(options.copy())
+            super().__init__(options)
+
+    _capture_options(monkeypatch, CapturingYDL)
+
+    youtube_utils.download_video(
+        "https://youtu.be/abc123def45",
+        "best",
+        session_id="order",
+        output_dir=tmp_path,
+        force_local=True,
+    )
+
+    assert len(captured_options) == 1
+    assert "cookiefile" not in captured_options[0]

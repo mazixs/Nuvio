@@ -33,6 +33,13 @@ logger = setup_logger(__name__)
 # Регулярное выражение для проверки YouTube URL (включая Shorts)
 YOUTUBE_URL_PATTERN = r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=|shorts\/)?([a-zA-Z0-9_-]{11})"
 
+# Форматы, которые yt-dlp показывает, а YouTube отдавать отказывается без
+# GVS PO-токена. Единственный прогрессивный itag 18 yt-dlp намеренно освобождает
+# от проверки токена, но замерено: без токена он даёт `HTTP Error 403` на первом
+# байте всегда и на любом видео. Предлагать его пользователю нельзя — DASH-пара
+# `видео + аудио` даёт то же разрешение и скачивается.
+PO_TOKEN_ONLY_FORMAT_IDS = frozenset({"18"})
+
 
 class FormatInfoDict(TypedDict, total=False):
     format_id: str
@@ -95,31 +102,32 @@ def get_video_info(url: str) -> dict[str, Any]:
             logger.info("Информация о видео успешно получена.")
             return info
 
-    # Cookies-first стратегия: YouTube в 2025-2026 почти всегда требует cookies
-    if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
-        try:
-            return _get_info(True)
-        except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError) as e:
-            logger.warning(
-                f"Ошибка с cookies: {e}. Пробуем без cookies как fallback..."
-            )
-            try:
-                return _get_info(False)
-            except Exception as e2:
-                logger.error(
-                    f"Ошибка при получении информации о видео даже без cookies: {e2}",
-                    exc_info=True,
-                )
-                raise
-    else:
-        try:
-            return _get_info(False)
-        except Exception as e:
+    # Сначала без cookies. Авторизованная сессия переводит yt-dlp на клиентов
+    # `tv_downgraded` и `web_safari`, которым нужен PO-токен, — без токена и без
+    # JS-рантайма форматов не остаётся вовсе. Клиент `android_vr`, работающий без
+    # токена, yt-dlp вычёркивает при наличии auth-cookies, потому что тот cookies
+    # не поддерживает. Cookies нужны только на возрастные ограничения и приватные
+    # видео, поэтому уходят во вторую попытку — как в загрузчиках аудио.
+    have_cookies = bool(YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file())
+    try:
+        return _get_info(False)
+    except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError) as e:
+        if not have_cookies:
             logger.error(
                 f"Ошибка при получении информации о видео без cookies: {e}",
                 exc_info=True,
             )
             raise
+        logger.warning(f"Ошибка без cookies: {e}. Пробуем с cookies как fallback...")
+
+    try:
+        return _get_info(True)
+    except Exception as e:
+        logger.error(
+            f"Ошибка при получении информации о видео даже с cookies: {e}",
+            exc_info=True,
+        )
+        raise
 
 
 def get_available_formats(
@@ -159,6 +167,12 @@ def get_available_formats(
                 continue
 
         format_id = format_info.get("format_id")
+
+        if format_id in PO_TOKEN_ONLY_FORMAT_IDS:
+            logger.debug(
+                "Формат %s пропущен: YouTube отдаёт его только по PO-токену", format_id
+            )
+            continue
 
         if format_info.get("vcodec") != "none" and format_info.get("acodec") == "none":
             video_formats.append(
@@ -351,10 +365,13 @@ def download_video(
 ) -> Path | str:
     logger.info(f"Скачивание видео: {url}, формат: {format_id}")
     output_path_template = _resolve_output_template(session_id, output_dir)
+    # `format_id!=18` — тот же PO-токен: без него прогрессивный itag 18 отдаёт 403,
+    # поэтому запасной селектор не должен на него сваливаться.
     fallback_non_hls = (
         "bestvideo[protocol!=m3u8_dash][protocol!=http_dash_segments]"
         "+bestaudio[protocol!=m3u8_dash][protocol!=http_dash_segments]/"
-        f"best[protocol!=m3u8_dash][protocol!=http_dash_segments][ext=mp4][filesize<=?{MAX_FILE_SIZE}]"
+        "best[protocol!=m3u8_dash][protocol!=http_dash_segments][ext=mp4]"
+        f"[format_id!=18][filesize<=?{MAX_FILE_SIZE}]"
     )
 
     def _resolve_format_selector(
@@ -447,28 +464,10 @@ def download_video(
                 )
             raise
 
+    # Порядок такой же, как в загрузчиках аудио: без cookies — первым, потому что
+    # только анонимный запрос получает клиента `android_vr`, которому не нужен
+    # PO-токен. Cookies остаются на видео с ограничениями.
     final_error: Exception | None = None
-    if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
-        logger.info("Используем cookies для YouTube с первой попытки")
-        try:
-            return execute_with_backoff(
-                "Скачивание видео с cookies",
-                lambda: _try_with_fallback(True),
-            )
-        except (
-            yt_dlp.utils.DownloadError,
-            yt_dlp.cookies.CookieLoadError,
-            FileNotFoundError,
-            PermissionError,
-        ) as e:
-            final_error = e
-            logger.warning(
-                "Ошибка с cookies: %s. Пробуем без cookies как fallback...", e
-            )
-
-    else:
-        logger.warning("Cookies не найдены, скачиваем без авторизации")
-
     try:
         return execute_with_backoff(
             "Скачивание видео без cookies",
@@ -481,19 +480,38 @@ def download_video(
         PermissionError,
     ) as e:
         final_error = e
-        logger.error("Ошибка скачивания видео встроенным API: %s", e, exc_info=True)
+        logger.warning(
+            "Ошибка скачивания видео без cookies: %s. Пробуем с cookies...", e
+        )
+
+    if YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file():
+        try:
+            return execute_with_backoff(
+                "Скачивание видео с cookies",
+                lambda: _try_with_fallback(True),
+            )
+        except (
+            yt_dlp.utils.DownloadError,
+            yt_dlp.cookies.CookieLoadError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
+            final_error = e
+            logger.error(
+                "Ошибка скачивания видео даже с cookies: %s", e, exc_info=True
+            )
 
     if YTDLP_CLI_FALLBACK:
         error_kind = classify_download_error_kind(str(final_error or ""))
         if error_kind != "ACCESS_RESTRICTED":
             logger.warning("Переключаемся на локальный CLI fallback yt-dlp")
             cli_overrides: list[tuple[bool, str | None, bool]] = [
-                (True, None, False),
                 (False, None, False),
-                (True, "bestvideo+bestaudio/best", False),
+                (True, None, False),
                 (False, "bestvideo+bestaudio/best", False),
-                (True, None, True),
+                (True, "bestvideo+bestaudio/best", False),
                 (False, None, True),
+                (True, None, True),
             ]
             for use_cookies, override_format, prefer_non_hls in cli_overrides:
                 if use_cookies and not (
