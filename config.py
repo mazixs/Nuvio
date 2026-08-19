@@ -54,6 +54,54 @@ def _parse_ytdlp_release_channel(value: str | None) -> str:
     return "nightly"
 
 
+# Допустимые символы id ролика YouTube: ровно 11 знаков латиницы, цифр, дефиса и
+# подчёркивания. Опечатка в id обошлась бы дороже строгости — канарейка стала бы
+# звать админов на каждой проверке.
+_YOUTUBE_ID_ALPHABET = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+)
+
+# Ролик канарейки по умолчанию — «Big Buck Bunny» Blender Foundation: 10 минут,
+# Creative Commons, без возрастных и региональных ограничений, лежит с 2008 года.
+# Длина здесь принципиальна: отказ YouTube 18 августа 2026 проявлялся только
+# после примерно минуты медиа, и на девятнадцатисекундном клипе проверка прошла
+# бы успешно при полностью сломанном скачивании.
+DEFAULT_CANARY_VIDEO_ID = "aqz-KE-bpKQ"
+
+
+def _parse_canary_interval_hours(value: str | None) -> int:
+    """Часы между канареечными проверками: мусор и выход за 1–168 → 12."""
+    try:
+        hours = int((value or "12").strip())
+    except ValueError:
+        logging.warning(
+            "CANARY_INTERVAL_HOURS=%r не число, используем 12 часов", value
+        )
+        return 12
+    if not 1 <= hours <= 168:
+        logging.warning(
+            "CANARY_INTERVAL_HOURS=%s вне диапазона 1–168, используем 12 часов",
+            hours,
+        )
+        return 12
+    return hours
+
+
+def _parse_canary_video_id(value: str | None) -> str:
+    """Проверяет id ролика канарейки, при непохожем значении берёт эталонный."""
+    candidate = (value or "").strip()
+    if not candidate:
+        return DEFAULT_CANARY_VIDEO_ID
+    if len(candidate) == 11 and set(candidate) <= _YOUTUBE_ID_ALPHABET:
+        return candidate
+    logging.warning(
+        "CANARY_VIDEO_ID=%r не похож на id ролика YouTube, используем %s",
+        value,
+        DEFAULT_CANARY_VIDEO_ID,
+    )
+    return DEFAULT_CANARY_VIDEO_ID
+
+
 # Токен Telegram бота (получить у @BotFather)
 # ОБЯЗАТЕЛЬНО: установите переменную окружения TELEGRAM_TOKEN
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -117,6 +165,16 @@ YTDLP_RELEASE_CHANNEL = _parse_ytdlp_release_channel(
 YTDLP_AUTO_UPDATE_TIMEOUT = int(os.environ.get("YTDLP_AUTO_UPDATE_TIMEOUT", "240"))
 YTDLP_CLI_FALLBACK = _parse_bool(os.environ.get("YTDLP_CLI_FALLBACK"), default=True)
 YTDLP_CLI_TIMEOUT = int(os.environ.get("YTDLP_CLI_TIMEOUT", "900"))
+
+# Канареечная проверка YouTube: раз в CANARY_INTERVAL_HOURS бот сам качает
+# эталонный ролик и зовёт админов, если YouTube сломался. По умолчанию выключена:
+# это исходящий трафик и лишние обращения к YouTube с домашнего адреса, поэтому
+# включает её владелец осознанно.
+CANARY_ENABLED = _parse_bool(os.environ.get("CANARY_ENABLED"), default=False)
+CANARY_INTERVAL_HOURS = _parse_canary_interval_hours(
+    os.environ.get("CANARY_INTERVAL_HOURS")
+)
+CANARY_VIDEO_ID = _parse_canary_video_id(os.environ.get("CANARY_VIDEO_ID"))
 
 # Список ID администраторов (через запятую)
 # Пример: ADMIN_IDS = 123456789,987654321

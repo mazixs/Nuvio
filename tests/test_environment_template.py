@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+import config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,6 +21,37 @@ def test_environment_template_contains_local_bot_api_credentials():
     assert "GOKAPI" not in template
     assert "python-dotenv" not in template
     assert "YTDLP_AUTO_UPDATE=false" in template
+
+
+@pytest.mark.unit
+def test_environment_template_documents_youtube_canary():
+    """Канарейка выключена по умолчанию, а её ролик описан в шаблоне.
+
+    Включает проверку владелец сам: это исходящий трафик и лишние обращения к
+    YouTube с домашнего адреса. Значения в шаблоне обязаны совпадать с
+    умолчаниями `config.py`, иначе оператор настроит не то, что получит.
+    """
+    template = (ROOT / ".env.example").read_text(encoding="utf-8")
+    config_source = (ROOT / "config.py").read_text(encoding="utf-8")
+
+    assert "CANARY_ENABLED=false" in template
+    assert "CANARY_INTERVAL_HOURS=12" in template
+    assert f"CANARY_VIDEO_ID={config.DEFAULT_CANARY_VIDEO_ID}" in template
+
+    # Умолчания сверяются с парсерами, а не со значениями модуля: у владельца в
+    # `.secrets/.env` канарейка может быть уже включена, и тест не должен от
+    # этого краснеть.
+    assert (
+        'CANARY_ENABLED = _parse_bool(os.environ.get("CANARY_ENABLED"), default=False)'
+        in config_source
+    )
+    assert config._parse_canary_interval_hours(None) == 12
+    assert config._parse_canary_video_id(None) == config.DEFAULT_CANARY_VIDEO_ID
+    # Мусор и слишком частая проверка молча заменяются безопасным умолчанием:
+    # канарейка не должна падать из-за опечатки в настройке.
+    assert config._parse_canary_interval_hours("каждый час") == 12
+    assert config._parse_canary_interval_hours("0") == 12
+    assert config._parse_canary_video_id("не id") == config.DEFAULT_CANARY_VIDEO_ID
 
 
 @pytest.mark.unit
