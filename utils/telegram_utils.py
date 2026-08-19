@@ -153,7 +153,7 @@ from utils.rutube_vk_utils import (
 )
 from utils.video_cache import telegram_cache, CachedVideo
 from utils.cookie_health import check_cookie_health
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = setup_logger(__name__)
 
@@ -197,6 +197,32 @@ def _format_exception_traceback(exc: BaseException) -> str:
     )
 
 
+def _md_cell(value: object) -> str:
+    """Готовит значение к вставке в ячейку markdown-таблицы.
+
+    Вертикальная черта закрывает столбец, а перевод строки — всю строку таблицы,
+    поэтому и то и другое обезвреживается: в краш-репорт попадают тексты
+    исключений, где встречается любой символ.
+    """
+    text = str(value).replace("|", "\\|")
+    return " ".join(text.split()) or "N/A"
+
+
+def _md_code_block(text: str, language: str = "text") -> str:
+    """Оборачивает текст в ограждённый блок кода, который он не сможет разорвать.
+
+    Забор берётся длиннее самой длинной череды обратных кавычек внутри: в
+    traceback попадают строки исходников, а в них кавычки бывают.
+    """
+    longest_run = 0
+    current_run = 0
+    for char in text:
+        current_run = current_run + 1 if char == "`" else 0
+        longest_run = max(longest_run, current_run)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{fence}{language}\n{text.rstrip()}\n{fence}"
+
+
 async def _notify_admins_crash(
     *,
     error_code: str,
@@ -208,32 +234,50 @@ async def _notify_admins_crash(
     cookie_status: str = "not_checked",
     cookie_summary: str = "not_checked",
 ) -> None:
-    """Отправляет файл краш-репорта всем админам из ADMIN_IDS."""
+    """Отправляет админам из ADMIN_IDS краш-репорт файлом в markdown."""
     if not _bot_instance or not ADMIN_IDS:
         return
 
-    report_lines = [
-        f"🔴 CRASH REPORT — {error_code}",
-        f"Platform: {platform}",
-        f"Stage: {stage}",
-        f"URL: {url or 'N/A'}",
-        f"Session: {session_id or 'N/A'}",
-        f"Cookie status: {cookie_status}",
-        f"Cookie summary: {cookie_summary}",
-        "",
-        f"Exception: {type(exc).__name__}: {exc}",
-        "",
-        "Traceback:",
-        _format_exception_traceback(exc),
-    ]
-    report_text = "\n".join(report_lines)
+    # Ссылка идёт в угловых скобках: так markdown делает её ссылкой, не пытаясь
+    # разобрать подчёркивания и звёздочки внутри как разметку. Время — в UTC,
+    # как и метки в `logs/bot.log`, чтобы репорт искался в журнале по времени.
+    facts = (
+        (
+            "Время (UTC)",
+            _md_cell(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")),
+        ),
+        ("Платформа", _md_cell(platform)),
+        ("Этап", _md_cell(stage)),
+        ("Ссылка", f"<{_md_cell(url)}>" if url else "N/A"),
+        ("Сессия", f"`{_md_cell(session_id)}`" if session_id else "N/A"),
+        ("Cookies", _md_cell(cookie_status)),
+        ("Что с cookies", _md_cell(cookie_summary)),
+    )
+    report_text = "\n".join(
+        [
+            f"# 🔴 Краш-репорт — `{error_code}`",
+            "",
+            "| Поле | Значение |",
+            "| --- | --- |",
+            *(f"| {name} | {value} |" for name, value in facts),
+            "",
+            "## Исключение",
+            "",
+            _md_code_block(f"{type(exc).__name__}: {exc}"),
+            "",
+            "## Traceback",
+            "",
+            _md_code_block(_format_exception_traceback(exc), "python"),
+            "",
+        ]
+    )
 
     for admin_id in ADMIN_IDS:
         try:
             await _bot_instance.send_document(
                 chat_id=admin_id,
                 document=io.BytesIO(report_text.encode("utf-8")),
-                filename=f"crash_{error_code}.txt",
+                filename=f"crash_{error_code}.md",
                 caption=f"🔴 {error_code} | {platform} | {stage}",
             )
         except Exception:  # noqa: BLE001

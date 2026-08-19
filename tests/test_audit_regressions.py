@@ -336,7 +336,7 @@ def test_tiktok_rate_limit_failure_notifies_admins(monkeypatch):
     )
 
     assert len(bot.sent_documents) == 1
-    assert bot.sent_documents[0]["filename"] == "crash_TT-RATE_LIM-ABC123.txt"
+    assert bot.sent_documents[0]["filename"] == "crash_TT-RATE_LIM-ABC123.md"
 
 
 def test_exception_traceback_format_does_not_use_none_type_placeholder():
