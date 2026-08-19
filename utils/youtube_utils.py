@@ -15,6 +15,7 @@ from config import (
     YTDLP_CLI_FALLBACK,
 )
 from utils.cookie_workfile import working_cookie_file
+from utils.download_report import record_delivered_format
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
 from utils.media_processor import convert_webm_to_mp4
@@ -78,7 +79,6 @@ def get_video_info(url: str) -> dict[str, Any]:
     def _get_info(use_cookies: bool) -> dict[str, Any]:
         ydl_opts = {
             "quiet": True,
-            "no_warnings": True,
             "skip_download": True,
         }
         apply_network_opts(ydl_opts)
@@ -131,6 +131,25 @@ def get_video_info(url: str) -> dict[str, Any]:
         raise
 
 
+def _shadowed_drc_format_ids(formats: list[dict[str, Any]]) -> frozenset[str]:
+    """Находит `-drc`-дорожки, у которых есть тот же поток без сжатия динамики.
+
+    YouTube отдаёт звук парами: `140` и `140-drc`, где второй прошёл выравнивание
+    громкости. Размер, расширение и кодек у них совпадают, поэтому в меню
+    получаются две неразличимые кнопки «M4A · 107 МБ», а подбор пары по размеру
+    может взять сжатую дорожку вместо оригинала. Оригинал ближе к исходнику, так
+    что двойник убирается — но только когда оригинал действительно есть.
+    """
+    available = {
+        str(fmt.get("format_id")) for fmt in formats if fmt.get("format_id") is not None
+    }
+    return frozenset(
+        format_id
+        for format_id in available
+        if format_id.endswith("-drc") and format_id.removesuffix("-drc") in available
+    )
+
+
 def get_available_formats(
     video_info: dict[str, Any], filter_by_size: bool = True
 ) -> dict[str, list[FormatInfoDict]]:
@@ -148,6 +167,7 @@ def get_available_formats(
     video_formats: list[FormatInfoDict] = []
     audio_formats: list[FormatInfoDict] = []
     combined_formats: list[FormatInfoDict] = []
+    shadowed_drc_ids = _shadowed_drc_format_ids(formats)
 
     for format_info in formats:
         # Логируем, что получили по filesize
@@ -172,6 +192,12 @@ def get_available_formats(
         if format_id in PO_TOKEN_ONLY_FORMAT_IDS:
             logger.debug(
                 "Формат %s пропущен: YouTube отдаёт его только по PO-токену", format_id
+            )
+            continue
+
+        if format_id in shadowed_drc_ids:
+            logger.debug(
+                "Формат %s пропущен: есть тот же поток без сжатия динамики", format_id
             )
             continue
 
@@ -286,7 +312,6 @@ def _build_cli_download_command(
         sys.executable,
         "-m",
         "yt_dlp",
-        "--no-warnings",
         "--no-progress",
         "--newline",
         "--no-playlist",
@@ -330,7 +355,13 @@ def _download_with_cli_fallback(
     merge_output_format: str | None = None,
     extract_audio_codec: str | None = None,
 ) -> Path | str:
-    """Локальный fallback на `python -m yt_dlp`, если встроенный API дал сбой."""
+    """Локальный fallback на `python -m yt_dlp`, если встроенный API дал сбой.
+
+    Фактический формат отсюда в отчёт не пишется: CLI печатает только путь к файлу
+    (`--print after_move:filepath`), а записать вместо принесённого формата
+    запрошенный селектор хуже, чем не записать ничего, — кэш поверил бы ключу,
+    которого никто не проверял.
+    """
     output_path_template = _resolve_output_template(session_id, output_dir)
     cookiefile = _cookiefile_if_available(use_cookies)
     command = _build_cli_download_command(
@@ -414,7 +445,6 @@ def download_video(
             ),
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
             "progress_hooks": [
                 lambda d: logger.debug(
                     f"Скачивание: {d['status']} - {d.get('_percent_str', '0%')}"
@@ -443,6 +473,10 @@ def download_video(
                     "Файл не был загружен, хотя ydl.extract_info завершился."
                 )
             logger.info("Видео успешно скачано. Файл: %s", downloaded_file)
+            # Формат берётся из info-dict, а не из запроса: каскад фолбеков ниже
+            # молча подменяет селектор, и под запрошенным `format_id` в кэш мог
+            # осесть файл совсем другого разрешения.
+            record_delivered_format(session_id, info.get("format_id"))
             downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
             result = finalize_downloaded_file(downloaded_file, force_local)
             logger.info("Видео готово к выдаче: %s", result)
@@ -584,7 +618,6 @@ def download_audio_native(
             "format": _resolve_native_audio_selector(override_format),
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
             "progress_hooks": [
                 lambda d: logger.debug(
                     f"Скачивание нативного аудио: {d['status']} - {d.get('_percent_str', '0%')}"
@@ -613,6 +646,7 @@ def download_audio_native(
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан.")
             logger.info("Нативное аудио успешно скачано: %s", downloaded_file)
+            record_delivered_format(session_id, info.get("format_id"))
             return finalize_downloaded_file(downloaded_file, force_local)
 
     def _try_audio_native(use_cookies: bool) -> Path | str:
@@ -745,7 +779,6 @@ def download_audio(
             "format": _resolve_audio_selector(override_format),
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -786,6 +819,7 @@ def download_audio(
                 preferred_codec,
                 downloaded_file,
             )
+            record_delivered_format(session_id, info.get("format_id"))
             return finalize_downloaded_file(downloaded_file, force_local)
 
     def _try_audio(use_cookies: bool) -> Path | str:
@@ -902,7 +936,6 @@ def download_subtitles(
             "subtitlesformat": requested_format,
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
         }
         apply_network_opts(ydl_opts, session_id=session_id)
 

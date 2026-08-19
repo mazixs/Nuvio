@@ -71,3 +71,15 @@ def test_execute_with_backoff_keeps_access_restriction_fatal(monkeypatch):
     with pytest.raises(yt_dlp.utils.DownloadError):
         execute_with_backoff("проба", restricted)
     assert len(attempts) == 1
+
+
+def test_media_403_reaches_admins():
+    """Серия таких отказов — единственный признак смены правил у платформы."""
+    from utils.telegram_utils import _should_notify_admins_platform_failure
+
+    assert _should_notify_admins_platform_failure(
+        "youtube", "MEDIA_FORBIDDEN", "format_download"
+    )
+    assert not _should_notify_admins_platform_failure(
+        "youtube", "NETWORK_TIMEOUT", "format_download"
+    )

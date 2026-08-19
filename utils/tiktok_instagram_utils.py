@@ -20,9 +20,14 @@ import yt_dlp
 from yt_dlp.extractor.instagram import _id_to_pk as _instagram_shortcode_to_pk
 from yt_dlp.networking.impersonate import ImpersonateTarget
 from utils.cookie_workfile import working_cookie_file
+from utils.download_report import record_delivered_format
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
-from utils.ytdlp_common import FileSizeLimitError, finalize_downloaded_file
+from utils.ytdlp_common import (
+    FileSizeLimitError,
+    finalize_downloaded_file,
+    output_capture_opts,
+)
 from utils.media_processor import (
     convert_webm_to_mp4,
     convert_to_format,
@@ -318,13 +323,11 @@ def _get_tiktok_base_configs() -> list[dict]:
         # Конфигурация 1: impersonation через curl_cffi (предпочтительная)
         {
             "quiet": True,
-            "no_warnings": True,
             "impersonate": ImpersonateTarget.from_str("chrome"),
         },
         # Конфигурация 2: Без impersonation, с актуальным User-Agent
         {
             "quiet": True,
-            "no_warnings": True,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -334,7 +337,6 @@ def _get_tiktok_base_configs() -> list[dict]:
         # Конфигурация 3: Базовая (последний fallback)
         {
             "quiet": True,
-            "no_warnings": True,
         },
     ]
 
@@ -1509,8 +1511,8 @@ def _fetch_instagram_photo_post_media(url: str) -> dict[str, Any]:
             with yt_dlp.YoutubeDL(
                 {
                     "quiet": True,
-                    "no_warnings": True,
                     "cookiefile": instagram_cookiefile,
+                    **output_capture_opts(),
                 }
             ) as ydl:
                 ie = ydl.get_info_extractor("Instagram")
@@ -1762,6 +1764,7 @@ def get_tiktok_info(url: str) -> dict[str, Any]:
         """Внутренняя функция для получения информации"""
         opts = config.copy()
         opts["skip_download"] = True
+        opts.update(output_capture_opts())
 
         cookiefile = _tiktok_cookiefile(use_cookies)
         if cookiefile:
@@ -1866,8 +1869,8 @@ def get_instagram_info(url: str) -> dict[str, Any]:
         """Внутренняя функция для получения информации с/без cookies"""
         ydl_opts = {
             "quiet": True,
-            "no_warnings": True,
             "skip_download": True,
+            **output_capture_opts(),
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -2075,7 +2078,7 @@ def download_tiktok_video(
         # Сначала получаем метаданные без скачивания
         meta_opts = config.copy()
         meta_opts["quiet"] = True
-        meta_opts["no_warnings"] = True
+        meta_opts.update(output_capture_opts(session_id))
         meta_cookiefile = _tiktok_cookiefile(use_cookies)
         if meta_cookiefile:
             meta_opts["cookiefile"] = meta_cookiefile
@@ -2120,7 +2123,7 @@ def download_tiktok_video(
             opts["overwrites"] = True
             opts["merge_output_format"] = "mp4"
             opts["quiet"] = False
-            opts["no_warnings"] = True
+            opts.update(output_capture_opts(session_id))
 
             download_cookiefile = _tiktok_cookiefile(use_cookies)
             if download_cookiefile:
@@ -2143,6 +2146,7 @@ def download_tiktok_video(
                         raise Exception("Скачанный файл не содержит аудиодорожки.")
 
                     logger.info(f"Видео успешно скачано и проверено: {downloaded_file}")
+                    record_delivered_format(session_id, info_download.get("format_id"))
 
                     # Конвертация webm → mp4 для совместимости Telegram
                     if downloaded_file.suffix.lower() == ".webm":
@@ -2270,7 +2274,7 @@ def download_instagram_video(
         ydl_opts = {
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
+            **output_capture_opts(session_id),
             "progress_hooks": [
                 lambda d: logger.debug(
                     f"Скачивание: {d['status']} - {d.get('_percent_str', '0%')}"
@@ -2356,6 +2360,7 @@ def download_instagram_video(
                 downloaded_file, session_id, "Instagram"
             )
 
+            record_delivered_format(session_id, actual_info.get("format_id"))
             return finalize_downloaded_file(downloaded_file, force_local)
 
     # Сначала пробуем без cookies
@@ -2552,7 +2557,7 @@ def download_tiktok_audio(
         # Сначала получаем метаданные без скачивания для анализа форматов
         meta_opts = config.copy()
         meta_opts["quiet"] = True
-        meta_opts["no_warnings"] = True
+        meta_opts.update(output_capture_opts(session_id))
         meta_cookiefile = _tiktok_cookiefile(use_cookies)
         if meta_cookiefile:
             meta_opts["cookiefile"] = meta_cookiefile
@@ -2595,7 +2600,7 @@ def download_tiktok_audio(
                 }
             ]
             opts["quiet"] = False
-            opts["no_warnings"] = True
+            opts.update(output_capture_opts(session_id))
 
             download_cookiefile = _tiktok_cookiefile(use_cookies)
             if download_cookiefile:
@@ -2612,6 +2617,7 @@ def download_tiktok_audio(
                     if not downloaded_file.exists():
                         raise Exception("Аудио файл не был создан.")
 
+                    record_delivered_format(session_id, info_download.get("format_id"))
                     return finalize_downloaded_file(downloaded_file, force_local)
             except Exception as e:
                 err_str = str(e)

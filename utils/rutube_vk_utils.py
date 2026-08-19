@@ -8,6 +8,7 @@ from typing import Any
 
 import yt_dlp
 from config import MAX_FILE_SIZE, MAX_VIDEO_DURATION
+from utils.download_report import record_delivered_format
 from utils.logger import setup_logger
 from utils.media_processor import convert_webm_to_mp4
 from utils.temp_file_manager import get_temp_file_path
@@ -41,7 +42,6 @@ def _get_info(url: str, platform: str) -> dict[str, Any]:
     logger.info(f"Получение информации о {platform} видео: {url}")
     ydl_opts = {
         "quiet": True,
-        "no_warnings": True,
         "skip_download": True,
     }
     apply_network_opts(ydl_opts)
@@ -183,7 +183,6 @@ def _download_video(
             "format": format_selector,
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
             "merge_output_format": "mp4",
             "progress_hooks": [
                 lambda d: logger.debug(
@@ -201,6 +200,7 @@ def _download_video(
             if not downloaded_file.exists():
                 raise Exception("Файл не был загружен.")
             logger.info(f"Видео успешно скачано: {downloaded_file}")
+            record_delivered_format(session_id, info.get("format_id"))
             downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
             return finalize_downloaded_file(downloaded_file, force_local)
 
@@ -254,7 +254,6 @@ def _download_audio(
             "format": format_selector,
             "outtmpl": str(output_path_template),
             "quiet": False,
-            "no_warnings": True,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -279,6 +278,7 @@ def _download_audio(
             if not downloaded_file.exists():
                 raise Exception("Аудио файл не был создан после postprocessing.")
             logger.info(f"Аудио успешно извлечено: {downloaded_file}")
+            record_delivered_format(session_id, info.get("format_id"))
             return finalize_downloaded_file(downloaded_file, force_local)
 
     return execute_with_backoff(f"Скачивание аудио {url}", _download)

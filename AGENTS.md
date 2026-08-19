@@ -296,6 +296,12 @@ ruff check --output-format=github .
 6. **Фото-посты**: TikTok-ссылки вида `/photo/` и Instagram карусели скачиваются как набор изображений; аудио отправляется отдельным сообщением, если есть.
 7. **Rolling-release yt-dlp**: по умолчанию используется зафиксированная версия;
    обновление при старте включается явно через `YTDLP_AUTO_UPDATE=true`.
+8. **Канарейка YouTube** (`utils/canary.py`, `CANARY_ENABLED=true`): раз в
+   `CANARY_INTERVAL_HOURS` часов бот качает эталонный ролик через
+   `download_video` с продакшн-опциями и минуя кэш `file_id`. При провале —
+   уведомление админам, одна попытка `ensure_latest_yt_dlp(force=True)` в сутки
+   и повторная проверка. Обновление живёт до пересоздания контейнера: пин в
+   `requirements.txt` оно не подменяет.
 
 ---
 
@@ -323,6 +329,9 @@ ruff check --output-format=github .
 | `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут обновления yt-dlp (сек) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | CLI fallback при сбое API |
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (сек) |
+| `CANARY_ENABLED` | нет | `false` | Канареечная проверка YouTube по расписанию с автообновлением yt-dlp при провале |
+| `CANARY_INTERVAL_HOURS` | нет | `12` | Часы между проверками (1–168, иначе 12) |
+| `CANARY_VIDEO_ID` | нет | `aqz-KE-bpKQ` | Id эталонного ролика; нужен длиннее пары минут |
 | `DATA_DIR` | нет | корень репозитория | Каталог баз (`analytics.db`, `telegram_cache.db`); в Docker `/app/data` |
 | `TEMP_DIR` | нет | `./temp` | Каталог временных медиа; в Docker `/app/media` — общий том с Bot API |
 | `YOUTUBE_COOKIES_FILE` | нет | `www.youtube.com_cookies.txt` | Имя файла cookies YouTube в `.secrets/` |

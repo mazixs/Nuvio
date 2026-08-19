@@ -9,6 +9,7 @@ from typing import Any
 
 import yt_dlp
 from config import MAX_FILE_SIZE
+from utils import download_report
 from utils.cancellation import cancellation_hook
 from utils.logger import setup_logger
 from utils.public_errors import is_media_forbidden_error
@@ -27,6 +28,71 @@ DEFAULT_YTDLP_NETWORK_OPTS: dict[str, Any] = {
     "noplaylist": True,
     "remote_components": ["ejs:github"],
 }
+
+# Префикс строк прогресса. yt-dlp гонит их тем же каналом, что и полезный вывод,
+# по несколько штук в секунду, а многострочный прогресс ещё и нумерует строки
+# («1: [download] ...»), поэтому номер снимается перед сравнением.
+_PROGRESS_LINE_PREFIX = "[download]"
+
+
+def is_progress_line(line: str) -> bool:
+    """Определяет, что строка вывода — это счётчик прогресса, а не сообщение."""
+    text = line.strip()
+    number, separator, rest = text.partition(": ")
+    if separator and number.isdigit():
+        text = rest.lstrip()
+    return text.startswith(_PROGRESS_LINE_PREFIX)
+
+
+class YtdlpOutputLogger:
+    """Приёмник вывода yt-dlp: в лог целиком, в отчёт — без прогресса.
+
+    Без логгера yt-dlp пишет предупреждения в stderr, а `no_warnings` глушит их
+    вовсе — именно так 18.08.2026 потерялись объяснения поломки YouTube («cookies
+    are no longer valid», «formats require a GVS PO Token», «forcing SABR
+    streaming»), и диагноз приходилось добывать по SSH. С логгером тот же текст
+    попадает и в админский лог, и в хвост краш-репорта по сессии.
+
+    Строки прогресса в отчёт не идут: их десятки в секунду, и кольцо на 60 строк
+    они вытеснят целиком. Ни один метод не имеет права бросить исключение —
+    сломанная диагностика не должна ронять загрузку.
+    """
+
+    __slots__ = ("session_id",)
+
+    def __init__(self, session_id: str | None = None) -> None:
+        self.session_id = session_id
+
+    def debug(self, msg: object) -> None:
+        self._keep(msg, logger.debug)
+
+    def warning(self, msg: object) -> None:
+        self._keep(msg, logger.warning)
+
+    def error(self, msg: object) -> None:
+        self._keep(msg, logger.error)
+
+    def _keep(self, msg: object, log: Callable[..., None]) -> None:
+        try:
+            text = msg if isinstance(msg, str) else str(msg)
+            if not is_progress_line(text):
+                download_report.record_output(self.session_id, text)
+            log("yt-dlp: %s", text)
+        except Exception:
+            # Молча: попытка пожаловаться на сломанную диагностику пойдёт тем же
+            # путём и упадёт так же.
+            pass
+
+
+def output_capture_opts(session_id: str | None = None) -> dict[str, Any]:
+    """Опции yt-dlp, которыми его вывод перестаёт пропадать втуне.
+
+    `no_warnings: False` идёт вместе с логгером намеренно: сейчас yt-dlp смотрит
+    на логгер раньше флага, но флаг остаётся глушилкой для тех путей и версий,
+    где порядок обратный, а держать его включённым всё равно незачем.
+    """
+    return {"logger": YtdlpOutputLogger(session_id), "no_warnings": False}
+
 
 _NETWORK_TIMEOUT_SIGNATURES = (
     "Read timed out",
@@ -79,11 +145,13 @@ def apply_network_opts(options: dict[str, Any], session_id: str | None = None) -
     """Applies default network options to yt-dlp config dict.
 
     Args:
-        session_id: сессия, чья отмена должна прерывать загрузку. Без него
-            хук не ставится: разбор информации о видео идёт до появления
-            сессии и отменять там нечего.
+        session_id: сессия, чья отмена должна прерывать загрузку, и она же —
+            адрес хвоста вывода в отчёте. Без него хук отмены не ставится:
+            разбор информации о видео идёт до появления сессии и отменять там
+            нечего, а вывод копится под общим ключом.
     """
     options.update(DEFAULT_YTDLP_NETWORK_OPTS)
+    options.update(output_capture_opts(session_id))
     if session_id:
         hooks = list(options.get("progress_hooks") or [])
         hooks.append(cancellation_hook(session_id))
