@@ -15,6 +15,7 @@ import yt_dlp
 from config import INSTAGRAM_COOKIES_PATH, TIKTOK_COOKIES_PATH, YOUTUBE_COOKIES_PATH
 from utils.cookie_workfile import working_cookie_file
 from utils.logger import setup_logger
+from utils.ytdlp_common import output_capture_opts
 
 logger = setup_logger(__name__)
 
@@ -158,11 +159,13 @@ def _cache_result(
 
 def _extract_with_cookies(url: str, cookiefile: Path | str | None) -> None:
     """Пробует получить информацию о видео. Поднимает исключение при неудаче."""
+    # Вердикт пробы по-прежнему считывается только с исключения: предупреждения
+    # yt-dlp уходят в лог и в отчёт, но ни одной ветки решения не трогают.
     options: dict[str, Any] = {
         "quiet": True,
-        "no_warnings": True,
         "skip_download": True,
         "socket_timeout": YTDLP_PROBE_TIMEOUT_SECONDS,
+        **output_capture_opts(),
     }
     if cookiefile:
         options["cookiefile"] = str(cookiefile)
