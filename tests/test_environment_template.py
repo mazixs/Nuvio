@@ -27,7 +27,7 @@ def test_direct_dependencies_are_pinned_to_reviewed_versions():
 
     expected = {
         "python-telegram-bot[job-queue]==22.8",
-        "yt-dlp[default]==2026.7.4",
+        "yt-dlp[default]==2026.8.18.122307.dev0",
         "curl_cffi==0.16.0",
         "httpx==0.28.1",
         "python-dotenv==1.2.2",

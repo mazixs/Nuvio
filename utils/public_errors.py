@@ -8,11 +8,32 @@ from messages import (
 )
 
 
+# Маркеры, по которым 403 на медиафайле отличается от запрета доступа к видео.
+# Ссылка `googlevideo` подписана на исходящий IP (`ip=` внутри `sparams`) и живёт
+# считанные минуты, поэтому смена маршрута между разбором ссылки и скачиванием
+# даёт 403 на первом же байте. Лечится повторным разбором, а не отказом.
+_MEDIA_FORBIDDEN_MARKERS = (
+    "unable to download video data",
+    "fragment",
+    "giving up after",
+)
+
+
+def is_media_forbidden_error(error_msg: str) -> bool:
+    """Отличает 403 на самом медиафайле от запрета доступа к видео."""
+    msg_lower = error_msg.lower()
+    if "http error 403" not in msg_lower:
+        return False
+    return any(marker in msg_lower for marker in _MEDIA_FORBIDDEN_MARKERS)
+
+
 def youtube_error_code(error_msg: str) -> str:
     """Возвращает категорию частой ошибки YouTube/yt-dlp."""
     msg_lower = error_msg.lower()
     if "requested format is not available" in msg_lower:
         return "FORMAT_UNAVAILABLE"
+    if is_media_forbidden_error(error_msg):
+        return "MEDIA_FORBIDDEN"
     if any(
         signature in msg_lower
         for signature in (
@@ -104,7 +125,7 @@ def build_public_error_message(
         return CHOOSE_ANOTHER_FORMAT.format(
             error="Выбранный формат сейчас недоступен."
         )
-    if category in {"NETWORK", "NETWORK_TIMEOUT"}:
+    if category in {"NETWORK", "NETWORK_TIMEOUT", "MEDIA_FORBIDDEN"}:
         return USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code)
     if category == "STORY_UNSUPPORTED":
         return (

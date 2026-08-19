@@ -25,7 +25,7 @@
 
 - **Язык**: Python 3.14+
 - **Бот**: [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) 22.8 (async)
-- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.7.4
+- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.8.18.122307.dev0 (nightly: в стабильной 2026.7.4 YouTube отдаёт 403 на скачивании)
 - **WebUI**: FastAPI 0.139.2 + Uvicorn + Jinja2
 - **Базы данных**: SQLite (WAL mode) — две отдельные БД:
   - `video_cache.db` — кэш file_id
@@ -292,7 +292,7 @@ ruff check --output-format=github .
 2. **Callback-сессии**: пользовательские inline-кнопки привязаны к сессиям через токены (`s|{token}|{scope}|{action}`). Максимум 5 активных сессий на пользователя.
 3. **Кэш file_id**: при первой отправке файла в Telegram сохраняется `file_id`; повторные запросы того же URL отправляются мгновенно через CDN.
 4. **Smart retry**: экспоненциальный backoff при сетевых таймаутах yt-dlp; fallback на CLI (`python -m yt_dlp`) при сбоях встроенного API.
-5. **Cookies-first**: для YouTube сначала пробуем с cookies, затем без них; для TikTok/Instagram — аналогично.
+5. **Порядок попыток**: для YouTube сначала без cookies, затем с ними — авторизованная сессия отбирает у yt-dlp клиента `android_vr`, единственного, кто работает без PO-токена. Instagram устроен так же, а у TikTok наоборот: cookies первыми.
 6. **Фото-посты**: TikTok-ссылки вида `/photo/` и Instagram карусели скачиваются как набор изображений; аудио отправляется отдельным сообщением, если есть.
 7. **Rolling-release yt-dlp**: по умолчанию используется зафиксированная версия;
    обновление при старте включается явно через `YTDLP_AUTO_UPDATE=true`.

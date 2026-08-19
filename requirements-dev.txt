@@ -1367,9 +1367,9 @@ websockets==17.0.1 \
     # via
     #   uvicorn
     #   yt-dlp
-yt-dlp==2026.7.4 \
-    --hash=sha256:b094813404f87a9dd2186f00815231df32e5fd8a5403be0f807b3bb2d21a4432 \
-    --hash=sha256:f11f2b11d5a8ac4059f9bdf29fa4407dc7c6bb00c5097e95ca22a7a9db518266
+yt-dlp==2026.8.18.122307.dev0 \
+    --hash=sha256:463ce6b4bd05ab8c4eb24753f4144e73efbba4d5abe5ef256a9827e778b26b90 \
+    --hash=sha256:4cd97a5adaa4aaec38a370aea644b7e96002c530b581eb470a1ea81d6eb9e22b
     # via -r requirements.in
 yt-dlp-ejs==0.8.0 \
     --hash=sha256:79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4 \

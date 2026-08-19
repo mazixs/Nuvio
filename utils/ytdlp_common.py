@@ -11,6 +11,7 @@ import yt_dlp
 from config import MAX_FILE_SIZE
 from utils.cancellation import cancellation_hook
 from utils.logger import setup_logger
+from utils.public_errors import is_media_forbidden_error
 
 logger = setup_logger(__name__)
 
@@ -35,7 +36,7 @@ _NETWORK_TIMEOUT_SIGNATURES = (
     "UNEXPECTED_EOF_WHILE_READING",
     "EOF occurred in violation of protocol",
     "fragment not found",
-    "HTTP Error 403",
+    "Network is unreachable",
 )
 
 
@@ -44,6 +45,10 @@ def classify_download_error_kind(message: str) -> str:
     msg_lower = message.lower()
     if "requested format is not available" in msg_lower:
         return "FORMAT_UNAVAILABLE"
+    # Проверяется до ACCESS_RESTRICTED: 403 на самом медиафайле — протухшая или
+    # подписанная на другой исходящий IP ссылка, а не запрет доступа к видео.
+    if is_media_forbidden_error(message):
+        return "MEDIA_FORBIDDEN"
     if any(
         signature in msg_lower
         for signature in (
@@ -95,20 +100,25 @@ def execute_with_backoff(
         except yt_dlp.utils.DownloadError as e:
             message = str(e)
             error_kind = classify_download_error_kind(message)
-            if error_kind == "NETWORK_TIMEOUT":
+            # MEDIA_FORBIDDEN повторяется наравне с таймаутом: каждая попытка
+            # заново разбирает ссылку и получает свежую подпись, а именно этого
+            # 403 на медиафайле и требует.
+            if error_kind in {"NETWORK_TIMEOUT", "MEDIA_FORBIDDEN"}:
                 if attempt == max_attempts:
                     logger.error(
-                        "%s failed after %s attempts due to timeout: %s",
+                        "%s failed after %s attempts (%s): %s",
                         description,
                         attempt,
+                        error_kind,
                         message,
                         exc_info=True,
                     )
                     raise
                 delay = min(2**attempt, 30)
                 logger.warning(
-                    "%s: timeout (attempt %s/%s). Retrying in %ss",
+                    "%s: %s (attempt %s/%s). Retrying in %ss",
                     description,
+                    error_kind,
                     attempt,
                     max_attempts,
                     delay,

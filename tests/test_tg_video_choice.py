@@ -191,9 +191,9 @@ def test_get_available_formats_carries_codecs():
                 "filesize": 29 * MB,
             },
             {
-                "format_id": "18",
+                "format_id": "22",
                 "ext": "mp4",
-                "height": 360,
+                "height": 720,
                 "vcodec": "avc1.42001E",
                 "acodec": "mp4a.40.2",
                 "filesize": 61 * MB,
@@ -207,6 +207,38 @@ def test_get_available_formats_carries_codecs():
     assert formats["audio_only"][0]["acodec"] == "mp4a.40.2"
     assert formats["combined"][0]["vcodec"] == "avc1.42001E"
     assert formats["combined"][0]["acodec"] == "mp4a.40.2"
+
+
+@pytest.mark.unit
+def test_progressive_itag_18_is_not_offered():
+    """itag 18 без PO-токена всегда даёт 403, поэтому в меню он не попадает."""
+    from utils.youtube_utils import get_available_formats
+
+    info = {
+        "formats": [
+            {
+                "format_id": "18",
+                "ext": "mp4",
+                "height": 360,
+                "vcodec": "avc1.42001E",
+                "acodec": "mp4a.40.2",
+                "filesize": 61 * MB,
+            },
+            {
+                "format_id": "134",
+                "ext": "mp4",
+                "height": 360,
+                "vcodec": "avc1.4d401e",
+                "acodec": "none",
+                "filesize": 20 * MB,
+            },
+        ]
+    }
+
+    formats = get_available_formats(info, filter_by_size=False)
+
+    assert formats["combined"] == []
+    assert [fmt["format_id"] for fmt in formats["video_only"]] == ["134"]
 
 
 @pytest.mark.unit
