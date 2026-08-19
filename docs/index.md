@@ -11,6 +11,7 @@
 
 - [Архитектура](technical/architecture.md) -- модули, поток данных, ключевые паттерны, SQLite WAL
 - [FSM-логика](technical/fsm-architecture.md) -- конечные автоматы, узкие места, оптимизации, ICE-приоритизация
+- [Runbook: YouTube перестал скачиваться](technical/youtube-download-runbook.md) -- инцидент 18.08.2026, ловушки ложноотрицательных проб, процедура разбора, обновление пина yt-dlp
 - [Коды ошибок](error-codes.md) -- формат кодов, префиксы (YT/TT/IG/RU/VK/TG/FILE/BOT), категории, поиск в логах
 
 ### Разработка
