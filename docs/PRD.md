@@ -475,7 +475,7 @@ Nuvio/
 | Пакет | Назначение |
 |---|---|
 | `python-telegram-bot[job-queue]` 22.8 | Telegram Bot API (async) |
-| `yt-dlp[default]` 2026.7.4 | Загрузка видео с платформ |
+| `yt-dlp[default]` 2026.8.18.122307.dev0 | Загрузка видео с платформ |
 | `curl_cffi` 0.16.0 | Имперсонация браузерных HTTP-запросов |
 | `httpx` 0.28.1 | HTTP-клиент |
 | `python-dotenv` 1.2.2 | Загрузка настроек окружения |

@@ -25,7 +25,7 @@
 
 - **Язык**: Python 3.14+
 - **Бот**: [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) 22.8 (async)
-- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.7.4
+- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.8.18.122307.dev0 (nightly: в стабильной 2026.7.4 YouTube отдаёт 403 на скачивании)
 - **WebUI**: FastAPI 0.139.2 + Uvicorn + Jinja2
 - **Базы данных**: SQLite (WAL mode) — две отдельные БД:
   - `video_cache.db` — кэш file_id
