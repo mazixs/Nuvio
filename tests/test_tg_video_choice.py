@@ -451,3 +451,57 @@ def test_vertical_video_is_labelled_by_its_short_side():
     options = list_video_options(video_only, audio, [], LOCAL_BUDGET)
 
     assert [option.resolution for option in options] == [1440, 1080, 720]
+
+
+@pytest.mark.unit
+def test_drc_twin_is_dropped_when_original_exists():
+    """YouTube отдаёт `140` и `140-drc` одного размера — в меню нужен один."""
+    from utils.youtube_utils import get_available_formats
+
+    info = {
+        "formats": [
+            {
+                "format_id": "140-drc",
+                "ext": "m4a",
+                "audio_channels": 2,
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+                "filesize": 107 * MB,
+            },
+            {
+                "format_id": "140",
+                "ext": "m4a",
+                "audio_channels": 2,
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+                "filesize": 107 * MB,
+            },
+        ]
+    }
+
+    formats = get_available_formats(info, filter_by_size=False)
+
+    assert [fmt["format_id"] for fmt in formats["audio_only"]] == ["140"]
+
+
+@pytest.mark.unit
+def test_lonely_drc_track_is_kept():
+    """Без оригинала сжатая дорожка — единственный звук, выбрасывать нельзя."""
+    from utils.youtube_utils import get_available_formats
+
+    info = {
+        "formats": [
+            {
+                "format_id": "141-drc",
+                "ext": "m4a",
+                "audio_channels": 2,
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+                "filesize": 200 * MB,
+            }
+        ]
+    }
+
+    formats = get_available_formats(info, filter_by_size=False)
+
+    assert [fmt["format_id"] for fmt in formats["audio_only"]] == ["141-drc"]

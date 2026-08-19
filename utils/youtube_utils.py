@@ -131,6 +131,25 @@ def get_video_info(url: str) -> dict[str, Any]:
         raise
 
 
+def _shadowed_drc_format_ids(formats: list[dict[str, Any]]) -> frozenset[str]:
+    """Находит `-drc`-дорожки, у которых есть тот же поток без сжатия динамики.
+
+    YouTube отдаёт звук парами: `140` и `140-drc`, где второй прошёл выравнивание
+    громкости. Размер, расширение и кодек у них совпадают, поэтому в меню
+    получаются две неразличимые кнопки «M4A · 107 МБ», а подбор пары по размеру
+    может взять сжатую дорожку вместо оригинала. Оригинал ближе к исходнику, так
+    что двойник убирается — но только когда оригинал действительно есть.
+    """
+    available = {
+        str(fmt.get("format_id")) for fmt in formats if fmt.get("format_id") is not None
+    }
+    return frozenset(
+        format_id
+        for format_id in available
+        if format_id.endswith("-drc") and format_id.removesuffix("-drc") in available
+    )
+
+
 def get_available_formats(
     video_info: dict[str, Any], filter_by_size: bool = True
 ) -> dict[str, list[FormatInfoDict]]:
@@ -148,6 +167,7 @@ def get_available_formats(
     video_formats: list[FormatInfoDict] = []
     audio_formats: list[FormatInfoDict] = []
     combined_formats: list[FormatInfoDict] = []
+    shadowed_drc_ids = _shadowed_drc_format_ids(formats)
 
     for format_info in formats:
         # Логируем, что получили по filesize
@@ -172,6 +192,12 @@ def get_available_formats(
         if format_id in PO_TOKEN_ONLY_FORMAT_IDS:
             logger.debug(
                 "Формат %s пропущен: YouTube отдаёт его только по PO-токену", format_id
+            )
+            continue
+
+        if format_id in shadowed_drc_ids:
+            logger.debug(
+                "Формат %s пропущен: есть тот же поток без сжатия динамики", format_id
             )
             continue
 

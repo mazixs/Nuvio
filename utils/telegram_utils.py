@@ -974,12 +974,15 @@ def _build_public_error_message(platform: str, error_code: str, error_msg: str) 
 def _should_notify_admins_platform_failure(
     platform: str, category: str, stage: str
 ) -> bool:
-    """Отделяет ожидаемые пользовательские ограничения платформ от настоящих аварий."""
-    if stage.endswith("_timeout") or category in {
-        "NETWORK",
-        "NETWORK_TIMEOUT",
-        "MEDIA_FORBIDDEN",
-    }:
+    """Отделяет ожидаемые пользовательские ограничения платформ от настоящих аварий.
+
+    `MEDIA_FORBIDDEN` сюда не входит намеренно. 403 на медиафайле — единственный
+    признак, по которому видно, что платформа сменила правила выдачи: поломка
+    YouTube 18.08.2026 пришла именно так, и узнали о ней ровно потому, что
+    краш-репорт дошёл до админа. Замолчать эту категорию значит согласиться, что
+    бот будет стоять сломанным, пока кто-нибудь не пожалуется.
+    """
+    if stage.endswith("_timeout") or category in {"NETWORK", "NETWORK_TIMEOUT"}:
         return False
     return True
 
