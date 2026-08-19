@@ -22,7 +22,9 @@ from config import (
     MAX_FILE_SIZE,
     TELEGRAM_LOCAL_MODE,
     TEMP_DIR,
+    YTDLP_RELEASE_CHANNEL,
 )
+from utils import download_report
 from utils.logger import setup_logger
 from utils.cancellation import CancelledByUser, request_cancellation
 from utils.subtitles import (
@@ -153,6 +155,7 @@ from utils.rutube_vk_utils import (
 )
 from utils.video_cache import telegram_cache, CachedVideo
 from utils.cookie_health import check_cookie_health
+from utils.ytdlp_runtime import get_installed_yt_dlp_version
 from datetime import datetime, timezone
 
 logger = setup_logger(__name__)
@@ -223,6 +226,24 @@ def _md_code_block(text: str, language: str = "text") -> str:
     return f"{fence}{language}\n{text.rstrip()}\n{fence}"
 
 
+def _md_ytdlp_tail_section(tail: list[str]) -> list[str]:
+    """Собирает секцию репорта с последними строками вывода yt-dlp.
+
+    Объяснение отказа живёт в предупреждениях yt-dlp («cookies are no longer
+    valid», «formats require a GVS PO Token», «forcing SABR streaming»), и
+    только они говорят, каким клиентом качали и что ответила платформа: в
+    info-dict этого нет, а без секции ответ приходилось добывать по SSH. Пустой
+    хвост даёт строку прозой, потому что пустой блок кода читается как потеря
+    данных, а не как их отсутствие.
+    """
+    body = (
+        _md_code_block("\n".join(tail))
+        if tail
+        else "Вывода yt-dlp по этой сессии нет: до его запуска дело не дошло."
+    )
+    return ["## Последние строки yt-dlp", "", body, ""]
+
+
 async def _notify_admins_crash(
     *,
     error_code: str,
@@ -233,14 +254,33 @@ async def _notify_admins_crash(
     session_id: str | None = None,
     cookie_status: str = "not_checked",
     cookie_summary: str = "not_checked",
+    output_tail: list[str] | None = None,
 ) -> None:
-    """Отправляет админам из ADMIN_IDS краш-репорт файлом в markdown."""
+    """Отправляет админам из ADMIN_IDS краш-репорт файлом в markdown.
+
+    `output_tail` — снимок вывода yt-dlp, снятый в момент отказа. Без снимка
+    хвост читается из регистра здесь, но тогда он может уже опустеть: сессию
+    уничтожают сразу после отказа, а репорт собирается фоновой задачей.
+    """
     if not _bot_instance or not ADMIN_IDS:
         return
+
+    tail = (
+        output_tail
+        if output_tail is not None
+        else download_report.output_tail(session_id)
+    )
 
     # Ссылка идёт в угловых скобках: так markdown делает её ссылкой, не пытаясь
     # разобрать подчёркивания и звёздочки внутри как разметку. Время — в UTC,
     # как и метки в `logs/bot.log`, чтобы репорт искался в журнале по времени.
+    #
+    # Версия yt-dlp и канал обновлений отвечают на первый же вопрос при поломке
+    # платформы: обновление уехало вперёд или, наоборот, отстало. Версия
+    # определяется по метаданным пакета и может не определиться вовсе — тогда в
+    # ячейке честное «N/A», а не пустое место, за которым не видно, что версии
+    # нет и что её не смогли прочитать.
+    installed_version = get_installed_yt_dlp_version()
     facts = (
         (
             "Время (UTC)",
@@ -252,6 +292,8 @@ async def _notify_admins_crash(
         ("Сессия", f"`{_md_cell(session_id)}`" if session_id else "N/A"),
         ("Cookies", _md_cell(cookie_status)),
         ("Что с cookies", _md_cell(cookie_summary)),
+        ("Версия yt-dlp", _md_cell(installed_version) if installed_version else "N/A"),
+        ("Канал обновлений", _md_cell(YTDLP_RELEASE_CHANNEL)),
     )
     report_text = "\n".join(
         [
@@ -261,6 +303,7 @@ async def _notify_admins_crash(
             "| --- | --- |",
             *(f"| {name} | {value} |" for name, value in facts),
             "",
+            *_md_ytdlp_tail_section(tail),
             "## Исключение",
             "",
             _md_code_block(f"{type(exc).__name__}: {exc}"),
@@ -995,6 +1038,7 @@ async def _log_platform_failure(
     error_code: str,
     exc: Exception,
     session_id: str | None = None,
+    output_tail: list[str] | None = None,
 ) -> None:
     category = _classify_internal_error_category(platform, str(exc))
     cookie_status = "not_checked"
@@ -1035,6 +1079,7 @@ async def _log_platform_failure(
             session_id=session_id,
             cookie_status=cookie_status,
             cookie_summary=cookie_summary,
+            output_tail=output_tail,
         )
 
 
@@ -1047,6 +1092,12 @@ def _schedule_platform_failure_log(
     exc: Exception,
     session_id: str | None = None,
 ) -> None:
+    # Хвост вывода yt-dlp снимается здесь, синхронно, пока обработчик не отдал
+    # управление. Репорт собирает фоновая задача, и она ждёт пробу cookies, а
+    # обработчик за это время успевает уничтожить сессию вместе с её записями в
+    # регистре: между отказом и уничтожением стоит всего один await.
+    output_tail = download_report.output_tail(session_id)
+
     async def _runner() -> None:
         try:
             await _log_platform_failure(
@@ -1056,6 +1107,7 @@ def _schedule_platform_failure_log(
                 error_code=error_code,
                 exc=exc,
                 session_id=session_id,
+                output_tail=output_tail,
             )
         except Exception:  # noqa: BLE001
             logger.exception(
@@ -1120,14 +1172,52 @@ async def _deliver_cached_video(
     return True
 
 
+def _cache_key_with_delivered_format(
+    cache_format_id: str, delivered: str | None, url: str
+) -> str:
+    """Правит ключ кэша, если загрузчик принёс не тот формат, который просили.
+
+    Каскад фолбеков при 403 молча подменяет формат: запрос `18` уезжает в
+    `bestvideo+bestaudio`, а файл возвращается как запрошенный. Запись живёт в
+    кэше 90 дней, поэтому под запрошенным ключом кнопка «1080p» отдавала бы
+    240p до конца TTL — ключом становится формат, который реально принесли.
+
+    Правится только ключ вида `combined:{format_id}`: обещание конкретного
+    формата есть лишь в нём. Ключи-корзины (`tg_video`, `audio_m4a`,
+    `direct_video`, `*_audio`) значат «то, что бот выбрал для этой кнопки», а
+    загрузчик пишет в регистр обычный id формата (`137+140`) — принимая его за
+    подмену, кэш этих кнопок перестал бы находиться вовсе.
+    """
+    prefix, separator, requested = cache_format_id.rpartition(":")
+    if not separator or not delivered or delivered == requested:
+        return cache_format_id
+
+    # Расхождение — признак сработавшего фолбека: пользователь своё получил, но
+    # админ должен знать, что запрошенный формат платформа не отдаёт.
+    logger.warning(
+        "Загрузчик принёс другой формат: запрошен %s, получен %s — "
+        "кэшируем под полученным (url=%s)",
+        requested,
+        delivered,
+        url,
+    )
+    return f"{prefix}{separator}{delivered}"
+
+
 def _cache_sent_media(
     message: telegram.Message,
     url: str,
     platform: str,
     cache_format_id: str,
     video_info: dict | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Сохраняет file_id отправленного медиа в кэш.
+
+    Ключ берётся с поправкой на формат, который загрузчик реально принёс, —
+    см. `_cache_key_with_delivered_format`. Когда в регистр ничего не записали
+    (так ведут себя все платформы, кроме YouTube), ключ остаётся запрошенным:
+    прежнее поведение.
 
     Доставка уже состоялась, поэтому сбой кэша только логируется: ронять из-за
     него ответ пользователю нельзя.
@@ -1137,6 +1227,12 @@ def _cache_sent_media(
     if not file_id:
         return
 
+    # Без session_id регистр спрашивать нечем: записи вне сессии лежат под общим
+    # ключом, и чужой формат попал бы в кэш ровно тем способом, от которого
+    # здесь защищаемся.
+    delivered = download_report.delivered_format(session_id) if session_id else None
+    key_format_id = _cache_key_with_delivered_format(cache_format_id, delivered, url)
+
     try:
         telegram_cache.set(
             CachedVideo(
@@ -1144,7 +1240,7 @@ def _cache_sent_media(
                 file_id=file_id,
                 file_unique_id=getattr(media, "file_unique_id", None),
                 platform=platform,
-                format_id=cache_format_id,
+                format_id=key_format_id,
                 cached_at=datetime.now(),
                 file_size=getattr(media, "file_size", None),
                 duration=getattr(media, "duration", None),
@@ -1152,7 +1248,7 @@ def _cache_sent_media(
             )
         )
         logger.info(
-            "💾 Файл сохранён в кэш: %s -> %s (key=%s)", url, file_id, cache_format_id
+            "💾 Файл сохранён в кэш: %s -> %s (key=%s)", url, file_id, key_format_id
         )
     except Exception as e:
         logger.error("Ошибка сохранения в кэш: %s", e)
@@ -1204,6 +1300,9 @@ async def _deliver_by_url(
     logger.info("Медиа доставлено ссылкой (%s, %.2f МБ)", plan.kind, size_mb)
     # Кэш file_id рассчитан на видео, аудио и документы; фото-посты в нём не
     # хранятся, поэтому для них запись пропускается.
+    # Регистр диагностики здесь не спрашивается намеренно: ссылка ведёт ровно на
+    # запрошенный формат, загрузчик в этом пути не участвует, а запись в регистре
+    # могла остаться от предыдущей неудачной попытки той же сессии.
     if cache_format_id and plan.kind != "photo":
         _cache_sent_media(message, url, platform, cache_format_id, video_info)
     return True
@@ -1349,12 +1448,20 @@ async def _cleanup_user_session(
     context: ContextTypes.DEFAULT_TYPE,
     session_token: str | None = None,
 ) -> None:
-    """Очищает конкретную сессию пользователя, не затрагивая остальные меню."""
+    """Очищает конкретную сессию пользователя, не затрагивая остальные меню.
+
+    Вместе с файлами уходят и записи регистра диагностики: сессии больше нет,
+    а хвост вывода yt-dlp и фактический формат относятся именно к ней. В
+    аварийных ветках, где файлы чистятся, а сессия остаётся, регистр намеренно
+    сохраняется: краш-репорт собирается фоновой задачей уже после выхода из
+    обработчика и читает хвост оттуда.
+    """
     if session_token:
         session = _get_session_store(context).pop(session_token, None)
         session_id = session.get("session_id") if session else None
         if session_id:
             cleanup_temp_files(session_id)
+            download_report.forget(session_id)
             logger.info(
                 "Временные файлы для сессии %s пользователя %s очищены.",
                 session_id,
@@ -1366,6 +1473,7 @@ async def _cleanup_user_session(
     session_id = context.user_data.get("session_id")
     if session_id:
         cleanup_temp_files(session_id)
+        download_report.forget(session_id)
         logger.info(
             f"Временные файлы для legacy-сессии {session_id} пользователя {user_id} очищены."
         )
@@ -3311,6 +3419,7 @@ async def send_single_file(
                     platform,
                     cache_format_id,
                     session_data.get("video_info"),
+                    session_data.get("session_id"),
                 )
 
             return True
