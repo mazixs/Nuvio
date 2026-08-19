@@ -446,6 +446,21 @@ def _get_session_store(context: ContextTypes.DEFAULT_TYPE) -> dict[str, dict]:
     ).data
 
 
+def _session_id_of(
+    context: ContextTypes.DEFAULT_TYPE, session_token: str | None
+) -> str | None:
+    """Достаёт `session_id` по токену, не разрушая запись.
+
+    Токен и `session_id` — разные вещи: первым помечена клавиатура, вторым названы
+    временные файлы и хвост вывода yt-dlp. Передать токен там, где ждут
+    `session_id`, значит молча получить пустую диагностику в краш-репорте.
+    """
+    if not session_token:
+        return None
+    session = _get_session_store(context).get(session_token)
+    return session.get("session_id") if session else None
+
+
 def _store_session(
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -3002,7 +3017,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 url=None,
                 error_code=error_code,
                 exc=e,
-                session_id=session_token,
+                session_id=_session_id_of(context, session_token),
             )
             try:
                 await safe_edit_message_text(

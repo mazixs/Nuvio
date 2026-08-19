@@ -163,16 +163,18 @@ docker compose exec bot python -m yt_dlp --no-playlist -F --cookies /tmp/probe-c
 | Где смотреть | Что там есть |
 |---|---|
 | `docker compose logs bot` | вывод самого yt-dlp при скачивании: `quiet` для этого пути выключен, поэтому видны строки `[download]` и `ERROR:` |
-| `/app/logs/bot.log` | только строки логгера бота: `USER_FLOW_FAIL`, «Переключаемся на локальный CLI fallback yt-dlp», текст исключения |
-| краш-репорт в личку админу | исключение, traceback, стадия, состояние cookies. Для `MEDIA_FORBIDDEN` не отправляется |
+| `/app/logs/bot.log` | строки логгера бота (`USER_FLOW_FAIL`, «Переключаемся на локальный CLI fallback yt-dlp», текст исключения) и предупреждения самого yt-dlp через адаптер `utils.ytdlp_common` |
+| краш-репорт в личку админу | исключение, traceback, стадия, состояние cookies. Для `MEDIA_FORBIDDEN` отправляется намеренно: серия таких отказов — единственный признак, что платформа сменила правила выдачи |
 
-Предупреждений yt-dlp (`WARNING: …`) в обоих местах не будет: загрузчики ставят
-`no_warnings: True`, а CLI-fallback запускается с `--no-warnings`. Видно их
-только в ручной пробе из шага 3, где этот ключ не передаётся, — и это ещё одна
-причина не диагностировать поломку по одним логам. Из CLI-fallback в лог и
-краш-репорт попадает первая тысяча символов stderr, подставленная в текст
-`RuntimeError` (`utils/youtube_utils.py`), — там же видно, какой формат yt-dlp
-выбрал фактически.
+Предупреждения yt-dlp (`WARNING: …`) теперь доходят и до лога, и до отчёта:
+`apply_network_opts` подставляет в опции логгер-адаптер, а тот пишет строку в
+`bot.log` под именем `utils.ytdlp_common` и складывает её в хвост сессии
+(`utils/download_report.py`). Именно в этих строках живёт ответ на вопрос «каким
+клиентом качали и что сказала платформа» — из info-dict он не достаётся. Строки
+прогресса `[download]` в хвост не попадают намеренно, иначе они вытеснили бы
+полезное из шестидесяти строк. Из CLI-fallback в лог и краш-репорт попадает
+первая тысяча символов stderr, подставленная в текст `RuntimeError`
+(`utils/youtube_utils.py`).
 
 Для подробного лога поднять `LOG_LEVEL=DEBUG` в `.secrets/.env` и перезапустить
 бота: тогда в лог пойдут строки прогресса скачивания и причина пропуска формата.
@@ -243,6 +245,8 @@ YTDLP_RELEASE_CHANNEL=nightly
 | `utils/ytdlp_common.py` | `DEFAULT_YTDLP_NETWORK_OPTS` — сетевые опции всех загрузчиков, включая `http_chunk_size`; `classify_download_error_kind()`; `execute_with_backoff()` — повтор для `NETWORK_TIMEOUT` и `MEDIA_FORBIDDEN` |
 | `utils/youtube_utils.py` | каскад попыток «без cookies → с cookies → CLI», non-HLS фолбек после 403, `PO_TOKEN_ONLY_FORMAT_IDS`, хвост stderr CLI-запуска |
 | `utils/public_errors.py` | `youtube_error_code()` и `is_media_forbidden_error()` — граница между `MEDIA_FORBIDDEN` и `ACCESS_RESTRICTED` |
+| `utils/download_report.py` | хвост вывода yt-dlp и фактически скачанный формат на сессию — попадают в краш-репорт и в ключ кэша |
+| `utils/canary.py` | плановая проверка YouTube продакшн-опциями мимо кэша и автообновление yt-dlp при провале |
 | `utils/ytdlp_runtime.py` | версия, автообновление по каналам, `run_yt_dlp_cli()`, `extract_cli_output_path()` |
 | `utils/telegram_utils.py` | `_log_platform_failure()` — строка `USER_FLOW_FAIL`; `_should_notify_admins_platform_failure()` — кто попадает в краш-репорт; `_notify_admins_crash()` — его состав |
 

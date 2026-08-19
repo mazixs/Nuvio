@@ -10,6 +10,7 @@
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -255,3 +256,23 @@ def test_tail_is_snapshotted_before_the_session_is_forgotten(monkeypatch):
     asyncio.run(scenario())
 
     assert "ERROR: unable to download: HTTP 403" in bot.sent_documents[0]["text"]
+
+
+@pytest.mark.unit
+def test_session_token_is_not_passed_where_session_id_is_expected():
+    """Токен помечает клавиатуру, `session_id` — файлы и хвост вывода.
+
+    Перепутать их значит молча получить пустую диагностику: регистр ключуется по
+    `session_id`, и по токену в нём никогда ничего не найдётся.
+    """
+    context = SimpleNamespace(
+        user_data={
+            telegram_utils._SESSION_STORE_KEY: {
+                "tok3n": {"session_id": SESSION_ID, "url": "https://x.test/v"}
+            }
+        }
+    )
+
+    assert telegram_utils._session_id_of(context, "tok3n") == SESSION_ID
+    assert telegram_utils._session_id_of(context, "нет такого") is None
+    assert telegram_utils._session_id_of(context, None) is None
