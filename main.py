@@ -31,6 +31,8 @@ for _dotenv_path in (
         load_dotenv(dotenv_path=_dotenv_path, override=False)
 
 from config import (  # noqa: E402
+    CANARY_ENABLED,
+    CANARY_INTERVAL_HOURS,
     LOG_LEVEL,
     TELEGRAM_BOT_API_BASE_URL,
     TELEGRAM_BOT_API_FILE_URL,
@@ -38,6 +40,7 @@ from config import (  # noqa: E402
     TELEGRAM_TOKEN,
     validate_config,
 )
+from utils.canary import youtube_canary_job  # noqa: E402
 from utils.logger import setup_logger  # noqa: E402
 from utils.temp_file_manager import cleanup_temp_files  # noqa: E402
 from utils.cache_commands import (
@@ -72,6 +75,9 @@ logger = setup_logger(__name__, level=LOG_LEVEL)
 # на навигацию по меню с отменой должно оставаться место, иначе ограничение
 # вернёт ту же поломку под нагрузкой.
 UPDATE_CONCURRENCY = 32
+
+# Задержка первой канареечной проверки после старта.
+CANARY_FIRST_RUN_DELAY = 300
 
 
 def _classify_polling_error(exc: telegram.error.TelegramError) -> tuple[str, str]:
@@ -278,6 +284,23 @@ def _build_application() -> Application:
         logger.info(
             "🕒 Планировщик задач инициализирован (автоочистка кэша + CSI активны)"
         )
+        if CANARY_ENABLED:
+            # Первая проверка через 5 минут после старта: сигнал нужен вскоре
+            # после перезапуска, но не в момент, когда бот ещё поднимается.
+            # Дальше — раз в CANARY_INTERVAL_HOURS часов и только по YouTube:
+            # успешных скачиваний за всю историю лога 58, и ежечасная канарейка
+            # стала бы и главным потребителем, и главным риском антибот-лимитов
+            # домашнего адреса.
+            application.job_queue.run_repeating(
+                youtube_canary_job,
+                interval=CANARY_INTERVAL_HOURS * 3600,
+                first=CANARY_FIRST_RUN_DELAY,
+                name="youtube_canary",
+            )
+            logger.info(
+                "🐤 Канарейка YouTube включена: проверка раз в %s ч",
+                CANARY_INTERVAL_HOURS,
+            )
 
     return application
 
