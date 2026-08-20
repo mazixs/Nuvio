@@ -3,7 +3,7 @@ python-telegram-bot[job-queue]==22.8
 yt-dlp[default]==2026.8.18.122307.dev0
 curl_cffi==0.16.0
 httpx==0.28.1
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 
 # WebUI
 fastapi==0.141.1
