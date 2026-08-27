@@ -410,28 +410,28 @@ click==8.4.2 \
     --hash=sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6 \
     --hash=sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76
     # via uvicorn
-curl-cffi==0.16.0 \
-    --hash=sha256:06b1c7e07af8ff7c4c5ce4086ea89cc582ebff9adff4a37cfffa5f5de5d5b943 \
-    --hash=sha256:095fc36e4988736f31521d6fe0aa1f243dba22656b4818fc2fb3b7a547e7a9ba \
-    --hash=sha256:182416f07d71a342240554fa62c22e591999b78c225b21d3fe27d9f807420dd6 \
-    --hash=sha256:1efd99f7df6e32cbcef7d5d1a0136141da45ff850edf5fc1845c8bed1d06fb95 \
-    --hash=sha256:226c038cfc85db5190c3d4ec1737a897e7651a45fc794ad384634633b1b5b92f \
-    --hash=sha256:2c93c2f4cf5308f40b07516d57c5f499752387b12a4611420b665b1b958aaa87 \
-    --hash=sha256:3a1c8a7469453d09b500c47c83945179c4dd31c327906791e54292a06fec080a \
-    --hash=sha256:3c31e71bf68a9c02a279a184ec9c0ea7c80ce1ef4f1d35073fae3124eb3a7868 \
-    --hash=sha256:6128021320f74999ec1216c1817b2c3adcb0f334d204add1ccf18e248bf7efcb \
-    --hash=sha256:6c540b625979b618bff1339e998058c0a36fb2ef93c336b3ef4695c3dae6decd \
-    --hash=sha256:75e5898b3066b64a68fa1eb72552a2e027d61c9d2020657ee2fc3e73d4b39db0 \
-    --hash=sha256:93615d44f23e56c1256700c2e78de4b879310f39a5621828ea7e2a5ecc04bdda \
-    --hash=sha256:98f98848aed5d1cb0d5393c46ab84acd73b160c21beb49d6fa612d3cff926478 \
-    --hash=sha256:b00b423da8028eb6221e3b63bcd63d681150c07cee8b16000d1f7ea292731895 \
-    --hash=sha256:c3dd33eaf267d017bfac09b4f71af1d94045dee5518ce18af380462e29f92fad \
-    --hash=sha256:ce1f823bc5ce675291a7cf14781496775dfae9298638c25059f2565f6a58a704 \
-    --hash=sha256:ce87f301b31147711c3aebc86fb7e16d8dc48f7e5df272c1bea760c687e28eef \
-    --hash=sha256:d95c0deccc2184eeee7c2aa18d07de261184b418210995aabd0d29f98717a05c \
-    --hash=sha256:e22a8212d830108e977ff394237f637238e265f5f65037d6c1ee71ea8cc03bcb \
-    --hash=sha256:e52586a9dc4ed5e75faa39be0f30353b10cdc7410bad276beb013085e974bb44 \
-    --hash=sha256:edd5f6e8f122157f4d2351b0b5e48e6a1c0677a2064da71451bb30ef57af19ba
+curl-cffi==0.16.1 \
+    --hash=sha256:018d32ea6c76f973678cc3acd88bfbfe9ae96cfd2c828d972e3d089731d5ea35 \
+    --hash=sha256:0662a4fe752d395ab3e2e23fbec68e34e1671884d0dd68dfc9671e150f634a99 \
+    --hash=sha256:112c9a536e7c486d4fda35ed992483893b3ac1bb973ebb8ac48ee66d7691dd9a \
+    --hash=sha256:1bc9f913212d9e13499dde43b6527fa3613f3846035ea9c5b05ca24be1153a75 \
+    --hash=sha256:270c8eb46002d878d361f75265b17428a54afe06a35810de9f60acbd89bdec26 \
+    --hash=sha256:32531012e2acbc7dcbff31c8fe514bbddc54d159bc3a8744d8a1332458eedd30 \
+    --hash=sha256:37890c60c5865f98b32050326612e5eee570a9767da57d4c7ef698f0bc80c1e4 \
+    --hash=sha256:3bf4e275bd0e22026c2eb2bf7280edfade0bd8ab9c0d04c7f053f947ffdd6d37 \
+    --hash=sha256:4d4cfba7aacb9f43b48b9f86ec94958170e02d8076a697abb5f9ebfbf01dcce4 \
+    --hash=sha256:648f3150ef49fea01f6e13b99c524d2589bacf4ca080484aae0587c014f3f89d \
+    --hash=sha256:793d79c61ad4f8b0aeb9fd13afa58ff38a48110946b781e257013f8ffe3501dc \
+    --hash=sha256:7d8ac5c90e8274cb5c0c93c590246d8180cad3aff6492ff4f887c94ff0f14769 \
+    --hash=sha256:ac56962ee26e6f606dc4e4e600a38cf5c9d68ba08673c0d43df4448670927401 \
+    --hash=sha256:b8dc82062c0b625ba45c3197f934eec3404e7f5430348b524b9300ec623080ce \
+    --hash=sha256:bce01883204353a3301294b53b7b8fa34f1a2ba924b8ddb5e2183724fc3d7966 \
+    --hash=sha256:ca7d4e2eca5aeb98cb916996b606618ff0744dba2b56c5cf16655b3cbe6b3b07 \
+    --hash=sha256:d11786a9519c4b7d9d95e5c1fc6f41a3a6ec32ddadf504b345c1bdc6c2cc58b1 \
+    --hash=sha256:dce85922435cb6678e8b01a982b65ce20e8fb681e5d18588073ba3984569e76a \
+    --hash=sha256:e85c6954d024e566b7907d0b69c9c8a467bf11efebef27b95715d28b918f7eae \
+    --hash=sha256:f12c12505ca5bd037e035d4ceb047944f38b90cf0a3c45fe4c6b8193017258c9 \
+    --hash=sha256:f3588ce9e31b91cf131ce3805bbee59d6ee96ff11004cd5bc85cfd1fef42cd77
     # via -r requirements.in
 fastapi==0.141.1 \
     --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
@@ -790,9 +790,9 @@ pydantic-core==2.46.4 \
     --hash=sha256:fc3e9034a63de20e15e8ade85358bc6efc614008cab72898b4b4952bea0509ff \
     --hash=sha256:fd8b3d9fd264be37976686c7f65cd52a83f5e84f4bfd2adf9c1d469676bbb6ae
     # via pydantic
-python-dotenv==1.2.2 \
-    --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a \
-    --hash=sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3
+python-dotenv==1.2.3 \
+    --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9 \
+    --hash=sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35
     # via
     #   -r requirements.in
     #   uvicorn
@@ -800,7 +800,7 @@ python-multipart==0.0.32 \
     --hash=sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e \
     --hash=sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23
     # via -r requirements.in
-python-telegram-bot==22.8 \
+python-telegram-bot[job-queue]==22.8 \
     --hash=sha256:42373918097f1b837cc4e717d588c19ea79651497ec712bb5b0c76e5e63c50e1 \
     --hash=sha256:f9d3847fcb23ee603477e442800b33bb4adf851a73e0619d2050be879decf1ef
     # via -r requirements.in
@@ -911,9 +911,9 @@ urllib3==2.7.0 \
     # via
     #   requests
     #   yt-dlp
-uvicorn==0.52.3 \
-    --hash=sha256:116af2710dbf47c80f463cd20ee4884b6662f4c9f227d797ddc7279d2fcc2c7c \
-    --hash=sha256:18857b9e6579300be55c91c0a1cfd37d9a2cf0cabea33b88275f199eb73b8b58
+uvicorn[standard]==0.52.4 \
+    --hash=sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86 \
+    --hash=sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1
     # via -r requirements.in
 uvloop==0.22.1 \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
@@ -1187,9 +1187,9 @@ websockets==17.0.1 \
     # via
     #   uvicorn
     #   yt-dlp
-yt-dlp==2026.8.18.122307.dev0 \
-    --hash=sha256:463ce6b4bd05ab8c4eb24753f4144e73efbba4d5abe5ef256a9827e778b26b90 \
-    --hash=sha256:4cd97a5adaa4aaec38a370aea644b7e96002c530b581eb470a1ea81d6eb9e22b
+yt-dlp[default]==2026.8.20.234504.dev0 \
+    --hash=sha256:0aceaf69a0e13c428123c493c6eeecb8ddc3b131ecb5b4a97f6687e894202337 \
+    --hash=sha256:628f33db9db7a4712d9232df076e7d19d6f37073884ec80ab4d9e95eb11a84c9
     # via -r requirements.in
 yt-dlp-ejs==0.8.0 \
     --hash=sha256:79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4 \
