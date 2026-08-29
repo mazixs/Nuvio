@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from utils import tiktok_instagram_utils
+from utils import media_processor, tiktok_instagram_utils
 from utils.tiktok_fast_path import FastPathUnavailable
 from utils.ytdlp_common import FileSizeLimitError
 
@@ -306,7 +306,7 @@ def test_fast_video_transcodes_hevc_from_resolver(monkeypatch, tmp_path, fake_do
         "_call_tiktok_resolver",
         lambda url: _resolver_payload(),
     )
-    monkeypatch.setattr(tiktok_instagram_utils, "get_video_codec", lambda path: "hevc")
+    monkeypatch.setattr(media_processor, "needs_ios_reencode", lambda path: True)
     converted = tmp_path / "converted.mp4"
 
     def _fake_convert(input_path, output_format, session_id, output_filename=None):
@@ -314,7 +314,7 @@ def test_fast_video_transcodes_hevc_from_resolver(monkeypatch, tmp_path, fake_do
         converted.write_bytes(b"h264")
         return converted
 
-    monkeypatch.setattr(tiktok_instagram_utils, "convert_to_format", _fake_convert)
+    monkeypatch.setattr(media_processor, "convert_to_format", _fake_convert)
 
     result = tiktok_instagram_utils.download_tiktok_video_fast(
         "https://vt.tiktok.com/example/",
@@ -334,14 +334,12 @@ def test_fast_video_keeps_h264_without_transcode(monkeypatch, tmp_path, fake_dow
         "_call_tiktok_resolver",
         lambda url: _resolver_payload(),
     )
-    monkeypatch.setattr(tiktok_instagram_utils, "get_video_codec", lambda path: "h264")
+    monkeypatch.setattr(media_processor, "needs_ios_reencode", lambda path: False)
 
     def _forbidden_convert(*args, **kwargs):
         raise AssertionError("H.264 не должен перекодироваться")
 
-    monkeypatch.setattr(
-        tiktok_instagram_utils, "convert_to_format", _forbidden_convert
-    )
+    monkeypatch.setattr(media_processor, "convert_to_format", _forbidden_convert)
 
     result = tiktok_instagram_utils.download_tiktok_video_fast(
         "https://vt.tiktok.com/example/",

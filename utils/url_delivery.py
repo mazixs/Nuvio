@@ -37,6 +37,7 @@ __all__ = [
     "HandoffRefusals",
     "PhotoPostHandoff",
     "UrlHandoff",
+    "find_format_geometry",
     "find_format_url",
     "handoff_limit_for",
     "plan_url_handoff",
@@ -72,11 +73,20 @@ ALLOWED_HANDOFF_DOMAINS = (
 
 @dataclass(frozen=True)
 class UrlHandoff:
-    """Подтверждённое решение отдать ссылку вместо файла."""
+    """Подтверждённое решение отдать ссылку вместо файла.
+
+    Размеры здесь необязательны намеренно: файл по этому пути не скачивается,
+    померить его нечем, и они приходят из метаданных источника. Instagram и
+    YouTube их сообщают, резолвер TikTok — нет. Отсутствие размеров означает
+    прежнее поведение, а не отказ от доставки (ADR-002).
+    """
 
     url: str
     kind: HandoffKind
     size: int
+    width: int | None = None
+    height: int | None = None
+    duration: int | None = None
 
 
 @dataclass(frozen=True)
@@ -93,9 +103,16 @@ def handoff_limit_for(kind: HandoffKind) -> int:
 
 
 def plan_url_handoff(
-    url: str | None, kind: HandoffKind, size: int | None
+    url: str | None,
+    kind: HandoffKind,
+    size: int | None,
+    geometry: dict | None = None,
 ) -> UrlHandoff | None:
     """Решает, можно ли отдать это медиа ссылкой.
+
+    Args:
+        geometry: размеры из метаданных источника, если он их сообщает. Их
+            отсутствие доставку не отменяет — см. docstring ``UrlHandoff``.
 
     Returns:
         Решение с проверенной ссылкой либо ``None``, если доставка ссылкой
@@ -105,7 +122,15 @@ def plan_url_handoff(
         return None
     if not url or not is_allowed_media_url(url, ALLOWED_HANDOFF_DOMAINS):
         return None
-    return UrlHandoff(url=url, kind=kind, size=size)
+    geometry = geometry or {}
+    return UrlHandoff(
+        url=url,
+        kind=kind,
+        size=size,
+        width=geometry.get("width"),
+        height=geometry.get("height"),
+        duration=geometry.get("duration"),
+    )
 
 
 # Сколько помнить отказ CDN. Проверено: CDN TikTok отдаёт ссылку на видео любому
@@ -172,4 +197,27 @@ def find_format_url(video_info: dict | None, format_id: str) -> str | None:
     for candidate in video_info.get("formats") or []:
         if str(candidate.get("format_id")) == format_id:
             return candidate.get("url") or None
+    return None
+
+
+def find_format_geometry(video_info: dict | None, format_id: str) -> dict | None:
+    """Размеры выбранного формата из ответа yt-dlp.
+
+    По этому пути файл не скачивается, поэтому ffprobe применить не к чему, —
+    но yt-dlp уже сообщил и размеры кадра, и длительность. Составные форматы
+    отбрасываются по той же причине, что и в ``find_format_url``.
+    """
+    if not video_info or "+" in format_id:
+        return None
+    for candidate in video_info.get("formats") or []:
+        if str(candidate.get("format_id")) != format_id:
+            continue
+        width, height = candidate.get("width"), candidate.get("height")
+        if not isinstance(width, int) or not isinstance(height, int):
+            return None
+        try:
+            duration = int(float(video_info.get("duration") or 0))
+        except (TypeError, ValueError):
+            duration = 0
+        return {"width": width, "height": height, "duration": max(0, duration)}
     return None

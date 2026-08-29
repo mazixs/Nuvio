@@ -10,7 +10,7 @@ import yt_dlp
 from config import MAX_FILE_SIZE, MAX_VIDEO_DURATION
 from utils.download_report import record_delivered_format
 from utils.logger import setup_logger
-from utils.media_processor import convert_webm_to_mp4
+from utils.media_processor import ensure_ios_compatible_video
 from utils.temp_file_manager import get_temp_file_path
 from utils.ytdlp_common import (
     apply_network_opts,
@@ -153,20 +153,13 @@ def _resolve_output_template(session_id: str, output_dir: Path | None) -> Path:
     return output_dir / "%(title)s.%(ext)s"
 
 
-def _convert_webm_if_needed(downloaded_file: Path, session_id: str) -> Path:
-    if downloaded_file.suffix.lower() != ".webm":
-        return downloaded_file
-    logger.info(f"Обнаружен webm файл, конвертируем в mp4: {downloaded_file}")
-    try:
-        converted = convert_webm_to_mp4(downloaded_file, session_id)
-        logger.info(f"Конвертация webm в mp4 завершена: {converted}")
-        return converted
-    except Exception as e:
-        logger.warning(
-            f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.",
-            exc_info=True,
-        )
-        return downloaded_file
+def _ensure_ios_compatible(downloaded_file: Path, session_id: str) -> Path:
+    """Проверяет кодек готового файла и перекодирует непригодный (ADR-002).
+
+    Проверки расширения `.webm`, стоявшей здесь раньше, недостаточно: кодек
+    определяется потоком, а не именем файла.
+    """
+    return ensure_ios_compatible_video(downloaded_file, session_id, "rutube_vk")
 
 
 def _download_video(
@@ -201,7 +194,7 @@ def _download_video(
                 raise Exception("Файл не был загружен.")
             logger.info(f"Видео успешно скачано: {downloaded_file}")
             record_delivered_format(session_id, info.get("format_id"))
-            downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
+            downloaded_file = _ensure_ios_compatible(downloaded_file, session_id)
             return finalize_downloaded_file(downloaded_file, force_local)
 
     return execute_with_backoff(f"Скачивание видео {url}", _download)

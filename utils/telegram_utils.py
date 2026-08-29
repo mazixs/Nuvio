@@ -57,6 +57,7 @@ from utils.youtube_utils import (
 from utils.temp_file_manager import create_temp_dir, cleanup_temp_files
 from utils.callback_fsm import CallbackEvent, SessionStore
 from utils.file_delivery import media_kind_for_suffix
+from utils.media_processor import get_video_geometry
 from utils.platform_actions import (
     DIRECT_VIDEO_CACHE_KEY,
     cache_key_for_format_selection,
@@ -71,6 +72,7 @@ from utils.url_delivery import (
     HandoffRefusals,
     PhotoPostHandoff,
     UrlHandoff,
+    find_format_geometry,
     find_format_url,
     plan_url_handoff,
 )
@@ -1165,6 +1167,11 @@ async def _deliver_cached_video(
 ) -> bool:
     """Отправляет видео из кэша по file_id.
 
+    Размеры здесь не передаются намеренно: при отправке по `file_id` Telegram
+    берёт атрибуты сохранённого документа, и переданные значения игнорирует.
+    Записи, снятые до ADR-002, поэтому и не чинятся правкой кода — их
+    выбрасывает разовая чистка в `utils/video_cache.py`.
+
     Returns:
         bool: True, если файл доставлен; False, если записи нет или file_id устарел.
     """
@@ -1295,8 +1302,23 @@ async def _deliver_by_url(
     try:
         match plan.kind:
             case "video":
+                # Размеры сюда приходят из метаданных источника: файл на этом
+                # пути не скачивается, померить его нечем. Источник их знает не
+                # всегда — тогда отправка идёт как раньше (ADR-002).
+                geometry = {
+                    key: value
+                    for key, value in (
+                        ("width", plan.width),
+                        ("height", plan.height),
+                        ("duration", plan.duration),
+                    )
+                    if value
+                }
                 message = await query.message.reply_video(
-                    video=plan.url, caption=None, supports_streaming=True
+                    video=plan.url,
+                    caption=None,
+                    supports_streaming=True,
+                    **geometry,
                 )
             case "audio":
                 message = await query.message.reply_audio(audio=plan.url, caption=None)
@@ -2572,6 +2594,9 @@ async def _handle_main_callback(
                         ),
                         "video",
                         choice.total_size,
+                        geometry=find_format_geometry(
+                            session_data.get("video_info"), choice.format_id
+                        ),
                     )
                     if await _deliver_plan(
                         query,
@@ -2858,6 +2883,9 @@ async def _handle_format_callback(
                     find_format_url(session_data.get("video_info"), format_id),
                     "video",
                     (selected or {}).get("filesize"),
+                    geometry=find_format_geometry(
+                        session_data.get("video_info"), format_id
+                    ),
                 )
                 if await _deliver_plan(
                     query, context, session_token, session_data, plan, cache_format_id
@@ -3388,10 +3416,34 @@ async def send_single_file(
         )
         return False
 
+    media_kind = media_kind_for_suffix(file_path.suffix.lower())
+    # Размеры измеряются один раз до попыток: файл между ними не меняется.
+    # Без них Telegram на тяжёлых файлах записывает `320x320`, и плеер на iOS
+    # рисует видео по этому квадрату — ADR-002. Сбой пробы не повод отменять
+    # отправку, поэтому пустой результат просто означает «как раньше».
+    video_kwargs: dict = {}
+    if media_kind == "video":
+        try:
+            geometry = await run_blocking(
+                get_video_geometry,
+                file_path,
+                description="get_video_geometry",
+                session_id=session_data.get("session_id"),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Не удалось измерить видео %s: %s", file_path, e)
+            geometry = None
+        if geometry:
+            video_kwargs = geometry
+        else:
+            logger.warning(
+                "Размеры видео %s неизвестны, отправляем без них: Telegram может "
+                "записать 320x320",
+                file_path,
+            )
+
     for attempt in range(1, max_retries + 1):
         try:
-            file_ext = file_path.suffix.lower()
-            media_kind = media_kind_for_suffix(file_ext)
             message = None
             telegram_file = (
                 file_path.resolve()
@@ -3407,6 +3459,7 @@ async def send_single_file(
                         supports_streaming=True,
                         write_timeout=1800,
                         read_timeout=1800,
+                        **video_kwargs,
                     )
                 elif media_kind == "audio":
                     message = await query.message.reply_audio(

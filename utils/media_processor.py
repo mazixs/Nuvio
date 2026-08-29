@@ -17,6 +17,11 @@ TELEGRAM_READY_VIDEO_CODECS = frozenset({"h264", "avc1"})
 # MP3 сюда не входит: MP3-дорожка внутри MP4 ненадёжно играется плеером
 # Telegram на iOS, поэтому её всегда перекодируем в AAC.
 TELEGRAM_READY_AUDIO_CODECS = frozenset({"aac"})
+# Форматы пикселей, которые поддерживаются повсеместно. Требование
+# консервативное, а не выстраданное: замер показал, что H.264 профиля High 10
+# на iPhone проигрывается нормально, но поддержка 10 бит зависит от устройства и
+# версии системы, а 8 бит работают везде. Стоимость фиксации нулевая (ADR-002).
+TELEGRAM_READY_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
 
 # Результат проверки FFmpeg кэшируется: бинарь не появляется и не исчезает
 # в течение жизни процесса, а проверка вызывается на каждую операцию.
@@ -150,6 +155,155 @@ def get_audio_codec(file_path: Path) -> str | None:
     return _probe_codec(file_path, "a:0")
 
 
+def _probe_video_stream(file_path: Path) -> tuple[dict, dict] | None:
+    """Возвращает первый видеопоток и раздел ``format`` из ffprobe.
+
+    Одна проба на все вопросы о видео: и геометрия, и кодек с битностью берутся
+    из неё, чтобы не платить запуском процесса дважды.
+    """
+    if not check_ffmpeg_installed():
+        return None
+
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_streams",
+        "-show_format",
+        "-print_format",
+        "json",
+        str(file_path),
+    ]
+
+    try:
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise Exception("FFprobe процесс превысил лимит времени в 15 секунд.")
+
+        if process.returncode != 0:
+            logger.error(f"Ошибка FFprobe при разборе видеопотока: {stderr}")
+            return None
+
+        data = json.loads(stdout)
+        streams = data.get("streams") or []
+        if not streams:
+            return None
+        return streams[0], data.get("format") or {}
+    except Exception as e:
+        logger.error(
+            f"Не удалось разобрать видеопоток файла {file_path}: {e}", exc_info=True
+        )
+        return None
+
+
+def _ratio(value: object) -> tuple[int, int] | None:
+    """Разбирает запись вида ``4:3``. ``0:1`` означает «неизвестно»."""
+    parts = str(value or "").split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        num, den = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if num <= 0 or den <= 0:
+        return None
+    return num, den
+
+
+def _rotation_degrees(stream: dict) -> int:
+    """Угол поворота из матрицы отображения или из устаревшего тега."""
+    for side_data in stream.get("side_data_list") or []:
+        if "rotation" in side_data:
+            try:
+                return int(float(side_data["rotation"])) % 360
+            except (TypeError, ValueError):
+                continue
+    try:
+        return int(float((stream.get("tags") or {}).get("rotate", 0))) % 360
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_video_geometry(file_path: Path) -> dict | None:
+    """Размеры для показа и длительность — то, что нужно отдать Telegram.
+
+    Bot API эти поля не вычисляет, а подставляет ноль, после чего размеры
+    пытается определить сервер Telegram — и на тяжёлых файлах записывает
+    `320x320`. Плеер на iOS рисует строго по этим атрибутам, поэтому 16:9
+    сжимается по горизонтали, а 9:16 растягивается по ширине. Разбор —
+    `docs/technical/adr-002-ios-video-compatibility.md`.
+
+    Возвращаются именно размеры **для показа**: учитываются матрица поворота и
+    неквадратный пиксель, иначе в документ уедет та же ложь, из-за которой
+    дефект и возник.
+
+    Returns:
+        dict | None: ``{"width", "height", "duration"}`` либо None, если
+        измерить не удалось — тогда отправка идёт без размеров, как раньше.
+    """
+    probed = _probe_video_stream(file_path)
+    if not probed:
+        return None
+    stream, container = probed
+
+    width, height = stream.get("width"), stream.get("height")
+    if not isinstance(width, int) or not isinstance(height, int):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+
+    sar = _ratio(stream.get("sample_aspect_ratio"))
+    if sar and sar != (1, 1):
+        width = max(1, round(width * sar[0] / sar[1]))
+
+    if _rotation_degrees(stream) in (90, 270):
+        width, height = height, width
+
+    duration = 0
+    try:
+        duration = int(float(container.get("duration") or 0))
+    except (TypeError, ValueError):
+        duration = 0
+
+    return {"width": width, "height": height, "duration": max(0, duration)}
+
+
+def needs_ios_reencode(file_path: Path) -> bool:
+    """Нужно ли перекодировать файл, чтобы он проигрался на iOS.
+
+    Замерено на iPhone: VP9 и AV1 дают чёрный экран при играющем звуке,
+    H.264 играет — и 8-битный, и 10-битный. Проверяется пара «кодек + битность»
+    у **готового файла**: расширению верить нельзя, потому что
+    `merge_output_format: "mp4"` кладёт VP9 в MP4. Битность включена в проверку
+    консервативно, наблюдаемого дефекта за ней не стоит.
+
+    Неизвестный результат пробы трактуется как «перекодировать не нужно»:
+    отправка файла важнее догадки, а лишнее перекодирование стоит секунд.
+    """
+    probed = _probe_video_stream(file_path)
+    if not probed:
+        return False
+    stream, _ = probed
+
+    codec = str(stream.get("codec_name") or "").lower()
+    pix_fmt = str(stream.get("pix_fmt") or "").lower()
+    if not codec:
+        return False
+    if codec not in TELEGRAM_READY_VIDEO_CODECS:
+        return True
+    # Битность известна не всегда; неизвестную считаем пригодной по той же
+    # причине, что и неизвестный кодек.
+    return bool(pix_fmt) and pix_fmt not in TELEGRAM_READY_PIX_FMTS
+
+
 def has_audio_stream(file_path: Path) -> bool:
     """
     Проверяет наличие аудиопотока в медиафайле с помощью ffprobe.
@@ -225,7 +379,13 @@ def _build_mp4_command(
     elif video_ready:
         command += ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k"]
     else:
+        # `-pix_fmt yuv420p` держит выход 8-битным: libx264 иначе наследует
+        # формат пикселей источника, и `vp9/Profile 2/yuv420p10le` превращается
+        # в `h264/High 10/yuv420p10le`. Мера консервативная — High 10 на iPhone
+        # проигрался нормально, — но 8 бит поддерживаются везде, а фиксация не
+        # стоит ничего (ADR-002).
         command += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+        command += ["-pix_fmt", "yuv420p"]
         command += ["-c:a", "copy"] if audio_ready else ["-c:a", "aac", "-b:a", "128k"]
 
     command += ["-movflags", "+faststart", "-y", str(output_path)]
@@ -395,6 +555,46 @@ def extract_audio_copy(
         e.add_note(f"input_path={input_path}, session_id={session_id}")
         logger.error(f"Ошибка при извлечении звука: {e}", exc_info=True)
         raise
+
+
+def ensure_ios_compatible_video(
+    video_path: Path, session_id: str, source: str
+) -> Path:
+    """Приводит видео к H.264 8 бит, если оно пришло в другом виде.
+
+    Одна реализация на все платформы намеренно: расходиться им нельзя. Раньше
+    проверка кодека жила только в пути TikTok и Instagram и ловила один лишь
+    HEVC, а YouTube отдавал VP9 и AV1 внутри MP4 вообще без проверки — отсюда и
+    шли чёрные экраны на iOS (ADR-002).
+
+    Сбой пробы или перекодирования не должен ломать доставку: пользователю
+    лучше получить файл с риском, чем не получить ничего, поэтому в этом случае
+    возвращается исходный путь.
+    """
+    try:
+        if not needs_ios_reencode(video_path):
+            return video_path
+
+        logger.info(
+            "Видео (%s) не проигрывается плеером Telegram на iOS, "
+            "перекодируем в H.264 8 бит: %s",
+            source,
+            video_path,
+        )
+        converted = convert_to_format(video_path, "mp4", session_id)
+        if video_path.exists() and video_path != converted:
+            video_path.unlink()
+        logger.info("Перекодирование в H.264 завершено: %s", converted)
+        return converted
+    except Exception as e:
+        logger.warning(
+            "Не удалось проверить или перекодировать видео (%s): %s. "
+            "Отправляем исходный файл.",
+            source,
+            e,
+            exc_info=True,
+        )
+        return video_path
 
 
 def convert_webm_to_mp4(input_path: Path, session_id: str) -> Path:

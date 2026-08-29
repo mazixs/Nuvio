@@ -103,6 +103,17 @@ def classify_internal_error_category(platform: str, error_msg: str) -> str:
             "forbidden",
             "blocked",
             "unavailable",
+            # Формулировки yt-dlp для недоступного поста Instagram. Настоящий
+            # ответ платформы (`{"message":"Media not found or unavailable"}`)
+            # yt-dlp проглатывает, наружу отдавая только голый `HTTP Error 400`,
+            # в котором ни одного признака выше нет. Из-за этого удалённый или
+            # закрытый рил уходил в UNKNOWN, то есть в краш-репорт с трейсбеком
+            # и побудкой админов: замерено пять `IG-UNKNOWN` при нуле
+            # `IG-ACCESS` (ADR-002).
+            "empty media response",
+            "not granting access",
+            "video info extraction failed",
+            "media not found",
             "ограничил доступ",
             "ограничения",
             "блокировки",
