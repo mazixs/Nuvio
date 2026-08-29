@@ -30,10 +30,17 @@ def is_allowed_instagram_media_url(url: str) -> bool:
 
 @dataclass(frozen=True)
 class InstagramFastMedia:
-    """Прямая ссылка и метаданные, достаточные для отправки без обработки."""
+    """Прямая ссылка и метаданные, достаточные для отправки без обработки.
+
+    Размеры нужны для отправки: по этому пути файл не скачивается, померить его
+    нечем, а `video_versions` сообщает их рядом со ссылкой (ADR-002).
+    """
 
     video_url: str
     title: str
+    width: int | None = None
+    height: int | None = None
+    duration: int | None = None
 
 
 def _extract_caption_text(caption: Any) -> str:
@@ -60,6 +67,18 @@ def _first_video_url(media: dict[str, Any]) -> str | None:
     return str(direct_url) if direct_url else None
 
 
+def _first_video_dimensions(media: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Размеры кадра из той же записи `video_versions`, что дала ссылку."""
+    for version in media.get("video_versions") or []:
+        if not isinstance(version, dict) or not version.get("url"):
+            continue
+        width, height = version.get("width"), version.get("height")
+        if isinstance(width, int) and isinstance(height, int):
+            return width, height
+        return None, None
+    return None, None
+
+
 def parse_instagram_fast_media(media: dict[str, Any]) -> InstagramFastMedia:
     """Разбирает элемент GraphQL-ответа в прямую ссылку на видео.
 
@@ -80,7 +99,16 @@ def parse_instagram_fast_media(media: dict[str, Any]) -> InstagramFastMedia:
             f"ссылка на видео вне allowlist разрешённых доменов: {video_url}"
         )
 
+    width, height = _first_video_dimensions(media)
+    try:
+        duration = int(float(media.get("video_duration") or 0)) or None
+    except (TypeError, ValueError):
+        duration = None
+
     return InstagramFastMedia(
         video_url=video_url,
         title=_extract_caption_text(media.get("caption")),
+        width=width,
+        height=height,
+        duration=duration,
     )

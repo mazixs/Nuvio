@@ -18,7 +18,7 @@ from utils.cookie_workfile import working_cookie_file
 from utils.download_report import record_delivered_format
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
-from utils.media_processor import convert_webm_to_mp4
+from utils.media_processor import ensure_ios_compatible_video
 from utils.ytdlp_runtime import extract_cli_output_path, run_yt_dlp_cli
 from utils.subtitles import srt_to_text
 from utils.ytdlp_common import (
@@ -261,22 +261,14 @@ def get_available_formats(
     }
 
 
-def _convert_webm_if_needed(downloaded_file: Path, session_id: str) -> Path:
-    """Конвертирует webm в mp4 для совместимости Telegram."""
-    if downloaded_file.suffix.lower() != ".webm":
-        return downloaded_file
+def _ensure_ios_compatible(downloaded_file: Path, session_id: str) -> Path:
+    """Проверяет кодек готового файла и перекодирует непригодный.
 
-    logger.info(f"Обнаружен webm файл, конвертируем в mp4: {downloaded_file}")
-    try:
-        converted = convert_webm_to_mp4(downloaded_file, session_id)
-        logger.info(f"Конвертация webm в mp4 завершена: {converted}")
-        return converted
-    except Exception as e:
-        logger.warning(
-            f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.",
-            exc_info=True,
-        )
-        return downloaded_file
+    Стоявшая здесь раньше проверка расширения `.webm` не срабатывала никогда:
+    `merge_output_format: "mp4"` заставляет yt-dlp класть VP9 и AV1 в MP4, и
+    файл приезжал с расширением `.mp4`. Смотреть надо на сам поток — ADR-002.
+    """
+    return ensure_ios_compatible_video(downloaded_file, session_id, "youtube")
 
 
 def _resolve_output_template(session_id: str, output_dir: Path | None) -> Path:
@@ -384,7 +376,7 @@ def _download_with_cli_fallback(
         raise RuntimeError("CLI fallback yt-dlp не вернул путь к итоговому файлу.")
 
     if extract_audio_codec != "mp3":
-        downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
+        downloaded_file = _ensure_ios_compatible(downloaded_file, session_id)
     return finalize_downloaded_file(downloaded_file, force_local)
 
 
@@ -477,7 +469,7 @@ def download_video(
             # молча подменяет селектор, и под запрошенным `format_id` в кэш мог
             # осесть файл совсем другого разрешения.
             record_delivered_format(session_id, info.get("format_id"))
-            downloaded_file = _convert_webm_if_needed(downloaded_file, session_id)
+            downloaded_file = _ensure_ios_compatible(downloaded_file, session_id)
             result = finalize_downloaded_file(downloaded_file, force_local)
             logger.info("Видео готово к выдаче: %s", result)
             return result

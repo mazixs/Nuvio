@@ -16,6 +16,23 @@ from utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+# Версия контракта доставки видео. Растёт, когда меняется то, что записано в
+# самом документе Telegram, а не в нашей строке кэша.
+#
+# 1 — ADR-002: до этой версии бот отправлял видео без `width`/`height`, и на
+#     тяжёлых файлах Telegram записывал в документ `320x320`. Такие записи
+#     правкой кода не чинятся, потому что пересылка по `file_id` берёт атрибуты
+#     сохранённого документа.
+DELIVERY_CONTRACT_VERSION = 1
+
+# Ключи, под которыми в кэше лежит видео. Совпадают с `utils/platform_actions.py`
+# и продублированы здесь намеренно: импорт ради двух строк связал бы кэш с
+# модулем пользовательских действий, а видеоключ вида `combined:{format_id}`
+# всё равно проверяется отдельно, по префиксу.
+DIRECT_VIDEO_CACHE_KEY = "direct_video"
+TG_VIDEO_CACHE_KEY = "tg_video"
+
+
 @dataclass
 class CachedVideo:
     """Закэшированное видео в Telegram."""
@@ -140,6 +157,39 @@ class TelegramVideoCache:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cached_at ON video_cache(cached_at)"
+            )
+
+            self._drop_stale_video_documents(conn)
+
+    def _drop_stale_video_documents(self, conn: sqlite3.Connection) -> None:
+        """Выбрасывает видеозаписи, сделанные до смены контракта доставки.
+
+        Пересылка по `file_id` берёт размеры из сохранённого документа, а не из
+        нашей строки, поэтому записи, снятые до ADR-002, правкой кода не
+        чинятся: в документе уже записано `320x320`. Без этой чистки сломанное
+        видео приезжало бы до конца TTL, то есть 90 дней.
+
+        Звук не трогаем: размеров он не несёт, а лишний сброс — это лишние
+        скачивания. Отметка хранится в `PRAGMA user_version`, поэтому чистка
+        отрабатывает ровно один раз на базу.
+        """
+        stored = conn.execute("PRAGMA user_version").fetchone()[0]
+        if stored >= DELIVERY_CONTRACT_VERSION:
+            return
+
+        cursor = conn.execute(
+            "DELETE FROM video_cache "
+            "WHERE format_id IN (?, ?) OR format_id LIKE 'combined:%'",
+            (DIRECT_VIDEO_CACHE_KEY, TG_VIDEO_CACHE_KEY),
+        )
+        # PRAGMA не принимает параметры, а значение здесь — наша же константа.
+        conn.execute(f"PRAGMA user_version = {DELIVERY_CONTRACT_VERSION:d}")
+        if cursor.rowcount:
+            logger.info(
+                "Кэш видео: выброшено %d записей контракта версии %d — в их "
+                "документах Telegram записаны неверные размеры (ADR-002)",
+                cursor.rowcount,
+                stored,
             )
 
     def get(

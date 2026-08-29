@@ -29,10 +29,8 @@ from utils.ytdlp_common import (
     output_capture_opts,
 )
 from utils.media_processor import (
-    convert_webm_to_mp4,
-    convert_to_format,
+    ensure_ios_compatible_video,
     extract_audio_copy,
-    get_video_codec,
     has_audio_stream,
 )
 from utils.fast_path import FastPathUnavailable
@@ -586,38 +584,14 @@ def _guess_extension(url: str, default_ext: str) -> str:
 def _ensure_ios_compatible_video(
     video_path: Path, session_id: str, source: str
 ) -> Path:
-    """Приводит видео к H.264, если оно пришло в HEVC/H.265.
+    """Приводит видео к виду, который проигрывает плеер Telegram на iOS.
 
-    Плеер Telegram на iOS искажает пропорции HEVC-видео и теряет звук — это
-    требование ADR-001, общее для всех путей скачивания. Сбой проверки или
-    перекодирования не должен ломать доставку, поэтому в этом случае
-    возвращается исходный файл.
+    Требование ADR-001 (HEVC ломает пропорции и звук) осталось в силе, но
+    расширено до ADR-002: непригодны также VP9, AV1 и H.264 профиля High 10.
+    Решение принимает общая для всех платформ функция — расходиться проверкам
+    нельзя. Имя оставлено прежним: на него опираются существующие тесты.
     """
-    try:
-        codec = get_video_codec(video_path)
-        if codec not in ("hevc", "h265"):
-            return video_path
-
-        logger.info(
-            "Обнаружен HEVC/H.265 видеофайл (%s), конвертируем в H.264 для "
-            "совместимости с iOS: %s",
-            source,
-            video_path,
-        )
-        converted_file = convert_to_format(video_path, "mp4", session_id)
-        if video_path.exists() and video_path != converted_file:
-            video_path.unlink()
-        logger.info("Конвертация HEVC в H.264 завершена: %s", converted_file)
-        return converted_file
-    except Exception as e:
-        logger.warning(
-            "Не удалось проверить или конвертировать HEVC в H.264 (%s): %s. "
-            "Используем исходный файл.",
-            source,
-            e,
-            exc_info=True,
-        )
-        return video_path
+    return ensure_ios_compatible_video(video_path, session_id, source)
 
 
 def _download_remote_file(
@@ -996,7 +970,16 @@ def resolve_instagram_video_handoff(url: str) -> UrlHandoff | None:
         return None
 
     size = probe_remote_size(media.video_url, referer="https://www.instagram.com/")
-    return plan_url_handoff(media.video_url, "video", size)
+    return plan_url_handoff(
+        media.video_url,
+        "video",
+        size,
+        geometry={
+            "width": media.width,
+            "height": media.height,
+            "duration": media.duration,
+        },
+    )
 
 
 def download_instagram_video_fast(
@@ -2148,20 +2131,9 @@ def download_tiktok_video(
                     logger.info(f"Видео успешно скачано и проверено: {downloaded_file}")
                     record_delivered_format(session_id, info_download.get("format_id"))
 
-                    # Конвертация webm → mp4 для совместимости Telegram
-                    if downloaded_file.suffix.lower() == ".webm":
-                        logger.info(
-                            f"Обнаружен webm файл, конвертируем в mp4: {downloaded_file}"
-                        )
-                        try:
-                            downloaded_file = convert_webm_to_mp4(downloaded_file, session_id)
-                            logger.info(f"Конвертация webm в mp4 завершена: {downloaded_file}")
-                        except Exception as e:
-                            logger.warning(
-                                f"Не удалось конвертировать webm в mp4: {e}. Используем исходный файл.",
-                                exc_info=True,
-                            )
-
+                    # Отдельной ветки для webm здесь нет намеренно: в этом
+                    # контейнере всегда лежит VP8, VP9 или AV1, и проверка
+                    # кодека ниже покрывает этот случай целиком.
                     downloaded_file = _ensure_ios_compatible_video(
                         downloaded_file, session_id, "TikTok"
                     )

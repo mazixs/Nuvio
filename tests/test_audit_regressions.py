@@ -1955,34 +1955,31 @@ def test_create_tiktok_ytdl_modifies_formats():
 
 
 def test_hevc_video_conversion_triggered(monkeypatch, tmp_path):
-    # Мокаем get_video_codec, чтобы он возвращал 'hevc'
-    monkeypatch.setattr(tiktok_instagram_utils, "get_video_codec", lambda path: "hevc")
+    """HEVC обязан перекодироваться, а исходник — удаляться (ADR-001).
 
-    # Списки вызовов
+    Решение о перекодировании переехало в `media_processor` и расширилось до
+    VP9, AV1 и H.264 High 10 (ADR-002), поэтому подменяется общий шов. Раньше
+    этот тест повторял логику у себя внутри и настоящий код не трогал вовсе.
+    """
+    from utils import media_processor
+
     converted_files = []
 
     def mock_convert_to_format(input_path, output_format, session_id):
         converted_files.append(input_path)
-        # Возвращаем путь к новому файлу
         out_file = input_path.parent / f"converted_{input_path.name}"
         out_file.write_bytes(b"converted_data")
         return out_file
 
-    monkeypatch.setattr(tiktok_instagram_utils, "convert_to_format", mock_convert_to_format)
+    monkeypatch.setattr(media_processor, "needs_ios_reencode", lambda path: True)
+    monkeypatch.setattr(media_processor, "convert_to_format", mock_convert_to_format)
 
-    # Создадим временный файл, имитирующий скачанный hevc файл
     hevc_file = tmp_path / "hevc_video.mp4"
     hevc_file.write_bytes(b"hevc_data")
 
-    downloaded_file = hevc_file
-    session_id = "test_sess"
-
-    codec = tiktok_instagram_utils.get_video_codec(downloaded_file)
-    if codec in ("hevc", "h265"):
-        converted_file = tiktok_instagram_utils.convert_to_format(downloaded_file, "mp4", session_id)
-        if downloaded_file.exists() and downloaded_file != converted_file:
-            downloaded_file.unlink()
-        downloaded_file = converted_file
+    downloaded_file = tiktok_instagram_utils._ensure_ios_compatible_video(
+        hevc_file, "test_sess", "TikTok"
+    )
 
     assert downloaded_file.name == "converted_hevc_video.mp4"
     assert not hevc_file.exists()
