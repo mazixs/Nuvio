@@ -2,8 +2,8 @@
 
 # Инструменты разработки и CI
 pytest==9.1.1
-coverage==7.15.4
-ruff==0.16.3
+coverage==7.16.0
+ruff==0.16.5
 
 # TestClient для FastAPI/Starlette
-httpx2==2.10.0
+httpx2==2.12.0
