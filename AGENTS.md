@@ -64,7 +64,7 @@ Nuvio/
 │   ├── media_processor.py       # FFmpeg: конвертация webm→mp4, извлечение аудио, сжатие
 │   ├── video_cache.py           # SQLite-кэш file_id (WAL mode, TTL 90 дней)
 │   ├── analytics_db.py          # SQLite-аналитика: таблицы users, events (WAL mode)
-│   ├── ytdlp_runtime.py         # Автообновление yt-dlp, CLI fallback
+│   ├── ytdlp_runtime.py         # Версия yt-dlp и CLI fallback
 │   ├── cookie_manager.py        # Админский интерфейс загрузки cookies через Telegram
 │   ├── cookie_health.py         # Валидация и проверка здоровья cookies
 │   ├── logger.py                # Настройка логирования (rotating file handler, 10MB, 5 backups)
