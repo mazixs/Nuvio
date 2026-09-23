@@ -20,7 +20,7 @@ def test_environment_template_contains_local_bot_api_credentials():
     assert "ADMIN_IDS=" in template
     assert "GOKAPI" not in template
     assert "python-dotenv" not in template
-    assert "YTDLP_AUTO_UPDATE=false" in template
+    assert "YTDLP_AUTO_UPDATE" not in template
 
 
 @pytest.mark.unit
@@ -60,7 +60,6 @@ def test_direct_dependencies_are_pinned_to_reviewed_versions():
 
     expected = {
         "python-telegram-bot[job-queue]==22.8",
-        "yt-dlp[default]==2026.8.18.122307.dev0",
         "curl_cffi==0.16.0",
         "httpx==0.28.1",
         "python-dotenv==1.2.2",
@@ -73,6 +72,7 @@ def test_direct_dependencies_are_pinned_to_reviewed_versions():
 
     for dependency in expected:
         assert dependency in requirements
+    assert requirements.count("yt-dlp[default]==") == 1
 
 
 @pytest.mark.unit

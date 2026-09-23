@@ -27,6 +27,10 @@ RUN apt-get update && \
         util-linux && \
     rm -rf /var/lib/apt/lists/*
 
+# yt-dlp использует Deno для решения JavaScript-задач YouTube. Без него часть
+# дорожек может отсутствовать даже при установленном yt-dlp-ejs.
+COPY --from=denoland/deno:bin-2.9.7@sha256:bc5aa4466e21b6d3021226a85ba2e1911f7c386254d97b9d797903ab74edace2 /deno /usr/local/bin/deno
+
 WORKDIR /app
 
 COPY requirements.txt .

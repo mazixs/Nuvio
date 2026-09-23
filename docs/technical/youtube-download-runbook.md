@@ -110,7 +110,6 @@ docker compose exec bot python -m yt_dlp \
   --http-chunk-size 10M --concurrent-fragments 4 \
   --socket-timeout 40 --retries 5 --fragment-retries 5 \
   --skip-unavailable-fragments --no-continue --no-playlist \
-  --remote-components ejs:github \
   -o '/app/media/probe.%(ext)s' 'ССЫЛКА'
 ```
 
@@ -193,48 +192,32 @@ docker compose exec bot python -c "import httpx; print(httpx.get('https://api.ip
 
 ---
 
-## 4. Как накатить свежий yt-dlp
+## 4. Как обновить yt-dlp
 
-### 4.1. Быстро, на стенде
+Текущая закрепленная версия - `2026.9.16.232951.dev0`. Обновление работающего
+контейнера через pip удалено: оно меняло файлы на диске после импорта пакета,
+поэтому отчет о версии мог не совпадать с исполняемым кодом.
 
-В `.secrets/.env`:
-
-```
-YTDLP_AUTO_UPDATE=true
-YTDLP_RELEASE_CHANNEL=nightly
-```
-
-затем `docker compose --env-file .secrets/.env up -d bot`. Бот обновляет yt-dlp
-при старте (`ensure_latest_yt_dlp` в `utils/ytdlp_runtime.py`) и пишет версию в
-лог. Правка живёт внутри контейнера и умирает при пересборке — это способ
-проверить гипотезу за минуту, а не починить прод.
-
-### 4.2. Правильно, через пин версии
-
-1. Поднять версию в `requirements.in`.
-2. Перекомпилировать оба файла с хешами:
+1. Указать точную версию, опубликованную на PyPI:
    ```bash
-   uv pip compile --python-version 3.14 --generate-hashes --output-file requirements.txt requirements.in
-   uv pip compile --python-version 3.14 --generate-hashes --output-file requirements-dev.txt requirements-dev.in
+   .venv/bin/python scripts/update_ytdlp.py 2026.9.16.232951.dev0
    ```
-3. Поправить версию там, где она продублирована текстом, иначе упадут
-   контрактные тесты и разъедется документация: `tests/test_environment_template.py`,
-   `AGENTS.md`, `docs/PRD.md`.
-4. Прогнать `pytest` целиком.
-5. Влить в `main` и проставить тег `v*`: образ в GHCR публикуется только по тегу,
-   push в `main` его не собирает.
-6. На сервере:
-   ```bash
-   docker compose --env-file .secrets/.env pull
-   docker compose --env-file .secrets/.env up -d
-   ```
+   Команда меняет pin, оба lock-файла с хешами, запускает линтер и тесты,
+   показывает diff. При ошибке возвращает три файла в исходное состояние.
+2. Проверить PR и CI, включая smoke готового образа. Слить в `main`, создать
+   тег `v*`, дождаться публикации canonical digest в GHCR.
+3. Записать текущий digest на сервере для возврата. Загрузить новый образ и
+   пересоздать сервис: `docker compose --env-file .secrets/.env pull bot` и
+   `docker compose --env-file .secrets/.env up -d bot`.
+4. Проверить версию yt-dlp в контейнере, Deno, polling бота и канарейку. При
+   регрессии загрузить прежний digest и пометить его локальным тегом `rollback`, затем
+   выполнить `TAG=rollback docker compose --env-file .secrets/.env up -d bot`
+   и повторить проверку. Изменение pin в репозитории само по себе не обновляет сервер.
 
-### 4.3. Пин на nightly — временный
-
-`2026.8.18.122307.dev0` — предрелизная версия, взятая ради одной правки клиента.
-Когда выйдет стабильная с этой правкой, пин надо вернуть на неё тем же порядком
-из §4.2: nightly ломается чаще, и держать на ней прод дольше необходимого не
-стоит.
+Nightly выбирается, если стабильная версия не справляется с YouTube. После
+появления исправленной стабильной версии ее нужно проверить тем же путем и
+закрепить точным номером. Канал `master` без неизменяемого артефакта не
+поддерживается.
 
 ---
 
@@ -246,8 +229,8 @@ YTDLP_RELEASE_CHANNEL=nightly
 | `utils/youtube_utils.py` | каскад попыток «без cookies → с cookies → CLI», non-HLS фолбек после 403, `PO_TOKEN_ONLY_FORMAT_IDS`, хвост stderr CLI-запуска |
 | `utils/public_errors.py` | `youtube_error_code()` и `is_media_forbidden_error()` — граница между `MEDIA_FORBIDDEN` и `ACCESS_RESTRICTED` |
 | `utils/download_report.py` | хвост вывода yt-dlp и фактически скачанный формат на сессию — попадают в краш-репорт и в ключ кэша |
-| `utils/canary.py` | плановая проверка YouTube продакшн-опциями мимо кэша и автообновление yt-dlp при провале |
-| `utils/ytdlp_runtime.py` | версия, автообновление по каналам, `run_yt_dlp_cli()`, `extract_cli_output_path()` |
+| `utils/canary.py` | плановая проверка YouTube производственными опциями мимо кэша и уведомление при провале |
+| `utils/ytdlp_runtime.py` | установленная версия, `run_yt_dlp_cli()`, `extract_cli_output_path()` |
 | `utils/telegram_utils.py` | `_log_platform_failure()` — строка `USER_FLOW_FAIL`; `_should_notify_admins_platform_failure()` — кто попадает в краш-репорт; `_notify_admins_crash()` — его состав |
 
 Пользовательская сторона проблемы и короткие ответы на «что сказать

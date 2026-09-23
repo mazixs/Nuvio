@@ -1,0 +1,29 @@
+name: YouTube smoke
+
+on:
+  pull_request:
+    paths:
+      - "requirements.in"
+      - "requirements.txt"
+      - "Dockerfile"
+      - "utils/youtube_utils.py"
+      - "utils/ytdlp_common.py"
+      - "utils/canary.py"
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extractor:
+    name: Проверка YouTube в свежем образе
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Сборка образа
+        run: docker build --tag nuvio:youtube-smoke .
+      - name: Локальные компоненты и полная загрузка YouTube
+        run: docker run --rm nuvio:youtube-smoke python -m scripts.check_media_runtime --download

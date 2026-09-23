@@ -13,6 +13,8 @@ from telegram.ext import ContextTypes
 from config import ADMIN_IDS, SECRETS_DIR
 from utils.analytics_db import get_all_user_ids, track_event
 from utils.cookie_health import CookieHealthResult, check_all_cookie_health
+from utils.cookie_workfile import working_cookie_file
+from utils.runtime_status import format_runtime_status
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +128,8 @@ def _build_admin_panel_text(expected_file_name: str | None = None) -> str:
         f"- YouTube: {_format_cookie_status(COOKIE_TARGETS['youtube'])}",
         f"- Instagram: {_format_cookie_status(COOKIE_TARGETS['instagram'])}",
         f"- TikTok: {_format_cookie_status(COOKIE_TARGETS['tiktok'])}",
+        "",
+        format_runtime_status(),
     ]
     if expected_file_name:
         lines.extend(
@@ -413,6 +417,8 @@ async def handle_document_upload(
 
         if os.name != "nt":
             file_path.chmod(0o600)
+
+        working_cookie_file(file_path)
 
         context.user_data.pop(ADMIN_UPLOAD_TARGET_KEY, None)
         logger.info(

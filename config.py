@@ -42,18 +42,6 @@ def _parse_admin_ids(value: str | None) -> list[int]:
     return admin_ids
 
 
-def _parse_ytdlp_release_channel(value: str | None) -> str:
-    """Нормализует канал обновления yt-dlp."""
-    channel = (value or "nightly").strip().lower()
-    if channel in {"stable", "nightly", "master"}:
-        return channel
-    logging.warning(
-        "YTDLP_RELEASE_CHANNEL=%r не поддерживается, используем nightly",
-        value,
-    )
-    return "nightly"
-
-
 # Допустимые символы id ролика YouTube: ровно 11 знаков латиницы, цифр, дефиса и
 # подчёркивания. Опечатка в id обошлась бы дороже строгости — канарейка стала бы
 # звать админов на каждой проверке.
@@ -157,12 +145,7 @@ INSTAGRAM_FAST_PATH = _parse_bool(
     os.environ.get("INSTAGRAM_FAST_PATH"), default=True
 )
 
-# Rolling-release стратегия для yt-dlp
-YTDLP_AUTO_UPDATE = _parse_bool(os.environ.get("YTDLP_AUTO_UPDATE"), default=False)
-YTDLP_RELEASE_CHANNEL = _parse_ytdlp_release_channel(
-    os.environ.get("YTDLP_RELEASE_CHANNEL")
-)
-YTDLP_AUTO_UPDATE_TIMEOUT = int(os.environ.get("YTDLP_AUTO_UPDATE_TIMEOUT", "240"))
+# yt-dlp закреплен в requirements.in и обновляется только новым образом.
 YTDLP_CLI_FALLBACK = _parse_bool(os.environ.get("YTDLP_CLI_FALLBACK"), default=True)
 YTDLP_CLI_TIMEOUT = int(os.environ.get("YTDLP_CLI_TIMEOUT", "900"))
 

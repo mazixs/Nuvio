@@ -67,3 +67,28 @@ def test_downloads_pass_their_session_to_the_timeout():
     source = inspect.getsource(telegram_utils.download_content)
 
     assert source.count("session_id=session_id") == source.count("await run_blocking(")
+
+
+def test_cleanup_waits_for_timed_out_worker(monkeypatch):
+    import threading
+    import time
+
+    finished = threading.Event()
+    cleaned = threading.Event()
+    monkeypatch.setattr(
+        telegram_utils,
+        "cleanup_temp_files",
+        lambda session_id: cleaned.set(),
+    )
+
+    def slow():
+        time.sleep(0.2)
+        finished.set()
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(telegram_utils.run_blocking(slow, session_id=SESSION))
+    telegram_utils._cleanup_session_when_idle(SESSION)
+
+    assert not cleaned.is_set()
+    assert finished.wait(1)
+    assert cleaned.wait(1)

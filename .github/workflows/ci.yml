@@ -123,6 +123,16 @@ jobs:
               "$image"
           done
 
+      - name: Проверка медиа-компонентов образа
+        run: docker run --rm nuvio:test python -m scripts.check_media_runtime
+
+      - name: Проверка создания бота из образа
+        run: |
+          docker run --rm \
+            --env TELEGRAM_TOKEN=123456:abcdefghijklmnopqrstuvwxyz123456 \
+            --env ADMIN_IDS=1 \
+            nuvio:test python -m scripts.check_bot_startup
+
       - name: Запуск WebUI из собранного образа
         run: |
           docker run --detach --name nuvio-web-smoke \

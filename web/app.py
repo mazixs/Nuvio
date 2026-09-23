@@ -2,6 +2,7 @@
 WebUI дашборд аналитики бота.
 """
 
+import asyncio
 import hmac
 import logging
 import os
@@ -295,7 +296,7 @@ async def logout(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_auth)):
-    data = dashboard_summary()
+    data = await asyncio.to_thread(dashboard_summary)
     return templates.TemplateResponse(request, "dashboard.html", data)
 
 
@@ -304,7 +305,7 @@ async def users_list(request: Request, page: int = 1, _=Depends(require_auth)):
     page = max(1, page)
     per_page = 50
     offset = (page - 1) * per_page
-    users = get_all_users(limit=per_page, offset=offset)
+    users = await asyncio.to_thread(get_all_users, limit=per_page, offset=offset)
     return templates.TemplateResponse(
         request,
         "users.html",
@@ -318,7 +319,7 @@ async def users_list(request: Request, page: int = 1, _=Depends(require_auth)):
 
 @app.get("/users/{user_id}", response_class=HTMLResponse)
 async def user_detail(request: Request, user_id: int, _=Depends(require_auth)):
-    user = get_user_detail(user_id)
+    user = await asyncio.to_thread(get_user_detail, user_id)
     if not user:
         return HTMLResponse("Пользователь не найден", status_code=404)
     return templates.TemplateResponse(request, "user_detail.html", {"user": user})
@@ -426,7 +427,7 @@ def _settings_context(*, error: str | None = None, saved: bool = False) -> dict:
 async def settings_page(request: Request, _=Depends(require_auth)):
     saved = request.query_params.get("saved") == "1"
     return templates.TemplateResponse(
-        request, "settings.html", _settings_context(saved=saved)
+        request, "settings.html", await asyncio.to_thread(_settings_context, saved=saved)
     )
 
 
@@ -445,7 +446,7 @@ async def api_csi_preview(days: int, _=Depends(require_auth)):
         "zone": zone,
         "zone_label": zone_label,
         "cadence": _csi_cadence_phrase(days),
-        "queue_size": _csi_queue_size(days),
+        "queue_size": await asyncio.to_thread(_csi_queue_size, days),
         "per_year": round(365 / days),
         "offsets": _csi_dispatch_offsets(days),
     }
@@ -463,7 +464,7 @@ async def settings_submit(
     отправляет при межсайтовом POST.
     """
     try:
-        set_csi_interval_days(int(_sanitize_input(csi_interval_days)))
+        await asyncio.to_thread(set_csi_interval_days, int(_sanitize_input(csi_interval_days)))
     except ValueError as exc:
         message = (
             str(exc)
@@ -472,7 +473,7 @@ async def settings_submit(
             f"до {CSI_INTERVAL_DAYS_MAX} дней"
         )
         return templates.TemplateResponse(
-            request, "settings.html", _settings_context(error=message)
+            request, "settings.html", await asyncio.to_thread(_settings_context, error=message)
         )
     return RedirectResponse("/settings?saved=1", status_code=303)
 
@@ -482,7 +483,7 @@ async def settings_submit(
 
 @app.get("/api/summary")
 async def api_summary(request: Request, _=Depends(require_auth)):
-    return dashboard_summary()
+    return await asyncio.to_thread(dashboard_summary)
 
 
 def run():

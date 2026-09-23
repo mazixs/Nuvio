@@ -49,6 +49,8 @@ services:
       TELEGRAM_BOT_API_BASE_URL: http://telegram-bot-api:8081/bot
       TELEGRAM_BOT_API_FILE_URL: http://telegram-bot-api:8081/file/bot
       TELEGRAM_MAX_FILE_SIZE_MB: "2000"
+      NUVIO_IMAGE_TAG: ${TAG:-latest}
+      NUVIO_IMAGE_DIGEST: ${NUVIO_IMAGE_DIGEST:-}
     depends_on:
       telegram-bot-api:
         condition: service_healthy

@@ -26,7 +26,6 @@ DEFAULT_YTDLP_NETWORK_OPTS: dict[str, Any] = {
     "concurrent_fragment_downloads": 4,
     "continuedl": False,
     "noplaylist": True,
-    "remote_components": ["ejs:github"],
 }
 
 # Префикс строк прогресса. yt-dlp гонит их тем же каналом, что и полезный вывод,

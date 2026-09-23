@@ -17,7 +17,7 @@
 - Защита от спама (4 запроса за 5 секунд → cooldown 10 секунд)
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin`
 - WebUI-дашборд аналитики (FastAPI + Jinja2) и страница `/settings` с частотой CSI-опросов
-- Опциональное автообновление yt-dlp (канал nightly по умолчанию)
+- Обновление yt-dlp точной версией через lock-файлы, CI и новый образ
 
 ---
 
@@ -25,7 +25,7 @@
 
 - **Язык**: Python 3.14+
 - **Бот**: [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) 22.8 (async)
-- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.8.18.122307.dev0 (nightly: в стабильной 2026.7.4 YouTube отдаёт 403 на скачивании)
+- **Скачивание**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2026.9.16.232951.dev0 (nightly, версия закреплена в `requirements.in`)
 - **WebUI**: FastAPI 0.139.2 + Uvicorn + Jinja2
 - **Базы данных**: SQLite (WAL mode) — две отдельные БД:
   - `video_cache.db` — кэш file_id
@@ -152,7 +152,8 @@ docker compose --env-file .secrets/.env up -d
 
 - Python 3.14+
 - FFmpeg (обязательно для конвертации и извлечения аудио)
-- git (для `init_env.sh` и автообновления yt-dlp)
+- Deno 2.3+ (для полного набора форматов YouTube; включен в Docker-образ)
+- git (для `init_env.sh` и выпуска нового образа)
 
 ---
 
@@ -294,14 +295,8 @@ ruff check --output-format=github .
 4. **Smart retry**: экспоненциальный backoff при сетевых таймаутах yt-dlp; fallback на CLI (`python -m yt_dlp`) при сбоях встроенного API.
 5. **Порядок попыток**: для YouTube сначала без cookies, затем с ними — авторизованная сессия отбирает у yt-dlp клиента `android_vr`, единственного, кто работает без PO-токена. Instagram устроен так же, а у TikTok наоборот: cookies первыми.
 6. **Фото-посты**: TikTok-ссылки вида `/photo/` и Instagram карусели скачиваются как набор изображений; аудио отправляется отдельным сообщением, если есть.
-7. **Rolling-release yt-dlp**: по умолчанию используется зафиксированная версия;
-   обновление при старте включается явно через `YTDLP_AUTO_UPDATE=true`.
-8. **Канарейка YouTube** (`utils/canary.py`, `CANARY_ENABLED=true`): раз в
-   `CANARY_INTERVAL_HOURS` часов бот качает эталонный ролик через
-   `download_video` с продакшн-опциями и минуя кэш `file_id`. При провале —
-   уведомление админам, одна попытка `ensure_latest_yt_dlp(force=True)` в сутки
-   и повторная проверка. Обновление живёт до пересоздания контейнера: пин в
-   `requirements.txt` оно не подменяет.
+7. **Версия yt-dlp**: закреплена в `requirements.in` и образе; обновление выполняется `scripts/update_ytdlp.py` и выпуском нового образа.
+8. **Канарейка YouTube** (`utils/canary.py`, `CANARY_ENABLED=true`): по расписанию скачивает эталонный ролик тем же путем и без кэша `file_id`; при отказе уведомляет администраторов.
 
 ---
 
@@ -324,12 +319,9 @@ ruff check --output-format=github .
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (сек) |
 | `TIKTOK_FAST_PATH` | нет | `true` | Прямая H.264-ссылка TikTok вместо yt-dlp (576×1024, без перекодирования). Не откатывает уже закэшированные ссылки — см. ниже |
 | `INSTAGRAM_FAST_PATH` | нет | `true` | Прямая ссылка Instagram из GraphQL вместо yt-dlp (~1.9 с против 7.5 с, качество то же) |
-| `YTDLP_AUTO_UPDATE` | нет | `false` | Явно разрешить обновление yt-dlp при старте |
-| `YTDLP_RELEASE_CHANNEL` | нет | `nightly` | Канал: `stable`, `nightly`, `master` |
-| `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут обновления yt-dlp (сек) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | CLI fallback при сбое API |
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (сек) |
-| `CANARY_ENABLED` | нет | `false` | Канареечная проверка YouTube по расписанию с автообновлением yt-dlp при провале |
+| `CANARY_ENABLED` | нет | `false` | Канареечная проверка YouTube по расписанию с уведомлением при провале |
 | `CANARY_INTERVAL_HOURS` | нет | `12` | Часы между проверками (1–168, иначе 12) |
 | `CANARY_VIDEO_ID` | нет | `aqz-KE-bpKQ` | Id эталонного ролика; нужен длиннее пары минут |
 | `DATA_DIR` | нет | корень репозитория | Каталог баз (`analytics.db`, `telegram_cache.db`); в Docker `/app/data` |

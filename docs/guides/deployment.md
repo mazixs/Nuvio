@@ -96,8 +96,21 @@ docker compose --env-file .secrets/.env logs -f bot telegram-bot-api
 Для готового образа:
 
 ```bash
+docker image inspect ghcr.io/mazixs/nuvio:latest --format '{{index .RepoDigests 0}}'
 docker compose --env-file .secrets/.env pull
 docker compose --env-file .secrets/.env up -d
+docker compose --env-file .secrets/.env exec bot python -m scripts.check_media_runtime
+```
+
+Сохраните прежний digest перед обновлением. Если новая версия не проходит
+проверку, загрузите прежний digest, пометьте его тегом
+`ghcr.io/mazixs/nuvio:rollback` и запустите стек с `TAG=rollback`.
+Публикация нового GitHub Release не пересоздает контейнер на сервере.
+
+```bash
+docker pull ghcr.io/mazixs/nuvio@sha256:<прежний-digest>
+docker tag ghcr.io/mazixs/nuvio@sha256:<прежний-digest> ghcr.io/mazixs/nuvio:rollback
+TAG=rollback docker compose --env-file .secrets/.env up -d bot web
 ```
 
 Для сборки из исходников:
@@ -118,6 +131,11 @@ docker compose \
 | `bot-data` | SQLite-базы аналитики и кэша `file_id` | да |
 | `telegram-bot-api-data` | служебное состояние локального API | да |
 | `shared-media` | скачанные и обработанные медиа | нет, очищаются |
+
+Бот удаляет временные файлы после завершения работы, а брошенные каталоги
+старше суток убирает ежедневно. URL в аналитике удаляются через 90 дней после
+создания проверенной резервной копии в `bot-data/backups` (хранятся последние
+семь копий). Сами события сохраняются для исторических метрик.
 | `./logs` | журналы приложения | да, с ротацией |
 | `./.secrets` | окружение и cookies | да |
 

@@ -18,6 +18,9 @@ YouTube отбивал каждую ссылку.
 """
 
 import urllib.request
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -50,11 +53,34 @@ def clear_cache():
     cookie_health._COOKIE_HEALTH_CACHE.clear()
 
 
+def test_parallel_forced_checks_share_one_probe(monkeypatch, cookie_file):
+    monkeypatch.setitem(cookie_health.COOKIE_PATHS, "instagram", cookie_file)
+    barrier = threading.Barrier(2)
+    calls = []
+
+    def probe(platform, path):
+        calls.append(platform)
+        time.sleep(0.1)
+        return "valid"
+
+    monkeypatch.setattr(cookie_health, "_probe_authenticated_session", probe)
+
+    def check():
+        barrier.wait()
+        return cookie_health.check_cookie_health("instagram", force=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: check(), range(2)))
+
+    assert calls == ["instagram"]
+    assert results[0] == results[1]
+
+
 # --- проба YouTube: реальное извлечение --------------------------------------
 
 
 def _youtube_probe(monkeypatch, cookie_file, failure: Exception | None) -> str:
-    def _extract(url, cookiefile):
+    def _extract(url, cookiefile, session_id=None):
         if failure:
             raise failure
 

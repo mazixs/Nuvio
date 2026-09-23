@@ -75,6 +75,21 @@ def test_freshly_uploaded_original_replaces_the_copy(original, work_dir):
     again = working_cookie_file(original, work_dir=work_dir)
 
     assert again.read_text(encoding="utf-8") == "# новый набор от админа\n"
+    assert again != copy
+
+
+def test_new_original_with_older_mtime_uses_new_copy(original, work_dir):
+    old = working_cookie_file(original, work_dir=work_dir)
+    old.write_text("# загрузка еще работает\n", encoding="utf-8")
+    old_mtime = original.stat().st_mtime
+    original.write_text("# новые cookies\n", encoding="utf-8")
+    os.utime(original, (old_mtime, old_mtime))
+
+    current = working_cookie_file(original, work_dir=work_dir)
+
+    assert current != old
+    assert current.read_text(encoding="utf-8") == "# новые cookies\n"
+    assert old.read_text(encoding="utf-8") == "# загрузка еще работает\n"
 
 
 def test_copy_is_readable_only_by_owner(original, work_dir):

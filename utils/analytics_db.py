@@ -12,7 +12,8 @@
 import logging
 import sqlite3
 import threading
-from contextlib import contextmanager
+from collections import Counter, defaultdict
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -78,12 +79,15 @@ def _cursor_write():
     """
     conn = _get_connection()
     cur = conn.cursor()
+    started = False
     try:
         conn.execute("BEGIN IMMEDIATE")
+        started = True
         yield cur
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        if started and conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     finally:
         cur.close()
@@ -148,9 +152,13 @@ def init_db() -> None:
         if "last_csi_sent" not in existing_cols:
             cur.execute("ALTER TABLE users ADD COLUMN last_csi_sent TEXT")
 
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user   ON events(user_id)")
+        cur.execute("DROP INDEX IF EXISTS idx_events_user")
+        cur.execute("DROP INDEX IF EXISTS idx_events_event")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_users_first_seen ON users(first_seen)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_user_ts ON events(user_id, ts DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_event_ts ON events(event, ts)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_event  ON events(event)")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_platform ON events(platform)"
         )
@@ -198,6 +206,55 @@ def track_event(
             "INSERT INTO events (user_id, event, platform, url, metadata, ts) VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, event, platform, url, metadata, now),
         )
+
+
+def prune_old_event_urls(days: int = 90, batch_size: int = 500) -> tuple[int, Path | None]:
+    """Убирает старые URL, сохраняя события и резервную копию до правки."""
+    if days < 1 or batch_size < 1:
+        raise ValueError("days и batch_size должны быть положительными")
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    with _cursor_read() as cur:
+        cur.execute("SELECT COUNT(*) FROM events WHERE url IS NOT NULL AND ts < ?", (cutoff,))
+        count = cur.fetchone()[0]
+    if not count:
+        return 0, None
+
+    backup_dir = _DB_PATH.parent / "backups"
+    backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    backup_dir.chmod(0o700)
+    backup_path = backup_dir / f"analytics-{datetime.now(UTC):%Y%m%dT%H%M%S%f}.sqlite3"
+    backup_path.touch(mode=0o600, exist_ok=False)
+    with closing(sqlite3.connect(str(backup_path))) as backup:
+        _get_connection().backup(backup)
+        if backup.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise sqlite3.DatabaseError("резервная копия аналитики не прошла проверку")
+
+    removed = 0
+    while True:
+        with _cursor_write() as cur:
+            cur.execute(
+                """
+                UPDATE events SET url = NULL
+                WHERE id IN (
+                    SELECT id FROM events
+                    WHERE url IS NOT NULL AND ts < ?
+                    ORDER BY id LIMIT ?
+                )
+                """,
+                (cutoff, batch_size),
+            )
+            batch = cur.rowcount
+        removed += batch
+        if batch < batch_size:
+            break
+
+    backups = sorted(backup_dir.glob("analytics-*.sqlite3"), reverse=True)
+    for old in backups[7:]:
+        try:
+            old.unlink()
+        except OSError as exc:
+            logger.warning("Не удалось удалить старую копию аналитики %s: %s", old, exc)
+    return removed, backup_path
 
 
 # ── Настройки ───────────────────────────────────────────────────
@@ -480,8 +537,16 @@ def downloads_by_platform() -> dict[str, int]:
 
 
 def total_downloads() -> int:
+    """Исторические запросы ссылки; старые записи не доказывают доставку."""
     with _cursor_read() as cur:
         cur.execute("SELECT COUNT(*) FROM events WHERE event = 'download'")
+        return cur.fetchone()[0]
+
+
+def total_deliveries() -> int:
+    """Подтвержденные отправки с момента введения события delivery."""
+    with _cursor_read() as cur:
+        cur.execute("SELECT COUNT(*) FROM events WHERE event = 'delivery'")
         return cur.fetchone()[0]
 
 
@@ -537,15 +602,17 @@ def get_all_users(limit: int = 100, offset: int = 0) -> list[dict]:
     with _cursor_read() as cur:
         cur.execute(
             """
+            WITH page AS (
+                SELECT * FROM users ORDER BY last_seen DESC LIMIT ? OFFSET ?
+            )
             SELECT u.user_id, u.username, u.first_name, u.last_name,
                    u.language_code, u.first_seen, u.last_seen,
                    COUNT(e.id) as total_events,
                    SUM(CASE WHEN e.event = 'download' THEN 1 ELSE 0 END) as total_downloads
-            FROM users u
+            FROM page u
             LEFT JOIN events e ON e.user_id = u.user_id
             GROUP BY u.user_id
             ORDER BY u.last_seen DESC
-            LIMIT ? OFFSET ?
             """,
             (limit, offset),
         )
@@ -642,38 +709,42 @@ def cohort_retention(weeks: int = 8) -> list[dict]:
 
     Возвращает список: [{week: "2026-W10", size: 15, w0: 100, w1: 60, w2: 40, ...}, ...]
     """
+    since = (datetime.now(UTC) - timedelta(days=weeks * 7)).date().isoformat()
     with _cursor_read() as cur:
         # Получаем когорты (неделя регистрации)
-        cur.execute(f"""
+        cur.execute("""
             SELECT strftime('%Y-W%W', first_seen) as cohort_week,
                    COUNT(*) as cohort_size
             FROM users
-            WHERE first_seen >= DATE('now', '-{weeks * 7} days')
+            WHERE first_seen >= ?
             GROUP BY cohort_week
             ORDER BY cohort_week
-        """)
+        """, (since,))
         cohorts = [dict(row) for row in cur.fetchall()]
-
-        for cohort in cohorts:
-            week = cohort["cohort_week"]
-            size = cohort["cohort_size"]
-            cohort["w0"] = 100.0  # неделя регистрации — всегда 100%
-
-            for w in range(1, weeks + 1):
-                cur.execute(
-                    """
-                    SELECT COUNT(DISTINCT e.user_id)
-                    FROM events e
-                    JOIN users u ON u.user_id = e.user_id
-                    WHERE strftime('%Y-W%%W', u.first_seen) = ?
-                      AND CAST((julianday(e.ts) - julianday(u.first_seen)) / 7 AS INTEGER) = ?
-                """,
-                    (week, w),
-                )
-                returned = cur.fetchone()[0]
-                cohort[f"w{w}"] = round(returned / size * 100, 1) if size > 0 else 0.0
-
-        return cohorts
+        cur.execute(
+            """
+            SELECT strftime('%Y-W%W', u.first_seen) AS cohort_week,
+                   CAST((julianday(e.ts) - julianday(u.first_seen)) / 7 AS INTEGER) AS week_offset,
+                   COUNT(DISTINCT e.user_id) AS returned
+            FROM users u
+            JOIN events e ON e.user_id = u.user_id
+            WHERE u.first_seen >= ?
+              AND e.ts >= u.first_seen
+              AND julianday(e.ts) < julianday(u.first_seen) + ?
+            GROUP BY cohort_week, week_offset
+            """,
+            (since, (weeks + 1) * 7),
+        )
+        counts = {
+            (row["cohort_week"], row["week_offset"]): row["returned"]
+            for row in cur.fetchall()
+        }
+    for cohort in cohorts:
+        cohort["w0"] = 100.0
+        for week in range(1, weeks + 1):
+            returned = counts.get((cohort["cohort_week"], week), 0)
+            cohort[f"w{week}"] = round(returned / cohort["cohort_size"] * 100, 1)
+    return cohorts
 
 
 def engagement_per_day(days: int = 30) -> list[dict]:
@@ -681,34 +752,40 @@ def engagement_per_day(days: int = 30) -> list[dict]:
 
     Возвращает: [{day: "2026-03-22", dau: 5, stickiness: 25.0}, ...]
     """
-    since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    today = datetime.now(UTC).date()
+    since = (today - timedelta(days=days + 29)).isoformat()
+    until = (today + timedelta(days=1)).isoformat()
     with _cursor_read() as cur:
-        # MAU для каждого дня = уникальные пользователи за 30 дней до этого дня
         cur.execute(
             """
-            SELECT DATE(ts) as day, COUNT(DISTINCT user_id) as dau
+            SELECT DISTINCT DATE(ts) as day, user_id
             FROM events
-            WHERE ts >= ?
-            GROUP BY day
-            ORDER BY day
-        """,
-            (since,),
+            WHERE ts >= ? AND ts < ?
+            """,
+            (since, until),
         )
-        daily = [dict(row) for row in cur.fetchall()]
+        users_by_day: dict[str, set[int]] = defaultdict(set)
+        for row in cur.fetchall():
+            users_by_day[row["day"]].add(row["user_id"])
 
-        # Общий MAU за весь период
-        cur.execute(
-            """
-            SELECT COUNT(DISTINCT user_id) FROM events WHERE ts >= ?
-        """,
-            (since,),
-        )
-        mau = cur.fetchone()[0] or 1
-
-        for d in daily:
-            d["stickiness"] = round(d["dau"] / mau * 100, 1)
-
-        return daily
+    window: Counter[int] = Counter()
+    result = []
+    first = today - timedelta(days=days + 29)
+    for offset in range(days + 30):
+        day = first + timedelta(days=offset)
+        label = day.isoformat()
+        window.update(users_by_day.get(label, ()))
+        expired = (day - timedelta(days=30)).isoformat()
+        for user_id in users_by_day.get(expired, ()):
+            window[user_id] -= 1
+            if window[user_id] == 0:
+                del window[user_id]
+        if offset >= 30 and users_by_day.get(label):
+            dau = len(users_by_day[label])
+            result.append(
+                {"day": label, "dau": dau, "stickiness": round(dau / len(window) * 100, 1)}
+            )
+    return result
 
 
 def platform_conversion() -> dict[str, dict]:
@@ -737,7 +814,17 @@ def platform_conversion() -> dict[str, dict]:
 
 
 def dashboard_summary() -> dict:
-    """Полная сводка для дашборда."""
+    """Собирает все показатели из одного SQLite-снимка."""
+    conn = _get_connection()
+    conn.execute("BEGIN")
+    try:
+        return _dashboard_summary_values()
+    finally:
+        conn.execute("ROLLBACK")
+
+
+def _dashboard_summary_values() -> dict:
+    """Полная сводка для дашборда внутри открытого снимка."""
     return {
         "total_users": total_users(),
         "new_users_today": new_users(1),
@@ -751,6 +838,7 @@ def dashboard_summary() -> dict:
         "retention_30": retention(30),
         "churn_30": churn_rate(30),
         "total_downloads": total_downloads(),
+        "total_deliveries": total_deliveries(),
         "downloads_by_platform": downloads_by_platform(),
         "downloads_per_day": downloads_per_day(30),
         "new_users_per_day": new_users_per_day(30),

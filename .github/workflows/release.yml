@@ -148,6 +148,20 @@ jobs:
           docker logs nuvio-release-smoke
           exit 1
 
+      - name: Проверка медиа-компонентов опубликованного digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker run --rm "$REGISTRY_IMAGE@$IMAGE_DIGEST" python -m scripts.check_media_runtime
+
+      - name: Проверка создания бота из опубликованного digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm \
+            --env TELEGRAM_TOKEN=123456:abcdefghijklmnopqrstuvwxyz123456 \
+            --env ADMIN_IDS=1 \
+            "$REGISTRY_IMAGE@$IMAGE_DIGEST" python -m scripts.check_bot_startup
+
       - name: Остановка release smoke-контейнера
         if: always()
         run: docker rm --force nuvio-release-smoke || true
