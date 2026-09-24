@@ -485,10 +485,12 @@ def download_video(
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            downloaded_file = Path(ydl.prepare_filename(info))
+            # После объединения дорожек итоговый путь может отличаться от
+            # prepare_filename (например, исходный webm стал mp4).
+            downloaded_file = Path(info.get("filepath") or ydl.prepare_filename(info))
             if not downloaded_file.exists():
-                raise Exception(
-                    "Файл не был загружен, хотя ydl.extract_info завершился."
+                raise FileNotFoundError(
+                    f"yt-dlp завершил скачивание, но итоговый файл не найден: {downloaded_file}"
                 )
             logger.info("Видео успешно скачано. Файл: %s", downloaded_file)
             # Формат берётся из info-dict, а не из запроса: каскад фолбеков ниже
