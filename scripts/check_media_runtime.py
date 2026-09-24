@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from utils.runtime_status import runtime_components
-from utils.canary import run_youtube_canary_check
+from utils.canary import canary_video_url, run_youtube_canary_check
 from utils.youtube_utils import get_available_formats, get_video_info
 
 
@@ -38,7 +38,7 @@ def main() -> None:
         return
     if not args.online:
         return
-    info = get_video_info("https://www.youtube.com/watch?v=aqz-KE-bpKQ")
+    info = get_video_info(canary_video_url())
     formats = get_available_formats(info)
     if not formats["combined"] and not (
         formats["video_only"] and formats["audio_only"]

@@ -324,7 +324,7 @@ ruff check --output-format=github .
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (сек) |
 | `CANARY_ENABLED` | нет | `false` | Канареечная проверка YouTube по расписанию с уведомлением при провале |
 | `CANARY_INTERVAL_HOURS` | нет | `12` | Часы между проверками (1–168, иначе 12) |
-| `CANARY_VIDEO_ID` | нет | `aqz-KE-bpKQ` | Id эталонного ролика; нужен длиннее пары минут |
+| `CANARY_VIDEO_ID` | нет | `6WFj-CKldv4` | Id эталонного ролика; нужен длиннее пары минут |
 | `DATA_DIR` | нет | корень репозитория | Каталог баз (`analytics.db`, `telegram_cache.db`); в Docker `/app/data` |
 | `TEMP_DIR` | нет | `./temp` | Каталог временных медиа; в Docker `/app/media` — общий том с Bot API |
 | `YOUTUBE_COOKIES_FILE` | нет | `www.youtube.com_cookies.txt` | Имя файла cookies YouTube в `.secrets/` |

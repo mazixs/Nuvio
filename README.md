@@ -158,7 +158,7 @@ git push origin v1.0.0
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (секунды) |
 | `CANARY_ENABLED` | нет | `false` | Канареечная проверка YouTube по расписанию: бот сам качает эталонный ролик и зовёт админов, если сломалось |
 | `CANARY_INTERVAL_HOURS` | нет | `12` | Часы между проверками (допустимо 1–168) |
-| `CANARY_VIDEO_ID` | нет | `aqz-KE-bpKQ` | Id эталонного ролика. Нужен длиннее пары минут — на коротком клипе поломка не проявляется |
+| `CANARY_VIDEO_ID` | нет | `6WFj-CKldv4` | Id эталонного ролика. Нужен длиннее пары минут - на коротком клипе поломка не проявляется |
 | `DATA_DIR` | нет | корень репозитория | Каталог баз данных (`analytics.db`, `telegram_cache.db`). В Docker задаёт compose: `/app/data` |
 | `TEMP_DIR` | нет | `./temp` | Каталог временных медиа. В Docker задаёт compose: `/app/media` (общий том с Bot API) |
 | `YOUTUBE_COOKIES_FILE` | нет | `www.youtube.com_cookies.txt` | Имя файла cookies YouTube внутри `.secrets/` |

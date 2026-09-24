@@ -49,12 +49,11 @@ _YOUTUBE_ID_ALPHABET = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 )
 
-# Ролик канарейки по умолчанию — «Big Buck Bunny» Blender Foundation: 10 минут,
-# Creative Commons, без возрастных и региональных ограничений, лежит с 2008 года.
-# Длина здесь принципиальна: отказ YouTube 18 августа 2026 проявлялся только
-# после примерно минуты медиа, и на девятнадцатисекундном клипе проверка прошла
-# бы успешно при полностью сломанном скачивании.
-DEFAULT_CANARY_VIDEO_ID = "aqz-KE-bpKQ"
+# Эталон - образовательный ролик NASA JPL длительностью 149 секунд. Проверен
+# полной загрузкой 27.6 МБ 24.09.2026. Прежний Blender-ролик стал требовать
+# подтверждения входа даже при исправном yt-dlp. Длина и размер важны: отказ
+# YouTube 18.08.2026 проявлялся лишь после первого куска медиа в 10 МБ.
+DEFAULT_CANARY_VIDEO_ID = "6WFj-CKldv4"
 
 
 def _parse_canary_interval_hours(value: str | None) -> int:
