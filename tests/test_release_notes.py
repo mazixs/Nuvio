@@ -63,7 +63,7 @@ def test_each_commit_appears_exactly_once_in_notes():
         "test: не выдавать контракт ключей кэша за покрытие чтением",
     ]
 
-    notes = render_notes(subjects, version="1.3.0", repository="mazixs/Nuvio")
+    notes = render_notes(subjects, version="1.3.0", repository="mazixs/nuvio")
 
     for subject in subjects:
         assert notes.count(f"- {subject}") == 1, subject
@@ -78,7 +78,7 @@ def test_sections_group_commits_under_the_right_heading():
             "ci: укрепить GitHub Actions",
         ],
         version="1.3.0",
-        repository="mazixs/Nuvio",
+        repository="mazixs/nuvio",
     )
 
     feat_block = notes.split("### 🐛 Исправления")[0]
@@ -95,7 +95,7 @@ def test_empty_sections_are_omitted():
     notes = render_notes(
         ["docs: описать локальный Bot API"],
         version="1.3.0",
-        repository="mazixs/Nuvio",
+        repository="mazixs/nuvio",
     )
 
     assert "### ✨ Новое" not in notes
@@ -110,9 +110,10 @@ def test_notes_carry_version_and_install_snippet():
     `compose.yaml` читает образ как `${TAG:-latest}`, поэтому без явного
     TAG пользователь получит latest вместо выпущенной версии.
     """
-    notes = render_notes([], version="1.3.0", repository="mazixs/Nuvio")
+    notes = render_notes([], version="1.3.0", repository="mazixs/nuvio")
 
     assert notes.startswith("## 🚀 Nuvio v1.3.0")
-    assert "git clone --branch v1.3.0 --depth 1 https://github.com/mazixs/Nuvio.git" in notes
+    assert "git clone --branch v1.3.0 --depth 1 https://github.com/mazixs/nuvio.git" in notes
+    assert "cd nuvio" in notes
     assert "TAG=1.3.0 docker compose --env-file .secrets/.env up -d" in notes
     assert "cp .env.example .secrets/.env" in notes

@@ -13,8 +13,8 @@
 ## Подготовка
 
 ```bash
-git clone https://github.com/mazixs/Nuvio.git
-cd Nuvio
+git clone https://github.com/mazixs/nuvio.git
+cd nuvio
 mkdir -p .secrets
 cp .env.example .secrets/.env
 ```
