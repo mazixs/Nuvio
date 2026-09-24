@@ -1,5 +1,6 @@
 """Проверки единого шаблона окружения и актуальных версий."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ def test_environment_template_contains_local_bot_api_credentials():
     assert "ADMIN_IDS=" in template
     assert "GOKAPI" not in template
     assert "python-dotenv" not in template
-    assert "YTDLP_AUTO_UPDATE=false" in template
+    assert "YTDLP_AUTO_UPDATE" not in template
 
 
 @pytest.mark.unit
@@ -57,22 +58,45 @@ def test_environment_template_documents_youtube_canary():
 @pytest.mark.unit
 def test_direct_dependencies_are_pinned_to_reviewed_versions():
     requirements = (ROOT / "requirements.in").read_text(encoding="utf-8")
+    lock = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    direct = {}
+    for line in requirements.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z0-9_.-]+)(?:\[([A-Za-z0-9_,.-]+)\])?==([^\s]+)", line
+        )
+        assert match, f"Прямая зависимость не закреплена: {line}"
+        name, extras, version = match.groups()
+        name = name.lower().replace("_", "-")
+        assert name not in direct, f"Повторная зависимость: {name}"
+        direct[name] = (extras, version)
 
-    expected = {
-        "python-telegram-bot[job-queue]==22.8",
-        "yt-dlp[default]==2026.8.18.122307.dev0",
-        "curl_cffi==0.16.0",
-        "httpx==0.28.1",
-        "python-dotenv==1.2.2",
-        "fastapi==0.141.1",
-        "uvicorn[standard]==0.52.3",
-        "jinja2==3.1.6",
-        "itsdangerous==2.2.0",
-        "python-multipart==0.0.32",
+    assert set(direct) == {
+        "python-telegram-bot", "yt-dlp", "curl-cffi", "httpx",
+        "python-dotenv", "fastapi", "uvicorn", "jinja2",
+        "itsdangerous", "python-multipart",
     }
+    assert direct["python-telegram-bot"][0] == "job-queue"
+    assert direct["yt-dlp"][0] == "default"
+    assert direct["uvicorn"][0] == "standard"
 
-    for dependency in expected:
-        assert dependency in requirements
+    locked = {}
+    for match in re.finditer(
+        r"^([A-Za-z0-9_.-]+)(?:\[[A-Za-z0-9_,.-]+\])?==([^\s\\]+)",
+        lock,
+        re.MULTILINE,
+    ):
+        name, version = match.groups()
+        name = name.lower().replace("_", "-")
+        assert name not in locked, f"Повторный pin в runtime lock-файле: {name}"
+        locked[name] = version
+
+    for name, (_, version) in direct.items():
+        assert locked.get(name) == version, (
+            f"Версия {name} не совпадает с runtime lock-файлом"
+        )
 
 
 @pytest.mark.unit

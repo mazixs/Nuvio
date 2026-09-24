@@ -7,11 +7,13 @@
    локальном Bot API, 50 МБ при облачном. Раньше границы были захардкожены под
    облачный режим (35 МБ на видео + 15 МБ на звук), и локальный сервер это
    никак не учитывал.
-2. **Потолок разрешения.** Кнопка обещает «просто отправь», а не «максимум
+2. **Язык.** Русская дорожка выбирается раньше остальных, если пара входит в
+   лимит доставки. Когда ее нет, берем оригинальную дорожку.
+3. **Потолок разрешения.** Кнопка обещает "просто отправь", а не "максимум
    возможного»: 4K на 32-минутном ролике — это 467–926 МБ и минуты отправки,
    причём H.264 в таком разрешении YouTube не отдаёт вовсе. Кто хочет больше,
    берёт формат в меню осознанно.
-3. **Пригодность кодека — как тай-брейк, а не как приоритет.** H.264 и AAC
+4. **Пригодность кодека — как тай-брейк, а не как приоритет.** H.264 и AAC
    проигрываются везде (ADR-001 фиксировал, чем заканчивается нестандартный
    кодек на iOS), поэтому при равном разрешении выбирается именно они. Но
    ставить кодек выше разрешения нельзя: в облачном режиме под 50 МБ H.264
@@ -70,10 +72,36 @@ def _video_sort_key(fmt: dict[str, Any]) -> tuple[int, int, int]:
     )
 
 
-def _audio_sort_key(fmt: dict[str, Any]) -> tuple[int, int]:
+def audio_language_rank(fmt: dict[str, Any]) -> int:
+    """Русский звук, затем оригинал, затем остальные дорожки.
+
+    Суффиксы format_id вроде `-1` не имеют постоянного значения языка.
+    Описание для слабовидящих не выбирается автоматически.
+    """
+    language = str(fmt.get("language") or "").lower()
+    note = str(fmt.get("format_note") or "").lower()
+    preference = fmt.get("language_preference")
+    descriptive = language.endswith("-desc") or "descriptive" in note
+    if descriptive:
+        return 5
+    if language == "ru" or language.startswith("ru-"):
+        return 0
+    if isinstance(preference, (int, float)) and preference >= 10:
+        return 1
+    if "original" in note:
+        return 1
+    if isinstance(preference, (int, float)) and preference >= 5:
+        return 2
+    if not language:
+        return 3
+    return 4
+
+
+def _audio_sort_key(fmt: dict[str, Any]) -> tuple[int, int, int]:
     return (
+        audio_language_rank(fmt),
         _codec_rank(fmt.get("acodec"), TELEGRAM_READY_AUDIO_CODECS),
-        -fmt["filesize"],
+        -(fmt.get("filesize") or 0),
     )
 
 
@@ -106,6 +134,7 @@ class AudioOption:
     format_id: str
     ext: str
     size: int  # 0 — размер неизвестен
+    language: str | None = None
 
 
 def list_audio_options(
@@ -131,30 +160,37 @@ def list_audio_options(
             format_id=str(fmt["format_id"]),
             ext=fmt.get("ext") or "m4a",
             size=fmt["filesize"] if isinstance(fmt.get("filesize"), int) else 0,
+            language=fmt.get("language"),
         )
         for fmt in sorted(
             playable,
-            key=lambda fmt: -(
-                fmt["filesize"] if isinstance(fmt.get("filesize"), int) else 0
-            ),
+            key=_audio_sort_key,
         )
     ]
 
 
 def _best_pair(
     video: dict[str, Any], audios: Sequence[dict[str, Any]], budget_bytes: int
-) -> tuple[str, int] | None:
+) -> tuple[str, int, int] | None:
     """Подбирает к видеодорожке звук, с которым пара влезает в бюджет."""
     if not isinstance(video.get("filesize"), int):
         # Размер неизвестен — сверять с бюджетом нечего, звук берём лучший.
         if not audios:
             return None
-        return f"{video['format_id']}+{audios[0]['format_id']}", 0
+        return (
+            f"{video['format_id']}+{audios[0]['format_id']}",
+            0,
+            audio_language_rank(audios[0]),
+        )
 
     for audio in audios:
         total = video["filesize"] + audio["filesize"]
         if total <= budget_bytes:
-            return f"{video['format_id']}+{audio['format_id']}", total
+            return (
+                f"{video['format_id']}+{audio['format_id']}",
+                total,
+                audio_language_rank(audio),
+            )
     return None
 
 
@@ -173,10 +209,12 @@ def list_video_options(
 
     Внутри одного разрешения работают те же правила, что у кнопки: сначала
     H.264, затем меньший размер; готовый ``combined`` предпочтительнее пары,
-    потому что его не нужно склеивать FFmpeg.
+    потому что его не нужно склеивать FFmpeg. Исключение - пара с русским
+    звуком вместо готового файла на другом языке.
     """
     audios = sorted(_sized(audio_only), key=_audio_sort_key)
     options: dict[int, VideoOption] = {}
+    option_language_ranks: dict[int, int] = {}
 
     ready = sorted(
         (fmt for fmt in _sized(combined) if fmt["filesize"] <= budget_bytes),
@@ -184,15 +222,15 @@ def list_video_options(
     )
     for fmt in ready:
         resolution = _resolution_of(fmt)
-        options.setdefault(
-            resolution,
-            VideoOption(
+        rank = audio_language_rank(fmt)
+        if resolution not in options or rank < option_language_ranks[resolution]:
+            options[resolution] = VideoOption(
                 resolution=resolution,
                 format_id=str(fmt["format_id"]),
                 ext=fmt.get("ext") or "mp4",
                 size=fmt["filesize"],
-            ),
-        )
+            )
+            option_language_ranks[resolution] = rank
 
     # Форматы без размера сортируются после форматов с размером: у них тот же
     # ключ, но проверить бюджет нельзя, поэтому в приоритете известное.
@@ -201,17 +239,19 @@ def list_video_options(
     ]
     for fmt in tracks:
         resolution = _resolution_of(fmt)
-        if resolution in options:
-            continue
         pair = _best_pair(fmt, audios, budget_bytes)
         if pair:
-            format_id, size = pair
-            options[resolution] = VideoOption(
-                resolution=resolution,
-                format_id=format_id,
-                ext=fmt.get("ext") or "mp4",
-                size=size,
-            )
+            format_id, size, rank = pair
+            if resolution not in options or (
+                size > 0 and rank < option_language_ranks[resolution]
+            ):
+                options[resolution] = VideoOption(
+                    resolution=resolution,
+                    format_id=format_id,
+                    ext=fmt.get("ext") or "mp4",
+                    size=size,
+                )
+                option_language_ranks[resolution] = rank
 
     return sorted(options.values(), key=lambda option: -option.resolution)
 
@@ -225,8 +265,9 @@ def select_tg_video_format(
 ) -> TgVideoChoice | None:
     """Возвращает формат, укладывающийся в ``budget_bytes``.
 
-    Пара «видео + звук» проверяется раньше готового ``combined``: склейка стоит
-    секунды FFmpeg, а разница в качестве обычно кратная — у YouTube единственный
+    Русская дорожка имеет приоритет. При равном языке пара «видео + звук»
+    проверяется раньше готового ``combined``: склейка стоит секунды FFmpeg,
+    а разница в качестве обычно кратная - у YouTube единственный
     combined-формат чаще всего 360p.
 
     Returns:
@@ -238,29 +279,48 @@ def select_tg_video_format(
     )
     audios = sorted(_sized(audio_only), key=_audio_sort_key)
 
-    for video in videos:
-        for audio in audios:
-            total = video["filesize"] + audio["filesize"]
-            if total <= budget_bytes:
-                return TgVideoChoice(
-                    format_id=f"{video['format_id']}+{audio['format_id']}",
-                    height=video.get("height"),
-                    ext=video.get("ext") or "mp4",
-                    kind="combined_manual",
-                    total_size=total,
-                )
+    pair_choice: TgVideoChoice | None = None
+    pair_rank: int | None = None
+    audio_groups: dict[int, list[dict[str, Any]]] = {}
+    for audio in audios:
+        audio_groups.setdefault(audio_language_rank(audio), []).append(audio)
+    for rank, group in sorted(audio_groups.items()):
+        for video in videos:
+            for audio in group:
+                total = video["filesize"] + audio["filesize"]
+                if total <= budget_bytes:
+                    pair_choice = TgVideoChoice(
+                        format_id=f"{video['format_id']}+{audio['format_id']}",
+                        height=video.get("height"),
+                        ext=video.get("ext") or "mp4",
+                        kind="combined_manual",
+                        total_size=total,
+                    )
+                    pair_rank = rank
+                    break
+            if pair_choice:
+                break
+        if pair_choice:
+            break
 
     for fmt in sorted(
         (f for f in _sized(combined) if (f.get("height") or 0) <= max_height),
-        key=_video_sort_key,
+        key=lambda fmt: (audio_language_rank(fmt), _video_sort_key(fmt)),
     ):
         if fmt["filesize"] <= budget_bytes:
-            return TgVideoChoice(
+            combined_choice = TgVideoChoice(
                 format_id=str(fmt["format_id"]),
                 height=fmt.get("height"),
                 ext=fmt.get("ext") or "mp4",
                 kind="combined",
                 total_size=fmt["filesize"],
             )
+            if (
+                pair_choice
+                and pair_rank is not None
+                and pair_rank <= audio_language_rank(fmt)
+            ):
+                return pair_choice
+            return combined_choice
 
-    return None
+    return pair_choice

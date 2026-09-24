@@ -155,17 +155,16 @@ def test_missing_url_and_session_are_marked_plainly(monkeypatch):
 
 
 @pytest.mark.unit
-def test_report_names_the_ytdlp_version_and_channel(monkeypatch):
-    """Первый вопрос при поломке платформы — какая версия качала и откуда она."""
+def test_report_names_the_ytdlp_version_and_update_method(monkeypatch):
+    """Отчет показывает версию и способ ее смены."""
     monkeypatch.setattr(
         telegram_utils, "get_installed_yt_dlp_version", lambda: "2026.8.18.122307.dev0"
     )
-    monkeypatch.setattr(telegram_utils, "YTDLP_RELEASE_CHANNEL", "nightly")
 
     text = _send(monkeypatch, RuntimeError("boom"))["text"]
 
     assert "| Версия yt-dlp | 2026.8.18.122307.dev0 |" in text
-    assert "| Канал обновлений | nightly |" in text
+    assert "| Обновление | через новый образ |" in text
 
 
 @pytest.mark.unit
@@ -181,7 +180,7 @@ def test_undetected_ytdlp_version_is_marked_plainly(monkeypatch):
 
 @pytest.mark.unit
 def test_report_carries_the_ytdlp_output_tail(monkeypatch):
-    download_report.record_output(None, "[youtube] Extracting URL: watch?v=UyXbRBxS2RI")
+    download_report.record_output(None, "[youtube] Чужая сессия")
     download_report.record_output(
         SESSION_ID, "WARNING: [youtube] Some formats require a GVS PO Token"
     )
@@ -192,7 +191,6 @@ def test_report_carries_the_ytdlp_output_tail(monkeypatch):
     assert "## Последние строки yt-dlp" in text
     assert _section(text, "## Последние строки yt-dlp") == (
         "```text\n"
-        "[youtube] Extracting URL: watch?v=UyXbRBxS2RI\n"
         "WARNING: [youtube] Some formats require a GVS PO Token\n"
         "ERROR: unable to download: HTTP 403\n"
         "```"

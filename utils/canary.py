@@ -1,10 +1,8 @@
-"""Канареечная проверка YouTube и автоматическая реакция на поломку.
+"""Канареечная проверка YouTube и уведомление о поломке.
 
 18 августа 2026 YouTube начал отдавать 403 на прямые ссылки `videoplayback`, и
-бот стоял сломанным больше суток, пока владелец не наткнулся сам. Починка к тому
-моменту уже лежала в nightly yt-dlp, а `ensure_latest_yt_dlp(force=True)` был
-написан и просто не подключён ни к какому сигналу. Здесь появляются оба: сигнал
-и реакция на него.
+бот стоял сломанным больше суток, пока владелец не наткнулся сам. Канарейка
+обнаруживает отказ и сообщает администратору; версия меняется только новым образом.
 
 Проверка идёт продакшн-путём и «облегчённых» вариантов не признаёт, потому что
 на разборе инцидента обе ловушки уже сработали:
@@ -24,7 +22,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,10 +42,10 @@ from utils.cancellation import (
 )
 from utils.logger import setup_logger
 from utils.public_errors import classify_internal_error_category
+from utils.runtime_status import save_canary_status
 from utils.temp_file_manager import cleanup_temp_files
 from utils.tg_video_choice import select_tg_video_format
 from utils.youtube_utils import download_video, get_available_formats, get_video_info
-from utils.ytdlp_runtime import ensure_latest_yt_dlp
 
 logger = setup_logger(__name__)
 
@@ -65,17 +62,6 @@ CANARY_MAX_HEIGHT = 720
 # Тот же предел, что у пользовательских загрузок: канарейка не имеет права висеть
 # дольше, чем реальное скачивание.
 CANARY_TIMEOUT_SECONDS = BLOCKING_TASK_TIMEOUT
-
-# Не больше одной попытки обновления yt-dlp в сутки. Обновление ставится в
-# работающий контейнер и живёт до его пересоздания: следующий `docker compose up`
-# вернёт версию из `requirements.txt`. Это не баг, а страховка — канарейка лечит
-# прод до того, как владелец дойдёт до правки пина, но сам пин не подменяет.
-UPDATE_COOLDOWN_SECONDS = 24 * 60 * 60
-
-# Состояние живёт в модуле: процесс бота один, а переживать перезапуск лимиту не
-# нужно — после рестарта одна попытка обновления как раз уместна.
-_last_update_attempt_at: float | None = None
-
 
 @dataclass(frozen=True)
 class CanaryOutcome:
@@ -128,52 +114,49 @@ def run_youtube_canary_check(session_id: str) -> CanaryOutcome:
     url = canary_video_url()
     logger.info("🐤 Канарейка YouTube: проверяю %s (сессия %s)", url, session_id)
 
+    stage = "video_info"
+    format_id = None
     try:
-        video_info = get_video_info(url)
-    except CancelledByUser:
-        return CanaryOutcome(
-            ok=False, stage="cancelled", detail="проверка прервана по таймауту"
+        video_info = get_video_info(url, session_id=session_id)
+        stage = "format_choice"
+        formats = get_available_formats(video_info)
+        choice = select_tg_video_format(
+            formats.get("video_only", []),
+            formats.get("audio_only", []),
+            formats.get("combined", []),
+            CANARY_BUDGET_BYTES,
+            max_height=CANARY_MAX_HEIGHT,
         )
-    except Exception as exc:  # noqa: BLE001
-        return _failure("video_info", exc)
-
-    formats = get_available_formats(video_info)
-    choice = select_tg_video_format(
-        formats.get("video_only", []),
-        formats.get("audio_only", []),
-        formats.get("combined", []),
-        CANARY_BUDGET_BYTES,
-        max_height=CANARY_MAX_HEIGHT,
-    )
-    if choice is None:
-        return CanaryOutcome(
-            ok=False,
-            stage="format_choice",
-            detail=(
-                "ни один формат не влез в бюджет проверки: обычно так выглядит "
-                "пустой или урезанный список форматов"
-            ),
-            category="FORMAT_UNAVAILABLE",
-            error_code=_error_code("FORMAT_UNAVAILABLE"),
+        if choice is None:
+            return CanaryOutcome(
+                ok=False,
+                stage=stage,
+                detail="ни один формат не влез в бюджет проверки",
+                category="FORMAT_UNAVAILABLE",
+                error_code=_error_code("FORMAT_UNAVAILABLE"),
+            )
+        format_id = choice.format_id
+        stage = "download"
+        downloaded = Path(
+            download_video(
+                url, format_id, session_id, max_file_size=CANARY_BUDGET_BYTES
+            )
         )
-
-    try:
-        downloaded = Path(download_video(url, choice.format_id, session_id))
         size_bytes = downloaded.stat().st_size
-        if size_bytes <= 0:
+        if size_bytes <= 0 or size_bytes > CANARY_BUDGET_BYTES:
             return CanaryOutcome(
                 ok=False,
                 stage="download",
-                detail="файл скачался пустым",
+                detail="размер файла вне бюджета проверки",
                 category="UNKNOWN",
                 error_code=_error_code("UNKNOWN"),
-                format_id=choice.format_id,
+                format_id=format_id,
             )
         return CanaryOutcome(
             ok=True,
             stage="download",
             detail=f"скачано {size_bytes / (1024 * 1024):.1f} МБ",
-            format_id=choice.format_id,
+            format_id=format_id,
             size_bytes=size_bytes,
         )
     except CancelledByUser:
@@ -181,10 +164,10 @@ def run_youtube_canary_check(session_id: str) -> CanaryOutcome:
             ok=False,
             stage="cancelled",
             detail="проверка прервана по таймауту",
-            format_id=choice.format_id,
+            format_id=format_id,
         )
     except Exception as exc:  # noqa: BLE001
-        return _failure("download", exc, format_id=choice.format_id)
+        return _failure(stage, exc, format_id=format_id)
     finally:
         # Файл был нужен только как доказательство, что YouTube отдаёт медиа:
         # никому он не отправляется и на диске не остаётся.
@@ -218,73 +201,6 @@ async def _check_in_thread() -> CanaryOutcome:
         )
 
 
-async def _react_to_failure() -> list[str]:
-    """Обновляет yt-dlp (не чаще раза в сутки) и повторяет проверку.
-
-    Returns:
-        Строки отчёта о реакции — их читает админ в уведомлении.
-    """
-    global _last_update_attempt_at
-
-    now = time.monotonic()
-    if (
-        _last_update_attempt_at is not None
-        and now - _last_update_attempt_at < UPDATE_COOLDOWN_SECONDS
-    ):
-        hours_left = (UPDATE_COOLDOWN_SECONDS - (now - _last_update_attempt_at)) / 3600
-        logger.warning(
-            "🐤 Обновление yt-dlp пропущено: суточный лимит, следующая попытка "
-            "через %.1f ч",
-            hours_left,
-        )
-        return [
-            "Реакция: обновление yt-dlp пропущено — суточный лимит уже "
-            f"израсходован, следующая попытка через {hours_left:.1f} ч."
-        ]
-
-    _last_update_attempt_at = now
-    logger.warning("🐤 Канарейка запускает принудительное обновление yt-dlp")
-    update = await asyncio.to_thread(
-        ensure_latest_yt_dlp, reason="canary_failure", force=True
-    )
-    version_before = update.version_before or "unknown"
-    version_after = update.version_after or version_before
-
-    lines: list[str] = []
-    if update.succeeded:
-        lines.append(
-            f"Реакция: обновил yt-dlp {version_before} → {version_after} "
-            f"(канал {update.channel})."
-        )
-    else:
-        logger.error(
-            "🐤 Обновление yt-dlp не удалось (канал %s), версия осталась %s",
-            update.channel,
-            version_after,
-        )
-        lines.append(
-            f"Реакция: обновление yt-dlp не удалось, версия осталась {version_after}."
-        )
-
-    # Повторяем проверку в любом случае: даже неудавшийся pip не отменяет
-    # вероятности, что первый провал был разовым сетевым сбоем.
-    retry = await _check_in_thread()
-    if retry.ok:
-        logger.info("🐤 Канарейка после обновления прошла: %s", retry.detail)
-        lines.append(f"Повторная проверка прошла ✅ ({retry.detail}).")
-    else:
-        logger.error(
-            "🐤 Канарейка после обновления снова упала: этап=%s причина=%s",
-            retry.stage,
-            retry.detail,
-        )
-        lines.append(
-            f"Повторная проверка снова упала ❌ (этап {retry.stage}) — "
-            "обновление не помогло."
-        )
-    return lines
-
-
 def _build_report(outcome: CanaryOutcome, reaction: list[str]) -> str:
     """Собирает короткий отчёт для админов."""
     lines = [
@@ -309,13 +225,19 @@ async def _notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     """
     if not ADMIN_IDS:
         logger.warning("🐤 ADMIN_IDS пуст: отчёт канарейки остался только в логе")
+        save_canary_status(notification="не отправлено: нет администраторов")
         return
 
+    failed = []
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(chat_id=admin_id, text=text)
-        except Exception:  # noqa: BLE001
-            logger.debug("Не удалось отправить отчёт канарейки админу %s", admin_id)
+        except Exception as exc:  # noqa: BLE001
+            failed.append(admin_id)
+            logger.warning("Не удалось отправить отчет канарейки админу %s: %s", admin_id, exc)
+    save_canary_status(
+        notification="доставлено" if not failed else f"ошибка для {len(failed)} администраторов"
+    )
 
 
 async def youtube_canary_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -326,6 +248,13 @@ async def youtube_canary_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     outcome = await _check_in_thread()
+    save_canary_status(
+        state="работает" if outcome.ok else f"ошибка: {outcome.stage}",
+        category=outcome.category,
+        error_code=outcome.error_code,
+        format_id=outcome.format_id,
+        size_bytes=outcome.size_bytes,
+    )
     if outcome.ok:
         logger.info(
             "🐤 Канарейка YouTube в порядке: формат %s, %s",
@@ -341,5 +270,4 @@ async def youtube_canary_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         outcome.category,
         outcome.detail,
     )
-    reaction = await _react_to_failure()
-    await _notify_admins(context, _build_report(outcome, reaction))
+    await _notify_admins(context, _build_report(outcome, []))

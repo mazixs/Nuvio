@@ -15,6 +15,7 @@ from config import (
     YTDLP_CLI_FALLBACK,
 )
 from utils.cookie_workfile import working_cookie_file
+from utils.cancellation import CancelledByUser, is_cancelled
 from utils.download_report import record_delivered_format
 from utils.logger import setup_logger
 from utils.temp_file_manager import get_temp_file_path
@@ -53,6 +54,9 @@ class FormatInfoDict(TypedDict, total=False):
     audio_channels: NotRequired[int]
     vcodec: NotRequired[str]
     acodec: NotRequired[str]
+    language: NotRequired[str]
+    language_preference: NotRequired[int]
+    format_note: NotRequired[str]
     type: NotRequired[str]
 
 
@@ -69,7 +73,7 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(re.match(YOUTUBE_URL_PATTERN, url))
 
 
-def get_video_info(url: str) -> dict[str, Any]:
+def get_video_info(url: str, session_id: str | None = None) -> dict[str, Any]:
     """
     Получает информацию о видео.
     Сначала пробует без cookies, при ошибке — повторяет с cookies (если файл есть).
@@ -81,7 +85,9 @@ def get_video_info(url: str) -> dict[str, Any]:
             "quiet": True,
             "skip_download": True,
         }
-        apply_network_opts(ydl_opts)
+        if session_id and is_cancelled(session_id):
+            raise CancelledByUser(f"разбор сессии {session_id} отменен")
+        apply_network_opts(ydl_opts, session_id)
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
             logger.info(f"Использование файла cookies: {cookiefile}")
@@ -94,6 +100,8 @@ def get_video_info(url: str) -> dict[str, Any]:
             logger.info("Пробуем получить информацию о видео без cookies.")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if session_id and is_cancelled(session_id):
+                raise CancelledByUser(f"разбор сессии {session_id} отменен")
             duration = info.get("duration")
             if duration and duration > MAX_VIDEO_DURATION:
                 logger.warning(f"Видео слишком длинное: {duration} секунд")
@@ -176,7 +184,15 @@ def get_available_formats(
             f"FormatID={format_info.get('format_id')}, ext={format_info.get('ext')}, height={format_info.get('height')}, filesize={filesize}"
         )
 
-        if not format_info.get("height") and not format_info.get("audio_channels"):
+        is_audio_only = (
+            format_info.get("vcodec") == "none"
+            and format_info.get("acodec") not in (None, "none")
+        )
+        if (
+            not format_info.get("height")
+            and not format_info.get("audio_channels")
+            and not is_audio_only
+        ):
             continue
 
         # Применяем фильтрацию по размеру файла (если включена)
@@ -226,6 +242,9 @@ def get_available_formats(
                     "ext": format_info.get("ext"),
                     "filesize": filesize,
                     "acodec": format_info.get("acodec"),
+                    "language": format_info.get("language"),
+                    "language_preference": format_info.get("language_preference"),
+                    "format_note": format_info.get("format_note"),
                     "type": "audio_only",
                 }
             )
@@ -242,6 +261,9 @@ def get_available_formats(
                     "filesize": filesize,
                     "vcodec": format_info.get("vcodec"),
                     "acodec": format_info.get("acodec"),
+                    "language": format_info.get("language"),
+                    "language_preference": format_info.get("language_preference"),
+                    "format_note": format_info.get("format_note"),
                     "type": "combined",
                 }
             )
@@ -298,6 +320,7 @@ def _build_cli_download_command(
     cookiefile: str | None = None,
     merge_output_format: str | None = None,
     extract_audio_codec: str | None = None,
+    max_file_size: int | None = None,
 ) -> list[str]:
     """Собирает локальную CLI-команду yt-dlp для fallback-сценария."""
     command = [
@@ -317,8 +340,6 @@ def _build_cli_download_command(
         str(DEFAULT_YTDLP_NETWORK_OPTS["concurrent_fragment_downloads"]),
         "--skip-unavailable-fragments",
         "--no-continue",
-        "--remote-components",
-        "ejs:github",
         "--print",
         "after_move:filepath",
         "-o",
@@ -328,10 +349,14 @@ def _build_cli_download_command(
     ]
     if cookiefile:
         command.extend(["--cookies", cookiefile])
+    if max_file_size is not None:
+        command.extend(["--max-filesize", str(max_file_size)])
     if merge_output_format:
         command.extend(["--merge-output-format", merge_output_format])
-    if extract_audio_codec == "mp3":
-        command.extend(["-x", "--audio-format", "mp3", "--audio-quality", "192K"])
+    if extract_audio_codec in {"mp3", "m4a"}:
+        command.extend(["-x", "--audio-format", extract_audio_codec])
+        if extract_audio_codec == "mp3":
+            command.extend(["--audio-quality", "192K"])
     command.append(url)
     return command
 
@@ -346,6 +371,7 @@ def _download_with_cli_fallback(
     force_local: bool = False,
     merge_output_format: str | None = None,
     extract_audio_codec: str | None = None,
+    max_file_size: int | None = None,
 ) -> Path | str:
     """Локальный fallback на `python -m yt_dlp`, если встроенный API дал сбой.
 
@@ -363,6 +389,7 @@ def _download_with_cli_fallback(
         cookiefile=cookiefile,
         merge_output_format=merge_output_format,
         extract_audio_codec=extract_audio_codec,
+        max_file_size=max_file_size,
     )
     result = run_yt_dlp_cli(command)
     if result.returncode != 0:
@@ -375,7 +402,7 @@ def _download_with_cli_fallback(
     if not downloaded_file:
         raise RuntimeError("CLI fallback yt-dlp не вернул путь к итоговому файлу.")
 
-    if extract_audio_codec != "mp3":
+    if merge_output_format:
         downloaded_file = _ensure_ios_compatible(downloaded_file, session_id)
     return finalize_downloaded_file(downloaded_file, force_local)
 
@@ -386,6 +413,7 @@ def download_video(
     session_id: str,
     output_dir: Path | None = None,
     force_local: bool = False,
+    max_file_size: int | None = None,
 ) -> Path | str:
     logger.info(f"Скачивание видео: {url}, формат: {format_id}")
     output_path_template = _resolve_output_template(session_id, output_dir)
@@ -393,9 +421,11 @@ def download_video(
     # поэтому запасной селектор не должен на него сваливаться.
     fallback_non_hls = (
         "bestvideo[protocol!=m3u8_dash][protocol!=http_dash_segments]"
-        "+bestaudio[protocol!=m3u8_dash][protocol!=http_dash_segments]/"
+        "+(bestaudio[language^=ru][protocol!=m3u8_dash]"
+        "[protocol!=http_dash_segments]/"
+        "bestaudio[protocol!=m3u8_dash][protocol!=http_dash_segments])/"
         "best[protocol!=m3u8_dash][protocol!=http_dash_segments][ext=mp4]"
-        f"[format_id!=18][filesize<=?{MAX_FILE_SIZE}]"
+        f"[format_id!=18][filesize<=?{max_file_size or MAX_FILE_SIZE}]"
     )
 
     def _resolve_format_selector(
@@ -408,19 +438,13 @@ def download_video(
             logger.info("Фолбек на non-HLS формат: %s", fallback_non_hls)
             return fallback_non_hls
 
-        if not override_format and "+" in format_to_use:
-            logger.info(
-                "Комбинированный формат %s, добавляем приоритет русского аудио",
-                format_to_use,
-            )
-            parts = format_to_use.split("+")
-            if len(parts) == 2:
-                video_id, audio_id = parts
-                audio_base = audio_id.split("-")[0] if "-" in audio_id else audio_id
-                format_to_use = f"{video_id}+({audio_base}-1/{audio_base}-0/{audio_id})"
-                logger.info("Итоговый combined selector: %s", format_to_use)
-        elif not override_format and not force_local and "[" not in format_to_use:
-            format_to_use = f"{format_to_use}[filesize<=?{MAX_FILE_SIZE}]"
+        if (
+            not override_format
+            and not force_local
+            and "[" not in format_to_use
+            and "+" not in format_to_use
+        ):
+            format_to_use = f"{format_to_use}[filesize<=?{max_file_size or MAX_FILE_SIZE}]"
             logger.info("Применяем фильтр по размеру: %s", format_to_use)
 
         return format_to_use
@@ -444,6 +468,8 @@ def download_video(
             ],
             "merge_output_format": "mp4",
         }
+        if max_file_size is not None:
+            ydl_opts["max_filesize"] = max_file_size
         apply_network_opts(ydl_opts, session_id=session_id)
         cookiefile = _cookiefile_if_available(use_cookies)
         if cookiefile:
@@ -487,7 +513,8 @@ def download_video(
                     "Формат недоступен, пробуем generic bestvideo+bestaudio/best"
                 )
                 return _download(
-                    use_cookies, override_format="bestvideo+bestaudio/best"
+                    use_cookies,
+                    override_format="bestvideo+(bestaudio[language^=ru]/bestaudio)/best",
                 )
             raise
 
@@ -535,8 +562,8 @@ def download_video(
             cli_overrides: list[tuple[bool, str | None, bool]] = [
                 (False, None, False),
                 (True, None, False),
-                (False, "bestvideo+bestaudio/best", False),
-                (True, "bestvideo+bestaudio/best", False),
+                (False, "bestvideo+(bestaudio[language^=ru]/bestaudio)/best", False),
+                (True, "bestvideo+(bestaudio[language^=ru]/bestaudio)/best", False),
                 (False, None, True),
                 (True, None, True),
             ]
@@ -557,6 +584,7 @@ def download_video(
                         output_dir=output_dir,
                         force_local=force_local,
                         merge_output_format="mp4",
+                        max_file_size=max_file_size,
                     )
                 except Exception as cli_error:
                     logger.warning("CLI fallback не удался: %s", cli_error)
@@ -649,7 +677,10 @@ def download_audio_native(
                 logger.warning(
                     "Формат нативного аудио недоступен, пробуем generic bestaudio"
                 )
-                return _download_audio_native(use_cookies, override_format="bestaudio")
+                return _download_audio_native(
+                    use_cookies,
+                    override_format="bestaudio[language^=ru]/bestaudio",
+                )
             raise
 
     final_error: Exception | None = None
@@ -696,8 +727,8 @@ def download_audio_native(
         for use_cookies, override_format in (
             (False, None),
             (True, None),
-            (False, "bestaudio"),
-            (True, "bestaudio"),
+            (False, "bestaudio[language^=ru]/bestaudio"),
+            (True, "bestaudio[language^=ru]/bestaudio"),
         ):
             if use_cookies and not (
                 YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()
@@ -820,7 +851,10 @@ def download_audio(
         except yt_dlp.utils.DownloadError as e:
             if "Requested format is not available" in str(e):
                 logger.warning("Формат аудио недоступен, пробуем generic bestaudio")
-                return _download_audio(use_cookies, override_format="bestaudio")
+                return _download_audio(
+                    use_cookies,
+                    override_format="bestaudio[language^=ru]/bestaudio",
+                )
             raise
 
     final_error: Exception | None = None
@@ -865,8 +899,8 @@ def download_audio(
         for use_cookies, override_format in (
             (False, None),
             (True, None),
-            (False, "bestaudio"),
-            (True, "bestaudio"),
+            (False, "bestaudio[language^=ru]/bestaudio"),
+            (True, "bestaudio[language^=ru]/bestaudio"),
         ):
             if use_cookies and not (
                 YOUTUBE_COOKIES_FILE and Path(YOUTUBE_COOKIES_FILE).is_file()

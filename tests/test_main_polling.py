@@ -38,14 +38,14 @@ def test_classify_polling_error_detects_conflict():
     assert "Параллельный polling" in summary
 
 
-def test_prepare_runtime_storage_removes_orphaned_media(monkeypatch):
+def test_prepare_runtime_storage_removes_only_stale_media(monkeypatch):
     cleanup_calls = []
     monkeypatch.setattr(
         main,
-        "cleanup_temp_files",
-        lambda: cleanup_calls.append("all"),
+        "cleanup_stale_temp_files",
+        lambda: (cleanup_calls.append("stale") or (1, 0)),
     )
 
     main._prepare_runtime_storage()
 
-    assert cleanup_calls == ["all"]
+    assert cleanup_calls == ["stale"]

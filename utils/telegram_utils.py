@@ -6,13 +6,16 @@ import asyncio
 import contextlib
 import functools
 import io
+import re
+import threading
 import traceback
 import uuid
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.helpers import escape_markdown as _telegram_escape_markdown
 from telegram.ext import ContextTypes
 
 from config import (
@@ -22,7 +25,6 @@ from config import (
     MAX_FILE_SIZE,
     TELEGRAM_LOCAL_MODE,
     TEMP_DIR,
-    YTDLP_RELEASE_CHANNEL,
 )
 from utils import download_report
 from utils.logger import setup_logger
@@ -33,6 +35,7 @@ from utils.subtitles import (
     parse_subtitle_choice,
 )
 from utils.tg_video_choice import (
+    audio_language_rank,
     list_audio_options,
     list_video_options,
     select_tg_video_format,
@@ -68,6 +71,7 @@ from utils.public_errors import (
     classify_internal_error_category,
     youtube_error_code,
 )
+from utils.runtime_status import runtime_components, read_canary_status
 from utils.url_delivery import (
     HandoffRefusals,
     PhotoPostHandoff,
@@ -86,6 +90,8 @@ from messages import (
     DOWNLOADING_SUBTITLES_MESSAGE,
     PHOTO_POST_AUDIO_UNAVAILABLE,
     INVALID_URL_MESSAGE,
+    VK_NO_SUITABLE_FORMAT_MESSAGE,
+    VK_LIVE_ACTIVE_MESSAGE,
     ERROR_MESSAGE,
     TOO_LONG_VIDEO_MESSAGE,
     NO_URL_AFTER_COMMAND,
@@ -144,6 +150,7 @@ from utils.tiktok_instagram_utils import (
     PhotoPostAudioMissingError,
 )
 from utils.rutube_vk_utils import (
+    VkLiveActiveError,
     is_valid_rutube_url,
     is_valid_vk_url,
     get_rutube_info,
@@ -155,6 +162,7 @@ from utils.rutube_vk_utils import (
     download_rutube_audio,
     download_vk_audio,
 )
+from utils.ytdlp_common import FileSizeLimitError
 from utils.video_cache import telegram_cache, CachedVideo
 from utils.cookie_health import check_cookie_health
 from utils.ytdlp_runtime import get_installed_yt_dlp_version
@@ -283,6 +291,8 @@ async def _notify_admins_crash(
     # ячейке честное «N/A», а не пустое место, за которым не видно, что версии
     # нет и что её не смогли прочитать.
     installed_version = get_installed_yt_dlp_version()
+    runtime = runtime_components()
+    canary_status = read_canary_status()
     facts = (
         (
             "Время (UTC)",
@@ -295,7 +305,12 @@ async def _notify_admins_crash(
         ("Cookies", _md_cell(cookie_status)),
         ("Что с cookies", _md_cell(cookie_summary)),
         ("Версия yt-dlp", _md_cell(installed_version) if installed_version else "N/A"),
-        ("Канал обновлений", _md_cell(YTDLP_RELEASE_CHANNEL)),
+        ("Загруженный yt-dlp", _md_cell(runtime["yt_dlp_loaded"])),
+        ("EJS", _md_cell(runtime["ejs"])),
+        ("Deno", _md_cell(runtime["deno"])),
+        ("Образ", _md_cell(runtime["image"])),
+        ("Канарейка", _md_cell(canary_status.get("state", "неизвестно"))),
+        ("Обновление", "через новый образ"),
     )
     report_text = "\n".join(
         [
@@ -331,6 +346,43 @@ async def _notify_admins_crash(
 
 # Глобальный executor для тяжёлых задач
 executor = ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
+_worker_lock = threading.Lock()
+_active_workers: dict[str, set[Future]] = {}
+_pending_cleanup: dict[str, bool] = {}
+
+
+def active_download_sessions() -> set[str]:
+    """Снимок сессий с еще работающими задачами."""
+    with _worker_lock:
+        return {session for session, workers in _active_workers.items() if workers}
+
+
+def _cleanup_session_when_idle(session_id: str, *, forget_report: bool = False) -> None:
+    """Удаляет медиа только после фактического выхода фоновой задачи."""
+    with _worker_lock:
+        if _active_workers.get(session_id):
+            _pending_cleanup[session_id] = (
+                _pending_cleanup.get(session_id, False) or forget_report
+            )
+            return
+    cleanup_temp_files(session_id)
+    if forget_report:
+        download_report.forget(session_id)
+
+
+def _worker_finished(session_id: str, future: Future) -> None:
+    with _worker_lock:
+        workers = _active_workers.get(session_id)
+        if workers:
+            workers.discard(future)
+            if workers:
+                return
+            _active_workers.pop(session_id, None)
+        pending = _pending_cleanup.pop(session_id, None)
+    if pending is not None:
+        cleanup_temp_files(session_id)
+        if pending:
+            download_report.forget(session_id)
 _SPAM_WINDOW_SECONDS = 5
 _SPAM_REQUEST_LIMIT = 4
 _SPAM_TIMEOUT_SECONDS = 10
@@ -340,13 +392,14 @@ _SESSION_STORE_KEY = "sessions"
 _DIRECT_VIDEO_CACHE_KEY = DIRECT_VIDEO_CACHE_KEY
 
 
-def _track_tg_user(update: Update) -> None:
+async def _track_tg_user(update: Update) -> None:
     """Регистрирует / обновляет пользователя в аналитике."""
     user = update.effective_user
     if not user:
         return
     try:
-        track_user(
+        await asyncio.to_thread(
+            track_user,
             user_id=user.id,
             username=user.username,
             first_name=user.first_name,
@@ -357,8 +410,26 @@ def _track_tg_user(update: Update) -> None:
         logger.debug("analytics: не удалось записать пользователя %s", user.id)
 
 
+async def _record_delivery(user_id: int, session_data: dict) -> None:
+    """Отмечает подтвержденную отправку после ответа Telegram."""
+    try:
+        await asyncio.to_thread(
+            track_event,
+            user_id,
+            "delivery",
+            platform=session_data.get("platform"),
+            url=session_data.get("url"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Не удалось записать успешную доставку: %s", exc)
+
+
 async def run_blocking(
-    func, *args, description: str = "blocking task", session_id: str | None = None
+    func,
+    *args,
+    description: str = "blocking task",
+    session_id: str | None = None,
+    timeout: float | None = None,
 ):
     """Запускает sync-функцию в executor с таймаутом.
 
@@ -370,16 +441,25 @@ async def run_blocking(
 
     Args:
         session_id: Сессия задачи. Без неё остановить работу нечем.
+        timeout: Лимит отдельной операции; по умолчанию общий лимит.
     """
     loop = asyncio.get_running_loop()
+    effective_timeout = BLOCKING_TASK_TIMEOUT if timeout is None else timeout
     try:
+        future = executor.submit(func, *args)
+        if session_id:
+            with _worker_lock:
+                _active_workers.setdefault(session_id, set()).add(future)
+            future.add_done_callback(
+                lambda done: _worker_finished(session_id, done)
+            )
         return await asyncio.wait_for(
-            loop.run_in_executor(executor, func, *args),
-            BLOCKING_TASK_TIMEOUT,
+            asyncio.shield(asyncio.wrap_future(future, loop=loop)),
+            effective_timeout,
         )
     except asyncio.TimeoutError as exc:
         logger.error(
-            f"{description} превысил таймаут {BLOCKING_TASK_TIMEOUT}с", exc_info=True
+            "%s превысил таймаут %sс", description, effective_timeout, exc_info=True
         )
         if session_id:
             request_cancellation(session_id)
@@ -643,10 +723,15 @@ def _build_main_menu(
         return text, InlineKeyboardMarkup(keyboard)
 
     if platform == "vk":
+        selected_height = video_info.get("_nuvio_vk_format_height")
+        video_label = (
+            f"{BTN_DOWNLOAD_VIDEO} ({selected_height}p)"
+            if selected_height else BTN_DOWNLOAD_VIDEO
+        )
         keyboard = [
             [
                 InlineKeyboardButton(
-                    BTN_DOWNLOAD_VIDEO,
+                    video_label,
                     callback_data=_make_callback_data(
                         session_token, "main", "vk_download"
                     ),
@@ -848,7 +933,8 @@ def _build_audio_menu(formats: dict, session_token: str) -> InlineKeyboardMarkup
     if options:
         keyboard = [
             _button_row(
-                f"🎵 {option.ext.upper()}{_format_size(option.size)}",
+                f"🎵 {option.ext.upper()}{_format_size(option.size)}"
+                f"{' · ' + option.language.upper() if option.language else ''}",
                 session_token,
                 "format",
                 "audio_only",
@@ -1421,6 +1507,7 @@ async def _deliver_plan(
     if not delivered:
         return False
 
+    await _record_delivery(query.from_user.id, session_data)
     await query.edit_message_text(FILE_SENT)
     await _cleanup_user_session(query.from_user.id, context, session_token)
     return True
@@ -1497,8 +1584,7 @@ async def _cleanup_user_session(
         session = _get_session_store(context).pop(session_token, None)
         session_id = session.get("session_id") if session else None
         if session_id:
-            cleanup_temp_files(session_id)
-            download_report.forget(session_id)
+            _cleanup_session_when_idle(session_id, forget_report=True)
             logger.info(
                 "Временные файлы для сессии %s пользователя %s очищены.",
                 session_id,
@@ -1509,8 +1595,7 @@ async def _cleanup_user_session(
 
     session_id = context.user_data.get("session_id")
     if session_id:
-        cleanup_temp_files(session_id)
-        download_report.forget(session_id)
+        _cleanup_session_when_idle(session_id, forget_report=True)
         logger.info(
             f"Временные файлы для legacy-сессии {session_id} пользователя {user_id} очищены."
         )
@@ -1533,8 +1618,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         context (ContextTypes.DEFAULT_TYPE): Контекст.
     """
     logger.info(f"Получена команда /start от пользователя {update.effective_user.id}")
-    _track_tg_user(update)
-    track_event(update.effective_user.id, "start")
+    await _track_tg_user(update)
+    await asyncio.to_thread(track_event, update.effective_user.id, "start")
     from utils.cookie_manager import build_admin_entry_markup, is_admin
 
     user_id = update.effective_user.id if update.effective_user else None
@@ -1646,7 +1731,7 @@ async def process_url(
             return
         url = url_from_message
     logger.info(f"Обработка URL '{url}' от пользователя {user_id}")
-    _track_tg_user(update)
+    await _track_tg_user(update)
 
     # Определяем платформу для аналитики
     _analytics_platform = None
@@ -1661,7 +1746,12 @@ async def process_url(
     elif is_valid_vk_url(url):
         _analytics_platform = "vk"
     if _analytics_platform:
-        track_event(user_id, "download", platform=_analytics_platform, url=url)
+        try:
+            await asyncio.to_thread(
+                track_event, user_id, "download", platform=_analytics_platform, url=url
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Аналитика запроса недоступна: %s", exc)
 
     # Проверка YouTube
     if is_valid_youtube_url(url):
@@ -1670,7 +1760,9 @@ async def process_url(
         )
         try:
             video_info = await run_blocking(
-                get_video_info, url, description="get_video_info"
+                functools.partial(get_video_info, url, session_id=session_id),
+                description="get_video_info",
+                session_id=session_id,
             )
             formats = get_available_formats(video_info)
             if not _finish_processing(context, session_token, video_info, formats):
@@ -1678,9 +1770,22 @@ async def process_url(
             text, reply_markup = _build_main_menu(
                 "youtube", video_info, session_token, formats
             )
-            await processing_message.edit_text(
-                text, reply_markup=reply_markup, parse_mode="Markdown"
-            )
+            try:
+                await processing_message.edit_text(
+                    text, reply_markup=reply_markup, parse_mode="Markdown"
+                )
+            except telegram.error.BadRequest as exc:
+                if not any(
+                    marker in str(exc).lower()
+                    for marker in ("parse entities", "end of entity")
+                ):
+                    raise
+                logger.warning("Telegram отклонил Markdown меню YouTube: %s", exc)
+                await processing_message.edit_text(
+                    _markdown_to_plain_text(text),
+                    reply_markup=reply_markup,
+                    parse_mode=None,
+                )
         except (yt_dlp.utils.DownloadError, yt_dlp.cookies.CookieLoadError) as e_cookie:
             error_code = _make_error_code(
                 "youtube", _classify_internal_error_category("youtube", str(e_cookie))
@@ -1697,7 +1802,7 @@ async def process_url(
                 _build_public_error_message("youtube", error_code, str(e_cookie))
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         except (ValueError, KeyError) as e:
             if "слишком длинное" in str(e):
                 await processing_message.edit_text(TOO_LONG_VIDEO_MESSAGE)
@@ -1715,7 +1820,7 @@ async def process_url(
                     USER_ERROR_WITH_CODE.format(error_code=error_code)
                 )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
             error_code = _make_error_code("youtube", "TIMEOUT")
             _schedule_platform_failure_log(
@@ -1730,7 +1835,7 @@ async def process_url(
                 USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code)
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         except Exception as e:
             error_code = _make_error_code("youtube", "UNKNOWN")
             _schedule_platform_failure_log(
@@ -1745,7 +1850,7 @@ async def process_url(
                 USER_ERROR_WITH_CODE.format(error_code=error_code)
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         return
     # Проверка TikTok
     if is_valid_tiktok_url(url):
@@ -1781,7 +1886,7 @@ async def process_url(
                 _build_public_error_message("tiktok", error_code, str(e))
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         return
     # Проверка Instagram Stories (не поддерживается)
     if is_instagram_story_url(url):
@@ -1832,7 +1937,7 @@ async def process_url(
                 _build_public_error_message("instagram", error_code, str(e))
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         return
     # Проверка Rutube
     if is_valid_rutube_url(url):
@@ -1841,7 +1946,8 @@ async def process_url(
         )
         try:
             video_info = await run_blocking(
-                get_rutube_info, url, description="get_rutube_info"
+                functools.partial(get_rutube_info, url, session_id=session_id),
+                description="get_rutube_info", session_id=session_id,
             )
             formats = get_available_formats_rutube(video_info)
             if not _finish_processing(context, session_token, video_info, formats):
@@ -1866,7 +1972,7 @@ async def process_url(
                 _build_public_error_message("rutube", error_code, str(e))
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         return
     # Проверка VK
     if is_valid_vk_url(url):
@@ -1874,7 +1980,10 @@ async def process_url(
             update, context, url, "vk"
         )
         try:
-            video_info = await run_blocking(get_vk_info, url, description="get_vk_info")
+            video_info = await run_blocking(
+                functools.partial(get_vk_info, url, session_id=session_id),
+                description="get_vk_info", session_id=session_id,
+            )
             formats = get_available_formats_vk(video_info)
             if not _finish_processing(context, session_token, video_info, formats):
                 return
@@ -1882,6 +1991,16 @@ async def process_url(
             await processing_message.edit_text(
                 text, reply_markup=reply_markup, parse_mode="Markdown"
             )
+        except FileSizeLimitError:
+            await processing_message.edit_text(
+                VK_NO_SUITABLE_FORMAT_MESSAGE.format(
+                    max_mb=MAX_FILE_SIZE // (1024 * 1024)
+                )
+            )
+            await _cleanup_user_session(user_id, context, session_token)
+        except VkLiveActiveError:
+            await processing_message.edit_text(VK_LIVE_ACTIVE_MESSAGE)
+            await _cleanup_user_session(user_id, context, session_token)
         except Exception as e:
             error_code = _make_error_code(
                 "vk", _classify_internal_error_category("vk", str(e))
@@ -1898,7 +2017,7 @@ async def process_url(
                 _build_public_error_message("vk", error_code, str(e))
             )
             if session_id:
-                cleanup_temp_files(session_id)
+                _cleanup_session_when_idle(session_id)
         return
     # Если не подходит ни один из вариантов
     await update.message.reply_text(INVALID_URL_MESSAGE)
@@ -1954,6 +2073,7 @@ async def _handle_main_callback(
                         logger.info(
                             "TikTok видео доставлено из кэша (key=%s)", cache_key
                         )
+                        await _record_delivery(query.from_user.id, session_data)
                         await query.edit_message_text(FILE_SENT)
                         await _cleanup_user_session(user_id, context, session_token)
                         return
@@ -1977,6 +2097,7 @@ async def _handle_main_callback(
                 resolve_tiktok_video_handoff,
                 url,
                 description="resolve_tiktok_video_handoff",
+                session_id=session_id,
             )
             if await _deliver_plan(
                 query, context, session_token, session_data, plan, cache_key
@@ -1992,6 +2113,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_tiktok_video",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2028,6 +2150,7 @@ async def _handle_main_callback(
         case "tiktok_audio":
             cache_key = _cache_format_id_for_main_action("tiktok", "tiktok_audio")
             if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await _record_delivery(query.from_user.id, session_data)
                 await query.edit_message_text(FILE_SENT)
                 await _cleanup_user_session(user_id, context, session_token)
                 return
@@ -2044,6 +2167,7 @@ async def _handle_main_callback(
                 resolve_tiktok_audio_handoff,
                 url,
                 description="resolve_tiktok_audio_handoff",
+                session_id=session_id,
             )
             if await _deliver_plan(
                 query, context, session_token, session_data, plan, cache_key
@@ -2059,6 +2183,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_tiktok_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2123,6 +2248,7 @@ async def _handle_main_callback(
                         logger.info(
                             "Instagram видео доставлено из кэша (key=%s)", cache_key
                         )
+                        await _record_delivery(query.from_user.id, session_data)
                         await query.edit_message_text(FILE_SENT)
                         await _cleanup_user_session(user_id, context, session_token)
                         return
@@ -2142,6 +2268,7 @@ async def _handle_main_callback(
                 resolve_instagram_video_handoff,
                 url,
                 description="resolve_instagram_video_handoff",
+                session_id=session_id,
             )
             if await _deliver_plan(
                 query, context, session_token, session_data, plan, cache_key
@@ -2157,6 +2284,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_instagram_video",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2200,6 +2328,7 @@ async def _handle_main_callback(
                 "instagram", "instagram_audio"
             )
             if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await _record_delivery(query.from_user.id, session_data)
                 await query.edit_message_text(FILE_SENT)
                 await _cleanup_user_session(user_id, context, session_token)
                 return
@@ -2218,6 +2347,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_instagram_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2268,6 +2398,7 @@ async def _handle_main_callback(
                         logger.info(
                             "Rutube видео доставлено из кэша (key=%s)", cache_key
                         )
+                        await _record_delivery(query.from_user.id, session_data)
                         await query.edit_message_text(FILE_SENT)
                         await _cleanup_user_session(user_id, context, session_token)
                         return
@@ -2284,6 +2415,7 @@ async def _handle_main_callback(
                     url,
                     session_id,
                     description="download_rutube_video",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2320,6 +2452,7 @@ async def _handle_main_callback(
         case "rutube_audio":
             cache_key = _cache_format_id_for_main_action("rutube", "rutube_audio")
             if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await _record_delivery(query.from_user.id, session_data)
                 await query.edit_message_text(FILE_SENT)
                 await _cleanup_user_session(user_id, context, session_token)
                 return
@@ -2333,6 +2466,7 @@ async def _handle_main_callback(
                     url,
                     session_id,
                     description="download_rutube_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2365,7 +2499,12 @@ async def _handle_main_callback(
             return
 
         case "vk_download":
+            vk_info = session_data.get("video_info") or {}
+            selected_format = vk_info.get("_nuvio_vk_format_id")
+            selected_size = vk_info.get("_nuvio_vk_format_size")
             cache_key = _cache_format_id_for_main_action("vk", "vk_download")
+            if cache_key and selected_format:
+                cache_key = f"{cache_key}:{selected_format}"
             if cache_key:
                 cached = telegram_cache.get(url, format_id=cache_key)
                 if cached:
@@ -2376,6 +2515,7 @@ async def _handle_main_callback(
                             supports_streaming=True,
                         )
                         logger.info("VK видео доставлено из кэша (key=%s)", cache_key)
+                        await _record_delivery(query.from_user.id, session_data)
                         await query.edit_message_text(FILE_SENT)
                         await _cleanup_user_session(user_id, context, session_token)
                         return
@@ -2388,10 +2528,18 @@ async def _handle_main_callback(
             )
             try:
                 file_path = await run_blocking(
-                    download_vk_video,
+                    functools.partial(download_vk_video, format_id=selected_format),
                     url,
                     session_id,
                     description="download_vk_video",
+                    session_id=session_id,
+                    timeout=(
+                        max(
+                            BLOCKING_TASK_TIMEOUT,
+                            min(3600, selected_size // (1024 * 1024) + 120),
+                        )
+                        if selected_size else None
+                    ),
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2403,9 +2551,7 @@ async def _handle_main_callback(
                     session_token,
                     session_data,
                     context,
-                    cache_format_id=_cache_format_id_for_main_action(
-                        "vk", "vk_download"
-                    ),
+                    cache_format_id=cache_key,
                 )
             except Exception as e:
                 error_code = _make_error_code(
@@ -2428,6 +2574,7 @@ async def _handle_main_callback(
         case "vk_audio":
             cache_key = _cache_format_id_for_main_action("vk", "vk_audio")
             if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await _record_delivery(query.from_user.id, session_data)
                 await query.edit_message_text(FILE_SENT)
                 await _cleanup_user_session(user_id, context, session_token)
                 return
@@ -2441,6 +2588,7 @@ async def _handle_main_callback(
                     url,
                     session_id,
                     description="download_vk_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2475,21 +2623,37 @@ async def _handle_main_callback(
         case "audio_m4a":
             cache_key = _cache_format_id_for_main_action("youtube", "audio_m4a")
             if cache_key and await _deliver_cached_audio(query, url, cache_key):
+                await _record_delivery(query.from_user.id, session_data)
                 await query.edit_message_text(FILE_SENT)
                 await _cleanup_user_session(user_id, context, session_token)
                 return
 
             audio_only = formats.get("audio_only", [])
+            ranked_audio = sorted(
+                audio_only,
+                key=lambda fmt: (
+                    audio_language_rank(fmt),
+                    -(fmt.get("filesize") or 0),
+                ),
+            )
             native_audio = None
-            for ext in ["m4a", "mp3", "ogg"]:
+            best_language_rank = (
+                audio_language_rank(ranked_audio[0]) if ranked_audio else None
+            )
+            for ext in ("m4a", "mp3", "ogg"):
                 native_audio = next(
-                    (f for f in audio_only if f.get("ext") == ext), None
+                    (
+                        fmt for fmt in ranked_audio
+                        if fmt.get("ext") == ext
+                        and audio_language_rank(fmt) == best_language_rank
+                    ),
+                    None,
                 )
                 if native_audio:
                     logger.info(f"Найден нативный аудио формат: {ext}")
                     break
 
-            if not native_audio and audio_only:
+            if not native_audio and ranked_audio:
                 logger.warning(
                     "Нативные форматы не найдены. Доступные: %s. Конвертируем в m4a.",
                     [f.get("ext") for f in audio_only],
@@ -2500,9 +2664,10 @@ async def _handle_main_callback(
                 file_path = await run_blocking(
                     functools.partial(download_audio, preferred_codec="m4a"),
                     url,
-                    "bestaudio",
+                    ranked_audio[0]["format_id"],
                     session_id,
                     description="download_audio_bestaudio",
+                    session_id=session_id,
                 )
             elif native_audio:
                 await safe_edit_message_text(
@@ -2514,6 +2679,7 @@ async def _handle_main_callback(
                     native_audio["format_id"],
                     session_id,
                     description="download_audio_native",
+                    session_id=session_id,
                 )
             else:
                 await query.edit_message_text(ERROR_MESSAGE)
@@ -2538,6 +2704,7 @@ async def _handle_main_callback(
         case "tg_video":
             cache_key = _cache_format_id_for_main_action("youtube", "tg_video")
             if cache_key and await _deliver_cached_video(query, url, cache_key):
+                await _record_delivery(query.from_user.id, session_data)
                 await query.edit_message_text(FILE_SENT)
                 await _cleanup_user_session(user_id, context, session_token)
                 return
@@ -2647,6 +2814,13 @@ async def _handle_main_callback(
                     fmt for fmt in combined if fmt.get("filesize") is None
                 ]
                 if formats_without_size:
+                    best_rank = min(
+                        audio_language_rank(fmt) for fmt in formats_without_size
+                    )
+                    formats_without_size = [
+                        fmt for fmt in formats_without_size
+                        if audio_language_rank(fmt) == best_rank
+                    ]
                     formats_without_size.sort(key=lambda x: x.get("height", 0))
                     tg_video = formats_without_size[len(formats_without_size) // 3]
                     logger.info(
@@ -2792,6 +2966,7 @@ async def _download_and_send_subtitles(
             language,
             subtitle_format,
             description="download_subtitles",
+            session_id=session_data["session_id"],
         )
     except Exception as e:
         logger.error(f"Ошибка скачивания субтитров: {e}", exc_info=True)
@@ -2865,6 +3040,7 @@ async def _handle_format_callback(
         if cache_format_id and await _deliver_cached_video(
             query, url, cache_format_id
         ):
+            await _record_delivery(query.from_user.id, session_data)
             await query.edit_message_text(FILE_SENT)
             await _cleanup_user_session(user_id, context, session_token)
             return
@@ -3088,11 +3264,11 @@ async def download_content(
             )
         if content_type == "audio_only":
             return await run_blocking(
-                download_audio,
+                download_audio_native,
                 url,
                 format_id,
                 session_id,
-                description="download_audio_only",
+                description="download_audio_native_format",
                 session_id=session_id,
             )
         raise ValueError(f"Неподдерживаемый content_type: {content_type}")
@@ -3129,7 +3305,6 @@ async def send_file(
     success = False
     try:
         await safe_edit_message_text(query, FILE_PREPARING)
-        await asyncio.sleep(1)
         success = await send_single_file(
             query,
             file_path,
@@ -3138,6 +3313,7 @@ async def send_file(
             cache_format_id=cache_format_id,
         )
         if success:
+            await _record_delivery(user_id, session_data)
             await safe_edit_message_text(query, FILE_SENT)
     except (FileNotFoundError, PermissionError) as e:
         error_code = _make_error_code("file", "ACCESS")
@@ -3203,7 +3379,7 @@ async def send_file(
         if success:
             await _cleanup_user_session(user_id, context, session_token)
         elif session_id := session_data.get("session_id"):
-            cleanup_temp_files(session_id)
+            _cleanup_session_when_idle(session_id)
 
 
 async def _send_photo_post_assets(
@@ -3265,8 +3441,10 @@ async def _send_photo_post_assets(
             video_info.get(audio_key),
             referer,
             description=f"resolve_{platform}_photo_post_handoff",
+            session_id=session_id,
         )
         if photo_plan and await _deliver_photo_post_by_url(query, photo_plan):
+            await _record_delivery(query.from_user.id, session_data)
             await query.edit_message_text(FILE_SENT)
             await _cleanup_user_session(user_id, context, session_token)
             return
@@ -3277,6 +3455,7 @@ async def _send_photo_post_assets(
             session_id,
             session_data.get("video_info"),
             description=f"download_{platform}_photo_post_assets",
+            session_id=session_id,
         )
         image_paths = list(assets.get("images") or [])
         audio_path = assets.get("audio")
@@ -3299,6 +3478,7 @@ async def _send_photo_post_assets(
             with open(audio_path, "rb") as audio_file:
                 await query.message.reply_audio(audio=audio_file, caption=None)
 
+        await _record_delivery(query.from_user.id, session_data)
         await query.edit_message_text(FILE_SENT)
         await _cleanup_user_session(user_id, context, session_token)
     except (FileNotFoundError, PermissionError) as e:
@@ -3315,7 +3495,7 @@ async def _send_photo_post_assets(
             USER_FILE_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
-        cleanup_temp_files(session_id)
+        _cleanup_session_when_idle(session_id)
     except telegram.error.NetworkError as e:
         error_code = _make_error_code("telegram", "NETWORK")
         _schedule_platform_failure_log(
@@ -3330,7 +3510,7 @@ async def _send_photo_post_assets(
             USER_NETWORK_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
-        cleanup_temp_files(session_id)
+        _cleanup_session_when_idle(session_id)
     except telegram.error.TelegramError as e:
         error_code = _make_error_code("telegram", "API")
         _schedule_platform_failure_log(
@@ -3345,7 +3525,7 @@ async def _send_photo_post_assets(
             USER_TELEGRAM_ERROR_WITH_CODE.format(error_code=error_code),
             reply_markup=back_markup,
         )
-        cleanup_temp_files(session_id)
+        _cleanup_session_when_idle(session_id)
     except Exception as e:
         error_code = _make_error_code(
             platform_for_errors,
@@ -3363,7 +3543,7 @@ async def _send_photo_post_assets(
             _build_public_error_message(platform_for_errors, error_code, str(e)),
             reply_markup=back_markup,
         )
-        cleanup_temp_files(session_id)
+        _cleanup_session_when_idle(session_id)
 
 
 def _file_ready_to_send(file_path: Path) -> bool:
@@ -3598,28 +3778,13 @@ def escape_markdown(text: str) -> str:
     if not text:
         return "N/A"
 
-    # Экранируем специальные символы Markdown
-    escape_chars = [
-        "*",
-        "_",
-        "[",
-        "]",
-        "(",
-        ")",
-        "~",
-        "`",
-        ">",
-        "#",
-        "+",
-        "-",
-        "=",
-        "|",
-        "{",
-        "}",
-        ".",
-        "!",
-    ]
-    for char in escape_chars:
-        text = text.replace(char, f"\\{char}")
+    # Используется legacy Markdown (parse_mode="Markdown"). В нем допустимо
+    # экранировать только ограниченный набор символов; обратные слеши перед
+    # точками, дефисами и прочей пунктуацией ломают разбор Telegram.
+    return _telegram_escape_markdown(text, version=1)
 
-    return text
+
+def _markdown_to_plain_text(text: str) -> str:
+    """Убирает разметку меню, сохраняя экранированные символы заголовка."""
+    without_markup = re.sub(r"(?<!\\)[*`_]", "", text)
+    return re.sub(r"\\([_*`\[\\])", r"\1", without_markup)

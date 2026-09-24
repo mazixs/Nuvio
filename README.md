@@ -14,6 +14,7 @@
 ## Возможности
 
 - YouTube (видео + Shorts), TikTok, Instagram (посты, reels, фото-посты, карусели), Rutube, VK Video
+- Для YouTube бот предпочитает русскую звуковую дорожку, если она доступна и помещается в лимит Telegram; иначе использует оригинальную или доступную. В меню аудио показан язык каждой дорожки
 - TikTok и Instagram фото-посты: каждая картинка отправляется отдельным сообщением, звук — отдельно, если он есть
 - Извлечение аудио (MP3 192k через FFmpeg для видео и отдельная звуковая дорожка для фото-постов)
 - Кэширование file_id -- мгновенная повторная отправка через Telegram CDN
@@ -23,14 +24,14 @@
 - Админские команды: `/cache_stats`, `/search_cache`, `/cleanup_cache`, `/admin` (управление cookies)
 - **CSI (Customer Satisfaction Index)** — автоматические опросы удовлетворённости (шкала 0–10) с текстовой обратной связью для оценок <7; метрики NPS/CSI на дашборде. Частота опроса настраивается на странице `/settings` WebUI (по умолчанию раз в 14 дней) и применяется без перезапуска бота
 - WebUI-дашборд аналитики (FastAPI + Jinja2 + Chart.js)
-- Опциональное автообновление yt-dlp (rolling-release, nightly channel)
+- Предложения обновления yt-dlp через scheduled PR с проверкой нового образа
 - Готовность к headless/systemd-развертыванию (`init_env.sh` в качестве `ExecStartPre`)
 - Поддержка Docker
 
 ### Rutube и VK Video
 
 - **Rutube** — поддерживаются обычные видео, Shorts, embed и плейлисты. Скачивание выполняется через yt-dlp напрямую, без необходимости в cookies
-- **VK Video** — поддерживаются видео, клипы и посты со стены. Для обхода защиты HLS-фрагментов VK используется стратегия `best[protocol=https]`, которая выбирает прямые ссылки вместо фрагментированных потоков. Cookies не требуются для публичных видео
+- **VK Video** - поддерживаются видео, клипы, посты со стены и завершенные трансляции по ссылкам `vk.ru/live-...`. Для прямых MP4 бот заранее проверяет размер и выбирает наибольшее качество в пределах лимита Telegram. Например, для длинного архива может быть доступно 480p вместо слишком большого 1080p. Активные эфиры не отправляются как файл. Cookies не требуются для публичных видео
 - Для обеих платформ доступны две кнопки: «Скачать видео» и «Только аудио (MP3)». Аудио извлекается через FFmpeg в формате MP3 192k
 
 ### Фото-посты и карусели
@@ -59,6 +60,7 @@
 
 - Python 3.14+
 - FFmpeg
+- Deno 2.3+ для полного набора форматов YouTube (в Docker-образ включен)
 - Токен Telegram-бота ([@BotFather](https://t.me/BotFather))
 - `API_ID` и `API_HASH` приложения с [my.telegram.org](https://my.telegram.org)
 
@@ -112,9 +114,10 @@ docker compose --env-file .secrets/.env up -d
 
 ## CI/CD
 
-- **CI** — полный набор тестов, покрытие не ниже 40%, линтинг и Docker
+- **CI** - полный набор тестов, покрытие не ниже 70%, линтинг и Docker
   smoke-проверки и Trivy-сканирование исправимых HIGH/CRITICAL уязвимостей
-  на каждый push/PR в `main` и `develop`
+  на каждый push/PR в `main` и `develop`, а также вручную или из задачи
+  обновления yt-dlp через `workflow_dispatch`
 - **Релиз** — при пуше тега `v*` автоматически:
   - Прогоняются тесты
   - Собирается canonical digest с SBOM и provenance
@@ -151,14 +154,11 @@ git push origin v1.0.0
 | `BLOCKING_TASK_TIMEOUT` | нет | `600` | Таймаут блокирующих задач (секунды) |
 | `TIKTOK_FAST_PATH` | нет | `true` | Быстрый путь TikTok: прямая H.264-ссылка вместо yt-dlp (576×1024, без перекодирования). Смена флага не влияет на уже закэшированные ссылки — см. ниже |
 | `INSTAGRAM_FAST_PATH` | нет | `true` | Быстрый путь Instagram: прямая ссылка из GraphQL вместо yt-dlp (~1.9 с против 7.5 с, качество то же — H.264 + AAC) |
-| `YTDLP_AUTO_UPDATE` | нет | `false` | Явно разрешить обновление yt-dlp при старте |
-| `YTDLP_RELEASE_CHANNEL` | нет | `nightly` | Канал обновлений yt-dlp (`stable`, `nightly`, `master`) |
-| `YTDLP_AUTO_UPDATE_TIMEOUT` | нет | `240` | Таймаут операции обновления yt-dlp (секунды) |
 | `YTDLP_CLI_FALLBACK` | нет | `true` | Использовать CLI-режим yt-dlp как запасной путь |
 | `YTDLP_CLI_TIMEOUT` | нет | `900` | Таймаут CLI-вызова yt-dlp (секунды) |
 | `CANARY_ENABLED` | нет | `false` | Канареечная проверка YouTube по расписанию: бот сам качает эталонный ролик и зовёт админов, если сломалось |
 | `CANARY_INTERVAL_HOURS` | нет | `12` | Часы между проверками (допустимо 1–168) |
-| `CANARY_VIDEO_ID` | нет | `aqz-KE-bpKQ` | Id эталонного ролика. Нужен длиннее пары минут — на коротком клипе поломка не проявляется |
+| `CANARY_VIDEO_ID` | нет | `6WFj-CKldv4` | Id эталонного ролика. Нужен длиннее пары минут - на коротком клипе поломка не проявляется |
 | `DATA_DIR` | нет | корень репозитория | Каталог баз данных (`analytics.db`, `telegram_cache.db`). В Docker задаёт compose: `/app/data` |
 | `TEMP_DIR` | нет | `./temp` | Каталог временных медиа. В Docker задаёт compose: `/app/media` (общий том с Bot API) |
 | `YOUTUBE_COOKIES_FILE` | нет | `www.youtube.com_cookies.txt` | Имя файла cookies YouTube внутри `.secrets/` |
@@ -301,7 +301,7 @@ Nuvio/
 | `media_processor.py` | FFmpeg: извлечение аудио, конвертация WebM в MP4, мерж аудио/видео |
 | `video_cache.py` | SQLite-кэш file_id для мгновенной повторной отправки (WAL mode, TTL 90 дней) |
 | `analytics_db.py` | SQLite-аналитика: таблицы `users`, `events`, `csi_responses`, `settings` (WAL mode) |
-| `ytdlp_runtime.py` | Автообновление yt-dlp, CLI fallback |
+| `ytdlp_runtime.py` | Версия yt-dlp и CLI fallback |
 | `cookie_manager.py` | Админский интерфейс загрузки cookies |
 | `cookie_health.py` | Валидация и проверка здоровья cookies |
 | `logger.py` | Настройка логирования (rotating file handler, 10MB, 5 backups) |
@@ -333,7 +333,7 @@ pytest                              # все тесты
 pytest tests/test_youtube_smoke.py -v  # один файл с подробным выводом
 pytest -k "test_name"               # запуск конкретного теста
 coverage run --branch -m pytest tests/
-coverage report --fail-under=40     # та же граница, что в CI
+coverage report --fail-under=70     # та же граница, что в CI
 ```
 
 `requirements.in` и `requirements-dev.in` содержат прямые зависимости.
@@ -343,6 +343,17 @@ Lock-файлы с хешами пересобираются командами:
 uv pip compile --python-version 3.14 --generate-hashes --output-file requirements.txt requirements.in
 uv pip compile --python-version 3.14 --generate-hashes --output-file requirements-dev.txt requirements-dev.in
 ```
+
+Для yt-dlp используйте одну команду с точной версией:
+
+```bash
+python scripts/update_ytdlp.py 2026.9.16.232951.dev0
+```
+
+Она обновляет pin и оба lock-файла, затем проверяет код. Еженедельная задача
+GitHub предлагает свежую nightly отдельным PR. Работающий бот получает версию
+только после выпуска и загрузки нового образа. Состояние текущего образа,
+Deno и последней проверки YouTube видно в `/admin`.
 
 Маркеры: `syntax`, `unit`, `integration`. Тесты не обращаются к платформам по
 сети: внешние границы yt-dlp, FFmpeg и Telegram подменяются.

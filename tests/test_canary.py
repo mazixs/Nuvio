@@ -13,8 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from utils import canary, temp_file_manager, video_cache
-from utils.ytdlp_runtime import YtDlpUpdateResult
+from utils import canary, runtime_status, temp_file_manager, video_cache
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,11 +56,13 @@ def _success() -> canary.CanaryOutcome:
 
 
 @pytest.fixture
-def canary_env(monkeypatch):
-    """Включённая канарейка с двумя админами и сброшенным суточным лимитом."""
+def canary_env(monkeypatch, tmp_path):
+    """Включенная канарейка с двумя админами."""
     monkeypatch.setattr(canary, "CANARY_ENABLED", True)
     monkeypatch.setattr(canary, "ADMIN_IDS", [111, 222])
-    monkeypatch.setattr(canary, "_last_update_attempt_at", None)
+    monkeypatch.setattr(
+        runtime_status, "_status_path", lambda: tmp_path / "canary-status.json"
+    )
     return canary
 
 
@@ -78,29 +79,6 @@ def scripted_checks(monkeypatch):
             return queue.pop(0) if queue else outcomes[-1]
 
         monkeypatch.setattr(canary, "run_youtube_canary_check", _fake_check)
-        return calls
-
-    return _install
-
-
-@pytest.fixture
-def recorded_update(monkeypatch):
-    """Считает вызовы принудительного обновления yt-dlp."""
-    calls: list[dict] = []
-
-    def _install(succeeded: bool = True):
-        def _fake_update(reason="startup", *, force=False, timeout=None):
-            calls.append({"reason": reason, "force": force})
-            return YtDlpUpdateResult(
-                attempted=True,
-                succeeded=succeeded,
-                channel="nightly",
-                command=(),
-                version_before="2026.7.4",
-                version_after="2026.8.19.120000.dev0" if succeeded else "2026.7.4",
-            )
-
-        monkeypatch.setattr(canary, "ensure_latest_yt_dlp", _fake_update)
         return calls
 
     return _install
@@ -141,11 +119,10 @@ def test_successful_canary_stays_quiet(canary_env, scripted_checks):
 
 @pytest.mark.unit
 def test_failed_canary_notifies_every_admin(
-    canary_env, scripted_checks, recorded_update
+    canary_env, scripted_checks
 ):
     """При провале каждый админ получает что проверялось, что упало и код."""
     scripted_checks([_failure(), _failure()])
-    recorded_update()
     context = FakeJobContext()
 
     asyncio.run(canary.youtube_canary_job(context))
@@ -160,82 +137,25 @@ def test_failed_canary_notifies_every_admin(
 
 
 @pytest.mark.unit
-def test_failure_triggers_forced_update_and_retry(
-    canary_env, scripted_checks, recorded_update
-):
-    """Сломалось → обновился до версии X → починилось: ровно этот отчёт."""
-    calls = scripted_checks([_failure(), _success()])
-    updates = recorded_update()
+def test_failure_reports_without_changing_running_package(canary_env, scripted_checks):
+    """Отказ канарейки сообщает админам и не меняет пакет в контейнере."""
+    calls = scripted_checks([_failure()])
     context = FakeJobContext()
 
     asyncio.run(canary.youtube_canary_job(context))
 
-    assert len(updates) == 1
-    assert updates[0]["force"] is True
-    # Проверка повторяется после обновления, иначе исход неизвестен.
-    assert len(calls) == 2
-    report = context.bot.messages[0][1]
-    assert "2026.7.4 → 2026.8.19.120000.dev0" in report
-    assert "Повторная проверка прошла" in report
-
-
-@pytest.mark.unit
-def test_retry_failure_reports_that_update_did_not_help(
-    canary_env, scripted_checks, recorded_update
-):
-    """Если после обновления снова упало, отчёт говорит это прямо."""
-    scripted_checks([_failure(), _failure()])
-    recorded_update()
-    context = FakeJobContext()
-
-    asyncio.run(canary.youtube_canary_job(context))
-
-    report = context.bot.messages[0][1]
-    assert "обновление не помогло" in report
-
-
-@pytest.mark.unit
-def test_update_attempt_is_limited_to_once_per_day(
-    canary_env, scripted_checks, recorded_update
-):
-    """Второй провал за сутки обновление не запускает, но админов будит."""
-    scripted_checks([_failure(), _failure(), _failure(), _failure()])
-    updates = recorded_update()
-    context = FakeJobContext()
-
-    asyncio.run(canary.youtube_canary_job(context))
-    asyncio.run(canary.youtube_canary_job(context))
-
-    assert len(updates) == 1
-    second_report = context.bot.messages[-1][1]
-    assert "суточный лимит" in second_report
-    # Отчёт есть у обоих админов на каждом провале: 2 прогона × 2 админа.
-    assert len(context.bot.messages) == 4
-
-
-@pytest.mark.unit
-def test_update_is_allowed_again_after_the_cooldown(
-    canary_env, scripted_checks, recorded_update, monkeypatch
-):
-    """Через сутки попытка обновления снова разрешена."""
-    scripted_checks([_failure(), _failure()])
-    updates = recorded_update()
-    monkeypatch.setattr(
-        canary,
-        "_last_update_attempt_at",
-        -canary.UPDATE_COOLDOWN_SECONDS - 1,
-    )
-
-    asyncio.run(canary.youtube_canary_job(FakeJobContext()))
-
-    assert len(updates) == 1
+    assert len(calls) == 1
+    assert "YT-MEDIA_FO-ABC123" in context.bot.messages[0][1]
+    assert not hasattr(canary, "ensure_latest_yt_dlp")
 
 
 @pytest.fixture
 def fake_youtube(monkeypatch, tmp_path):
     """Подменяет yt-dlp-часть: разбор ссылки, список форматов и скачивание."""
     monkeypatch.setattr(temp_file_manager, "TEMP_DIR", tmp_path)
-    monkeypatch.setattr(canary, "get_video_info", lambda url: {"id": "fake"})
+    monkeypatch.setattr(
+        canary, "get_video_info", lambda url, session_id=None: {"id": "fake"}
+    )
     monkeypatch.setattr(
         canary,
         "get_available_formats",

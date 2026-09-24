@@ -46,8 +46,13 @@
         <div class="card-value">{{ active_30d }}</div>
     </div>
     <div class="card animate-in">
-        <div class="card-label">Всего скачиваний</div>
+        <div class="card-label">Запросов на скачивание</div>
         <div class="card-value">{{ total_downloads }}</div>
+    </div>
+    <div class="card animate-in">
+        <div class="card-label">Подтвержденных отправок</div>
+        <div class="card-value">{{ total_deliveries }}</div>
+        <div class="card-hint">Учитываются с момента обновления бота</div>
     </div>
 </div>
 
@@ -84,7 +89,7 @@
 
 <div class="cards-grid-3">
     <div class="card animate-in">
-        <div class="card-label">Среднее скачиваний / юзер</div>
+        <div class="card-label">Среднее запросов / пользователь</div>
         <div class="card-value">{{ avg_downloads }}</div>
     </div>
     <div class="card accent animate-in">
@@ -105,7 +110,7 @@
 
 <div class="charts-grid">
     <div class="chart-box animate-in">
-        <h3><span class="dot dot-primary"></span> Скачиваний в день</h3>
+        <h3><span class="dot dot-primary"></span> Запросов в день</h3>
         <canvas id="downloadsChart"></canvas>
     </div>
     <div class="chart-box animate-in">
@@ -240,7 +245,7 @@
                     <th>#</th>
                     <th>URL</th>
                     <th>Платформа</th>
-                    <th>Скачивания</th>
+                    <th>Запросы</th>
                 </tr>
             </thead>
             <tbody>
@@ -279,7 +284,7 @@ new Chart(document.getElementById('downloadsChart'), {
     data: {
         labels: dlData.map(d => d.day),
         datasets: [{
-            label: 'Скачивания',
+            label: 'Запросы',
             data: dlData.map(d => d.cnt),
             backgroundColor: 'rgba(99, 102, 241, 0.7)',
             hoverBackgroundColor: 'rgba(99, 102, 241, 0.9)',

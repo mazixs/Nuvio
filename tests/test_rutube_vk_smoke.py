@@ -3,6 +3,9 @@
 """Smoke tests for rutube_vk_utils with mocked yt-dlp."""
 
 from pathlib import Path
+from contextlib import contextmanager
+
+import pytest
 
 from utils import rutube_vk_utils
 
@@ -135,3 +138,85 @@ def test_get_available_formats_vk_groups_formats(monkeypatch):
     formats = rutube_vk_utils.get_available_formats_vk(info)
     assert len(formats["combined"]) == 1
     assert len(formats["audio_only"]) == 1
+
+
+def test_vk_direct_size_uses_range_when_head_is_rejected(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, headers):
+            self.status_code = status_code
+            self.headers = headers
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.range_headers = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def head(self, url, headers):
+            return FakeResponse(405, {})
+
+        @contextmanager
+        def stream(self, method, url, headers):
+            self.range_headers = headers
+            yield FakeResponse(206, {"content-range": "bytes 0-0/30000000"})
+
+    monkeypatch.setattr(rutube_vk_utils.httpx, "Client", FakeClient)
+    info = {"formats": [{
+        "format_id": "url480", "protocol": "https", "ext": "mp4",
+        "url": "https://example.com/video.mp4", "height": 480,
+    }]}
+
+    assert rutube_vk_utils._select_vk_direct_format(info) == ("url480", 30_000_000, 480)
+
+
+def test_vk_long_recording_with_unknown_size_remains_downloadable(monkeypatch):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def head(self, url, headers):
+            raise rutube_vk_utils.httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr(rutube_vk_utils.httpx, "Client", FakeClient)
+    monkeypatch.setattr(rutube_vk_utils, "_get_info", lambda *args, **kwargs: {
+        "duration": rutube_vk_utils.MAX_VIDEO_DURATION + 1,
+        "formats": [
+            {"format_id": "url720", "protocol": "https", "ext": "mp4",
+             "url": "https://example.com/720.mp4", "height": 720},
+            {"format_id": "url360", "protocol": "https", "ext": "mp4",
+             "url": "https://example.com/360.mp4", "height": 360},
+        ],
+    })
+
+    info = rutube_vk_utils.get_vk_info("https://vk.com/video-1_2")
+    assert info["_nuvio_vk_format_id"] == "url360"
+    assert info["_nuvio_vk_format_size"] is None
+
+
+def test_vk_direct_download_stops_at_size_limit(monkeypatch, tmp_path):
+    class OversizeYDL(FakeYDL):
+        def __init__(self, options):
+            super().__init__(options)
+            assert options["max_filesize"] == rutube_vk_utils.MAX_FILE_SIZE
+
+        def extract_info(self, url, download=False):
+            for hook in self.options["progress_hooks"]:
+                hook({"status": "downloading", "downloaded_bytes": rutube_vk_utils.MAX_FILE_SIZE + 1})
+            pytest.fail("размер файла не остановил загрузку")
+
+    monkeypatch.setattr(rutube_vk_utils.yt_dlp, "YoutubeDL", OversizeYDL)
+    with pytest.raises(rutube_vk_utils.FileSizeLimitError):
+        rutube_vk_utils.download_vk_video(
+            "https://vk.com/video-1_2", "vk-size-limit", tmp_path,
+            force_local=True, format_id="url360",
+        )
