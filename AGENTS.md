@@ -167,7 +167,7 @@ pytest -v                          # Подробный вывод
 pytest -k "test_name"              # Запуск конкретного теста
 pytest tests/test_youtube_smoke.py -v  # Один файл
 coverage run --branch -m pytest tests/
-coverage report --fail-under=40    # Та же граница, что в CI
+coverage report --fail-under=70    # Та же граница, что в CI
 ```
 
 ### Маркеры pytest
@@ -269,7 +269,7 @@ ruff check --output-format=github .
 
 Запускается на push/PR в `main` и `develop`:
 1. **Линтинг** — actionlint и `ruff check --output-format=github .`
-2. **Тесты** — полный `pytest tests/` на Python 3.14 с покрытием не ниже 40%.
+2. **Тесты** - полный `pytest tests/` на Python 3.14 с покрытием не ниже 70%.
 3. **Docker build** — Buildx-сборка с GHA-кэшем, Trivy-проверка исправимых
    HIGH/CRITICAL уязвимостей и smoke-проверка Nuvio и локального Bot API.
 

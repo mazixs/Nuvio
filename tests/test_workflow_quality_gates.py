@@ -33,7 +33,7 @@ def test_ci_runs_full_suite_with_coverage():
     assert "pip install ruff" not in workflow
     assert "requirements-dev.txt" in workflow
     assert "coverage run --branch -m pytest tests/" in workflow
-    assert "coverage report --fail-under=40" in workflow
+    assert "coverage report --fail-under=70" in workflow
 
 
 def test_release_runs_full_suite_with_coverage_and_ruff():
@@ -44,7 +44,7 @@ def test_release_runs_full_suite_with_coverage_and_ruff():
     assert "requirements-dev.txt" in workflow
     assert "ruff check --output-format=github ." in workflow
     assert "coverage run --branch -m pytest tests/" in workflow
-    assert "coverage report --fail-under=40" in workflow
+    assert "coverage report --fail-under=70" in workflow
 
 
 def test_release_is_published_only_after_image():

@@ -114,7 +114,7 @@ docker compose --env-file .secrets/.env up -d
 
 ## CI/CD
 
-- **CI** — полный набор тестов, покрытие не ниже 40%, линтинг и Docker
+- **CI** - полный набор тестов, покрытие не ниже 70%, линтинг и Docker
   smoke-проверки и Trivy-сканирование исправимых HIGH/CRITICAL уязвимостей
   на каждый push/PR в `main` и `develop`
 - **Релиз** — при пуше тега `v*` автоматически:
@@ -332,7 +332,7 @@ pytest                              # все тесты
 pytest tests/test_youtube_smoke.py -v  # один файл с подробным выводом
 pytest -k "test_name"               # запуск конкретного теста
 coverage run --branch -m pytest tests/
-coverage report --fail-under=40     # та же граница, что в CI
+coverage report --fail-under=70     # та же граница, что в CI
 ```
 
 `requirements.in` и `requirements-dev.in` содержат прямые зависимости.

@@ -62,7 +62,7 @@ jobs:
       - name: Полный набор тестов с покрытием
         run: |
           coverage run --branch -m pytest tests/
-          coverage report --fail-under=40
+          coverage report --fail-under=70
 
   docker:
     name: Docker → GHCR
