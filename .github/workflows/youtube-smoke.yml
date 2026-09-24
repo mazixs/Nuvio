@@ -25,5 +25,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Сборка образа
         run: docker build --tag nuvio:youtube-smoke .
-      - name: Локальные компоненты и полная загрузка YouTube
-        run: docker run --rm nuvio:youtube-smoke python -m scripts.check_media_runtime --download
+      - name: Локальные компоненты образа
+        run: docker run --rm nuvio:youtube-smoke python -m scripts.check_media_runtime
+      - name: Полная загрузка YouTube
+        shell: bash
+        run: |
+          set +e
+          docker run --rm nuvio:youtube-smoke python -m scripts.check_media_runtime --download 2>&1 | tee /tmp/nuvio-youtube-smoke.log
+          result=${PIPESTATUS[0]}
+          set -e
+          if [ "$result" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -Fq "Sign in to confirm" /tmp/nuvio-youtube-smoke.log; then
+            echo "::warning::YouTube отклонил IP GitHub runner. Проверка загрузки не дала результата; используйте канарейку на хосте бота."
+            echo "YouTube отклонил IP GitHub runner. Результат сетевой проверки неопределенный; канарейка на хосте бота остается источником сигнала." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$result"

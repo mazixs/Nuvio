@@ -12,21 +12,27 @@ from utils.canary import canary_video_url, run_youtube_canary_check
 from utils.youtube_utils import get_available_formats, get_video_info
 
 
+def _locked_ytdlp_version(lock_text: str) -> str:
+    """Возвращает единственную закрепленную версию yt-dlp из lock-файла."""
+    versions = re.findall(
+        r"^yt-dlp(?:\[[A-Za-z0-9_,.-]+\])?==([^\s\\]+)",
+        lock_text,
+        re.MULTILINE,
+    )
+    if len(versions) != 1:
+        raise RuntimeError("ожидается ровно один pin yt-dlp в lock-файле")
+    return versions[0]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--online", action="store_true", help="Проверить форматы контрольного ролика")
     parser.add_argument("--download", action="store_true", help="Скачать контрольный ролик через канарейку")
     args = parser.parse_args()
-    pin = re.search(
-        r"^yt-dlp==(\S+)",
-        Path("requirements.txt").read_text(encoding="utf-8"),
-        re.MULTILINE,
-    )
-    if pin is None:
-        raise RuntimeError("pin yt-dlp в lock-файле не найден")
+    pin = _locked_ytdlp_version(Path("requirements.txt").read_text(encoding="utf-8"))
     parts = runtime_components()
     sys.stdout.write(f"{parts}\n")
-    if parts["yt_dlp_installed"] != pin.group(1):
+    if parts["yt_dlp_installed"] != pin:
         raise RuntimeError("версия yt-dlp в образе не совпадает с pin")
     if parts["ejs"] == "отсутствует" or parts["deno"] == "отсутствует":
         raise RuntimeError("для YouTube нужны EJS и Deno")
