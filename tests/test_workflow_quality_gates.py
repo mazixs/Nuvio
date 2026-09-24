@@ -10,6 +10,7 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 DEPENDABOT_CONFIG = ROOT / ".github" / "dependabot.yml"
 RUNTIME_REQUIREMENTS = ROOT / "requirements.txt"
 DEV_REQUIREMENTS = ROOT / "requirements-dev.txt"
+DEV_INPUT = ROOT / "requirements-dev.in"
 RUFF_CONFIG = ROOT / "pyproject.toml"
 DOCKERFILE = ROOT / "Dockerfile"
 BOT_API_DOCKERFILE = ROOT / "Dockerfile.telegram-bot-api"
@@ -33,7 +34,7 @@ def test_ci_runs_full_suite_with_coverage():
     assert "pip install ruff" not in workflow
     assert "requirements-dev.txt" in workflow
     assert "coverage run --branch -m pytest tests/" in workflow
-    assert "coverage report --fail-under=40" in workflow
+    assert "coverage report --fail-under=70" in workflow
 
 
 def test_release_runs_full_suite_with_coverage_and_ruff():
@@ -44,7 +45,7 @@ def test_release_runs_full_suite_with_coverage_and_ruff():
     assert "requirements-dev.txt" in workflow
     assert "ruff check --output-format=github ." in workflow
     assert "coverage run --branch -m pytest tests/" in workflow
-    assert "coverage report --fail-under=40" in workflow
+    assert "coverage report --fail-under=70" in workflow
 
 
 def test_release_is_published_only_after_image():
@@ -74,6 +75,16 @@ def test_ci_smoke_tests_built_images():
     assert "nuvio-telegram-bot-api:test --version" in workflow
 
 
+def test_youtube_smoke_only_tolerates_runner_antibot_challenge():
+    workflow = (ROOT / ".github" / "workflows" / "youtube-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "python -m scripts.check_media_runtime --download" in workflow
+    assert 'grep -Fq "Sign in to confirm"' in workflow
+    assert 'exit "$result"' in workflow
+
+
 def test_release_smoke_tests_application_before_push():
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     docker_job = _job_body(workflow, "docker")
@@ -91,13 +102,16 @@ def test_release_smoke_tests_application_before_push():
 def test_dev_tools_are_pinned_and_not_installed_in_runtime_image():
     runtime = RUNTIME_REQUIREMENTS.read_text(encoding="utf-8")
     dev = DEV_REQUIREMENTS.read_text(encoding="utf-8")
+    dev_input = DEV_INPUT.read_text(encoding="utf-8")
     ruff_config = RUFF_CONFIG.read_text(encoding="utf-8")
 
-    assert "pytest==" not in runtime
-    assert "coverage==" not in runtime
-    assert "pytest==9.1.1" in dev
-    assert "coverage==7.15.4" in dev
-    assert "ruff==0.16.3" in dev
+    for tool in ("pytest", "coverage", "ruff"):
+        assert re.search(rf"^{tool}==", runtime, re.MULTILINE) is None
+        pin = re.search(rf"^{tool}==([^\s]+)$", dev_input, re.MULTILINE)
+        assert pin, f"{tool} не закреплен в requirements-dev.in"
+        assert re.search(
+            rf"^{tool}=={re.escape(pin.group(1))}\s", dev, re.MULTILINE
+        ), f"Версия {tool} не совпадает с dev lock-файлом"
     assert "--hash=sha256:" in runtime
     assert "--hash=sha256:" in dev
     assert 'select = ["E4", "E7", "E9", "F"]' in ruff_config

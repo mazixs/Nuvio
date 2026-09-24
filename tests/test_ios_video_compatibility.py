@@ -386,7 +386,7 @@ def test_rutube_and_vk_share_the_same_guard():
 
 @pytest.mark.unit
 def test_stale_video_documents_are_dropped_once(tmp_path):
-    """Записи, сделанные до ADR-002, обязаны исчезнуть при первом запуске.
+    """Старые размеры и выбор языка YouTube очищаются при первом запуске.
 
     Пересылка по `file_id` берёт размеры из сохранённого документа, а там уже
     записано `320x320`. Правка кода такие записи не чинит — их нужно выбросить,
@@ -426,8 +426,8 @@ def test_stale_video_documents_are_dropped_once(tmp_path):
     assert reopened.get("https://a/1", format_id="direct_video") is None
     assert reopened.get("https://a/2", format_id="tg_video") is None
     assert reopened.get("https://a/3", format_id="combined:137+140") is None
-    assert reopened.get("https://a/4", format_id="audio_m4a") is not None, (
-        "звук размеров не несёт, выбрасывать его — лишние скачивания"
+    assert reopened.get("https://a/4", format_id="audio_m4a") is None, (
+        "старое аудио YouTube могло содержать английскую дорожку вместо русской"
     )
     assert reopened.get("https://a/5", format_id="tiktok_audio") is not None
 

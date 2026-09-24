@@ -23,7 +23,9 @@ logger = setup_logger(__name__)
 #     тяжёлых файлах Telegram записывал в документ `320x320`. Такие записи
 #     правкой кода не чинятся, потому что пересылка по `file_id` берёт атрибуты
 #     сохранённого документа.
-DELIVERY_CONTRACT_VERSION = 1
+# 2 - выбор языка YouTube по метаданным. Старые file_id могли содержать
+#     английскую озвучку даже при доступной русской дорожке.
+DELIVERY_CONTRACT_VERSION = 2
 
 # Ключи, под которыми в кэше лежит видео. Совпадают с `utils/platform_actions.py`
 # и продублированы здесь намеренно: импорт ради двух строк связал бы кэш с
@@ -118,13 +120,16 @@ class TelegramVideoCache:
         от upgrade deadlock при конкурентной записи.
         """
         conn = sqlite3.connect(str(self.db_path), timeout=30.0, isolation_level=None)
+        started = False
         try:
             self._configure_connection(conn)
             conn.execute("BEGIN IMMEDIATE")
+            started = True
             yield conn
             conn.execute("COMMIT")
         except Exception:
-            conn.execute("ROLLBACK")
+            if started and conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
         finally:
             conn.close()
@@ -148,7 +153,8 @@ class TelegramVideoCache:
             """)
 
             # Индексы для быстрого поиска
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_url ON video_cache(url)")
+            # Первичный ключ (url, format_id) уже покрывает поиск по url.
+            conn.execute("DROP INDEX IF EXISTS idx_url")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_file_id ON video_cache(file_id)"
             )
@@ -162,35 +168,45 @@ class TelegramVideoCache:
             self._drop_stale_video_documents(conn)
 
     def _drop_stale_video_documents(self, conn: sqlite3.Connection) -> None:
-        """Выбрасывает видеозаписи, сделанные до смены контракта доставки.
+        """Один раз очищает записи, нарушающие актуальный контракт доставки.
 
         Пересылка по `file_id` берёт размеры из сохранённого документа, а не из
         нашей строки, поэтому записи, снятые до ADR-002, правкой кода не
         чинятся: в документе уже записано `320x320`. Без этой чистки сломанное
         видео приезжало бы до конца TTL, то есть 90 дней.
 
-        Звук не трогаем: размеров он не несёт, а лишний сброс — это лишние
-        скачивания. Отметка хранится в `PRAGMA user_version`, поэтому чистка
-        отрабатывает ровно один раз на базу.
+        При переходе на версию 2 удаляются только автоматические YouTube-кнопки
+        и форматы видео, которые могли быть закэшированы с чужой озвучкой.
+        Отметка хранится в `PRAGMA user_version`.
         """
         stored = conn.execute("PRAGMA user_version").fetchone()[0]
         if stored >= DELIVERY_CONTRACT_VERSION:
             return
 
-        cursor = conn.execute(
-            "DELETE FROM video_cache "
-            "WHERE format_id IN (?, ?) OR format_id LIKE 'combined:%'",
-            (DIRECT_VIDEO_CACHE_KEY, TG_VIDEO_CACHE_KEY),
-        )
+        if stored < 1:
+            cursor = conn.execute(
+                "DELETE FROM video_cache "
+                "WHERE format_id IN (?, ?) OR format_id LIKE 'combined:%'",
+                (DIRECT_VIDEO_CACHE_KEY, TG_VIDEO_CACHE_KEY),
+            )
+            if cursor.rowcount:
+                logger.info(
+                    "Кэш видео: удалено %d записей со старыми размерами Telegram",
+                    cursor.rowcount,
+                )
+        if stored < 2:
+            cursor = conn.execute(
+                "DELETE FROM video_cache WHERE platform = 'youtube' "
+                "AND (format_id IN (?, ?) OR format_id LIKE 'combined:%')",
+                (TG_VIDEO_CACHE_KEY, "audio_m4a"),
+            )
+            if cursor.rowcount:
+                logger.info(
+                    "Кэш YouTube: удалено %d записей со старым выбором языка",
+                    cursor.rowcount,
+                )
         # PRAGMA не принимает параметры, а значение здесь — наша же константа.
         conn.execute(f"PRAGMA user_version = {DELIVERY_CONTRACT_VERSION:d}")
-        if cursor.rowcount:
-            logger.info(
-                "Кэш видео: выброшено %d записей контракта версии %d — в их "
-                "документах Telegram записаны неверные размеры (ADR-002)",
-                cursor.rowcount,
-                stored,
-            )
 
     def get(
         self, url: str, format_id: str = "best", check_validity: bool = True

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import http.cookiejar
 import time
+import threading
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ import yt_dlp
 
 from config import INSTAGRAM_COOKIES_PATH, TIKTOK_COOKIES_PATH, YOUTUBE_COOKIES_PATH
 from utils.cookie_workfile import working_cookie_file
+from utils.download_report import forget as forget_download_report
 from utils.logger import setup_logger
 from utils.ytdlp_common import output_capture_opts
 
@@ -90,6 +93,7 @@ class _CookieHealthCacheEntry:
 
 
 _COOKIE_HEALTH_CACHE: dict[str, _CookieHealthCacheEntry] = {}
+_COOKIE_PROBE_LOCKS = {platform: threading.Lock() for platform in COOKIE_PATHS}
 
 
 def _read_netscape_cookies(file_path: Path) -> list[dict[str, object]]:
@@ -157,7 +161,9 @@ def _cache_result(
     return result
 
 
-def _extract_with_cookies(url: str, cookiefile: Path | str | None) -> None:
+def _extract_with_cookies(
+    url: str, cookiefile: Path | str | None, session_id: str | None = None
+) -> None:
     """Пробует получить информацию о видео. Поднимает исключение при неудаче."""
     # Вердикт пробы по-прежнему считывается только с исключения: предупреждения
     # yt-dlp уходят в лог и в отчёт, но ни одной ветки решения не трогают.
@@ -165,7 +171,7 @@ def _extract_with_cookies(url: str, cookiefile: Path | str | None) -> None:
         "quiet": True,
         "skip_download": True,
         "socket_timeout": YTDLP_PROBE_TIMEOUT_SECONDS,
-        **output_capture_opts(),
+        **output_capture_opts(session_id),
     }
     if cookiefile:
         options["cookiefile"] = str(cookiefile)
@@ -179,9 +185,10 @@ def _probe_with_ytdlp(platform: str, file_path: Path) -> str:
     Отдаётся рабочая копия: проверять надо именно тот файл, с которым работает
     скачивание, а оригинал админа не должен меняться от проверки.
     """
+    session_id = f"cookie-probe-{platform}-{uuid.uuid4().hex[:8]}"
     try:
         _extract_with_cookies(
-            YTDLP_PROBE_URLS[platform], working_cookie_file(file_path)
+            YTDLP_PROBE_URLS[platform], working_cookie_file(file_path), session_id
         )
     except Exception as exc:  # noqa: BLE001
         reason = str(exc).lower()
@@ -193,7 +200,10 @@ def _probe_with_ytdlp(platform: str, file_path: Path) -> str:
         # ложная тревога обесценивает проверку так же, как ложное «всё хорошо».
         logger.warning("Cookie probe for %s failed for another reason: %s", platform, exc)
         return "probe_failed"
-    return "valid"
+    else:
+        return "valid"
+    finally:
+        forget_download_report(session_id)
 
 
 def _probe_authenticated_session(platform: str, file_path: Path) -> str:
@@ -275,6 +285,21 @@ def check_cookie_health(platform: str, *, force: bool = False) -> CookieHealthRe
     """Checks the health of a cookie file for the requested platform."""
     if platform not in COOKIE_PATHS:
         raise ValueError(f"Unsupported platform: {platform}")
+
+    started_at = time.time()
+    with _COOKIE_PROBE_LOCKS[platform]:
+        entry = _COOKIE_HEALTH_CACHE.get(platform)
+        if (
+            entry is not None
+            and entry.result.checked_at >= started_at
+            and _is_cache_valid(platform, COOKIE_PATHS[platform], time.time())
+        ):
+            return entry.result
+        return _check_cookie_health_unlocked(platform, force=force)
+
+
+def _check_cookie_health_unlocked(platform: str, *, force: bool) -> CookieHealthResult:
+    """Выполняет единственную пробу платформы под ее блокировкой."""
 
     file_path = COOKIE_PATHS[platform]
     now = time.time()

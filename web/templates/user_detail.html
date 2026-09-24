@@ -40,7 +40,7 @@
         <div class="card-value small">{{ user.last_seen[:10] }}</div>
     </div>
     <div class="card animate-in">
-        <div class="card-label">Всего скачиваний</div>
+        <div class="card-label">Запросов на скачивание</div>
         <div class="card-value">{{ user.total_downloads }}</div>
     </div>
 </div>
@@ -79,7 +79,7 @@
 
 {% if user.downloads_by_platform %}
 <div class="stats-divider">
-    <span class="label">Скачивания по платформам</span>
+    <span class="label">Запросы по платформам</span>
     <div class="line"></div>
 </div>
 

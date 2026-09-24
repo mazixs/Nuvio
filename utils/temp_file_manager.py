@@ -3,6 +3,7 @@
 """
 
 import shutil
+import time
 import uuid
 from pathlib import Path
 from config import TEMP_DIR
@@ -56,29 +57,56 @@ def cleanup_temp_files(session_id=None):
         session_id (str, optional): Идентификатор сессии. Если не указан,
                                     очищаются все временные файлы.
     """
+    removed = 0
+    failed = 0
     try:
-        if session_id:
-            temp_path = TEMP_DIR / session_id
-            if temp_path.exists():
-                shutil.rmtree(temp_path)
-                logger.debug(f"Удалена временная директория: {temp_path}")
-        else:
-            # Проверяем, существует ли директория перед удалением содержимого
-            if TEMP_DIR.exists():
-                # Удаляем только содержимое, сохраняя саму директорию
-                for item in TEMP_DIR.iterdir():
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
-                logger.debug(f"Очищена директория временных файлов: {TEMP_DIR}")
-    except FileNotFoundError as e:
-        logger.warning(f"Файл или директория не найдены при очистке: {e}")
-    except PermissionError as e:
-        logger.error(f"Нет прав доступа для удаления временных файлов: {e}")
-    except OSError as e:
-        logger.error(f"Ошибка операционной системы при очистке временных файлов: {e}")
-    except Exception as e:
-        logger.error(
-            f"Неожиданная ошибка при очистке временных файлов: {e}", exc_info=True
+        targets = (
+            [TEMP_DIR / session_id]
+            if session_id
+            else list(TEMP_DIR.iterdir()) if TEMP_DIR.exists() else []
         )
+    except OSError as exc:
+        logger.error("Не удалось прочитать каталог временных файлов: %s", exc)
+        return 0, 1
+    for item in targets:
+        try:
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failed += 1
+            logger.error("Не удалось удалить временный файл %s: %s", item, exc)
+    logger.info("Очистка временных файлов: удалено %s, ошибок %s", removed, failed)
+    return removed, failed
+
+
+def cleanup_stale_temp_files(
+    max_age_seconds: int = 24 * 60 * 60, *, active_sessions: set[str] | None = None
+) -> tuple[int, int]:
+    """Удаляет брошенные файлы, не трогая текущие загрузки."""
+    if not TEMP_DIR.exists():
+        return 0, 0
+    cutoff = time.time() - max_age_seconds
+    active = active_sessions or set()
+    removed = failed = 0
+    for item in TEMP_DIR.iterdir():
+        if item.name in active:
+            continue
+        try:
+            if item.stat().st_mtime >= cutoff:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failed += 1
+            logger.error("Не удалось удалить старый временный файл %s: %s", item, exc)
+    return removed, failed

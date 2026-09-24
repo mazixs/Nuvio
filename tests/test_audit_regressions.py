@@ -16,7 +16,6 @@ from utils import cookie_health
 from utils import cookie_manager
 from utils import telegram_utils
 from utils import tiktok_instagram_utils
-from utils import ytdlp_runtime
 
 
 class _CapturingYDL:
@@ -1823,6 +1822,44 @@ def test_process_url_youtube_does_not_short_circuit_by_video_cache(monkeypatch):
     assert "Stub title" in processing_messages[-1].edits[-1][0]
 
 
+def test_youtube_menu_retries_plain_text_after_telegram_parse_error(monkeypatch):
+    import telegram
+
+    message = _DummyMessage("https://youtu.be/abc123def45")
+    edits = []
+
+    async def edit_text(text, **kwargs):
+        edits.append((text, kwargs))
+        if len(edits) == 1:
+            raise telegram.error.BadRequest("Can't parse entities: end of entity")
+
+    async def reply_text(text, **kwargs):
+        return SimpleNamespace(edit_text=edit_text)
+
+    async def fake_run_blocking(func, *args, **kwargs):
+        return {"title": "Тест *звезда*", "uploader": "Автор", "duration": 30, "formats": []}
+
+    message.reply_text = reply_text
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=7), message=message)
+    context = SimpleNamespace(user_data={}, args=[])
+    monkeypatch.setattr(telegram_utils, "is_valid_youtube_url", lambda url: True)
+    monkeypatch.setattr(
+        telegram_utils,
+        "get_available_formats",
+        lambda info: {"combined": [], "video_only": [], "audio_only": []},
+    )
+    monkeypatch.setattr(telegram_utils, "create_temp_dir", lambda session_id: None)
+    monkeypatch.setattr(telegram_utils, "run_blocking", fake_run_blocking)
+
+    asyncio.run(telegram_utils.process_url(update, context, message.text))
+
+    assert len(edits) == 2
+    assert edits[0][1]["parse_mode"] == "Markdown"
+    assert edits[1][1]["parse_mode"] is None
+    assert edits[1][1]["reply_markup"] == edits[0][1]["reply_markup"]
+    assert "Тест *звезда*" in edits[1][0]
+
+
 def test_process_url_tiktok_shows_menu(monkeypatch):
     """TikTok URL должен показывать меню, а не отправлять из кэша напрямую."""
     message = _DummyMessage("https://www.tiktok.com/@user/video/1")
@@ -1894,16 +1931,6 @@ def test_send_single_file_persists_explicit_cache_key(monkeypatch, tmp_path):
     assert result is True
     assert stored
     assert stored[0].format_id == "tg_video"
-
-
-def test_build_yt_dlp_upgrade_command_uses_release_channel():
-    stable = ytdlp_runtime.build_yt_dlp_upgrade_command("stable")
-    nightly = ytdlp_runtime.build_yt_dlp_upgrade_command("nightly")
-    master = ytdlp_runtime.build_yt_dlp_upgrade_command("master")
-
-    assert stable[-1] == "yt-dlp[default]"
-    assert "--pre" in nightly
-    assert "master.tar.gz" in master[-1]
 
 
 def test_create_tiktok_ytdl_modifies_formats():

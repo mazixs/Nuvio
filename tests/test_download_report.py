@@ -27,15 +27,13 @@ def test_output_is_kept_per_session():
 
 
 @pytest.mark.unit
-def test_lines_without_session_precede_session_lines():
-    """Разбор ссылки идёт до появления сессии, но объясняет выбор клиента."""
+def test_lines_without_session_do_not_leak_to_other_sessions():
+    """Общий вывод не должен раскрывать диагностику чужого запроса."""
     download_report.record_output(None, "visionos player API")
     download_report.record_output("a", "403 на скачивании")
 
-    assert download_report.output_tail("a") == [
-        "visionos player API",
-        "403 на скачивании",
-    ]
+    assert download_report.output_tail("a") == ["403 на скачивании"]
+    assert download_report.output_tail(None) == ["visionos player API"]
 
 
 @pytest.mark.unit
