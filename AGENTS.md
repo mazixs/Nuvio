@@ -40,7 +40,7 @@
 ## Структура проекта
 
 ```
-Nuvio/
+nuvio/
 ├── main.py                      # Точка входа: event loop, хэндлеры, graceful shutdown
 ├── config.py                    # Парсинг env-переменных, пути к секретам, валидация
 ├── messages.py                  # Все пользовательские тексты (централизовано)
@@ -112,8 +112,8 @@ Nuvio/
 
 ```bash
 # Клонирование и установка зависимостей
-git clone https://github.com/mazixs/Nuvio.git
-cd Nuvio
+git clone https://github.com/mazixs/nuvio.git
+cd nuvio
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 python -m pip install --requirement requirements-dev.txt

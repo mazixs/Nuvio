@@ -215,11 +215,9 @@ def test_release_notes_are_generated_by_the_tested_script():
 def test_release_image_is_lowercase_and_matches_compose():
     """Docker-ref обязан быть в нижнем регистре, а compose — тянуть тот же образ.
 
-    `github.repository` даёт `mazixs/Nuvio`. docker/metadata-action приводит
-    имя к нижнему регистру сам, а сырое `name=` в build-push-action — нет,
-    поэтому релиз v1.3.0 упал на `must be lowercase` уже после экспорта слоёв.
-    Совпадение с `compose.yaml` проверяется здесь же: разойдись эти строки —
-    и пользователь тянул бы образ, которого релиз не публиковал.
+    Имя образа закреплено отдельно от имени репозитория: оно должно оставаться
+    в нижнем регистре и совпадать с `compose.yaml`. Иначе пользователь мог бы
+    тянуть образ, который релиз не публикует.
     """
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     compose = COMPOSE_FILE.read_text(encoding="utf-8")

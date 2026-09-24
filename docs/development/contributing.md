@@ -3,8 +3,8 @@
 ## Подготовка окружения
 
 ```bash
-git clone https://github.com/mazixs/Nuvio.git
-cd Nuvio
+git clone https://github.com/mazixs/nuvio.git
+cd nuvio
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --requirement requirements-dev.txt

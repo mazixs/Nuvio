@@ -97,7 +97,7 @@ def render_notes(subjects: list[str], version: str, repository: str) -> str:
         "",
         "```bash",
         f"git clone --branch v{version} --depth 1 https://github.com/{repository}.git",
-        "cd Nuvio",
+        "cd nuvio",
         "mkdir -p .secrets",
         "cp .env.example .secrets/.env",
         "# заполнить TELEGRAM_TOKEN, ADMIN_IDS, TELEGRAM_API_ID и TELEGRAM_API_HASH",

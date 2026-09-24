@@ -164,7 +164,7 @@ Expected: все команды завершаются с кодом 0.
 
 - [ ] **Step 1: После push дождаться зелёного CI**
 
-Run: `gh run watch <run-id> --repo mazixs/Nuvio --exit-status`
+Run: `gh run watch <run-id> --repo mazixs/nuvio --exit-status`
 
 Expected: success.
 

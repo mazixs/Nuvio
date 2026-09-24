@@ -3,7 +3,7 @@
 **Версия:** 1.1
 **Дата актуализации:** 2026-07-23
 **Лицензия:** Apache 2.0
-**Репозиторий:** [github.com/mazixs/Nuvio](https://github.com/mazixs/Nuvio)
+**Репозиторий:** [github.com/mazixs/nuvio](https://github.com/mazixs/nuvio)
 
 ---
 
@@ -432,7 +432,7 @@ Tag v* → Release:
 ## 10. Структура проекта
 
 ```
-Nuvio/
+nuvio/
 ├── main.py                     # Точка входа: event-loop, shutdown, scheduled tasks
 ├── config.py                   # Парсинг env-переменных с типизацией
 ├── messages.py                 # Все user-facing тексты бота
