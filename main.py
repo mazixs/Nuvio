@@ -42,7 +42,7 @@ from config import (  # noqa: E402
 )
 from utils.canary import youtube_canary_job  # noqa: E402
 from utils.logger import setup_logger  # noqa: E402
-from utils.temp_file_manager import cleanup_temp_files  # noqa: E402
+from utils.temp_file_manager import cleanup_stale_temp_files  # noqa: E402
 from utils.cache_commands import (
     stats_command,
     cleanup_cache_command,
@@ -54,11 +54,14 @@ from utils.cookie_manager import (
     handle_admin_callback,
     handle_document_upload,
 )  # noqa: E402
-from utils.ytdlp_runtime import ensure_latest_yt_dlp, get_installed_yt_dlp_version  # noqa: E402
+from utils.ytdlp_runtime import get_installed_yt_dlp_version  # noqa: E402
+from utils.runtime_status import runtime_components  # noqa: E402
+from utils.cookie_workfile import cleanup_old_workfiles  # noqa: E402
 from utils.analytics_db import (  # noqa: E402
     close_connection,
     get_csi_interval_days,
     get_users_for_csi,
+    prune_old_event_urls,
 )
 
 # Настройка логирования
@@ -138,9 +141,24 @@ def _polling_error_callback(exc: telegram.error.TelegramError) -> None:
 async def scheduled_cache_cleanup(context: ContextTypes.DEFAULT_TYPE):
     """Периодическая очистка кеша (запускается раз в сутки)."""
     try:
-        deleted = telegram_cache.cleanup_expired(ttl_days=90)
+        deleted = await asyncio.to_thread(telegram_cache.cleanup_expired, ttl_days=90)
         if deleted > 0:
             logger.info(f"🧹 Автоматическая очистка кэша: удалено {deleted} записей")
+        removed, failed = await asyncio.to_thread(cleanup_old_workfiles)
+        logger.info("Очистка старых копий cookies: удалено %s, ошибок %s", removed, failed)
+        from utils.telegram_utils import active_download_sessions
+
+        removed, failed = await asyncio.to_thread(
+            cleanup_stale_temp_files, active_sessions=active_download_sessions()
+        )
+        logger.info("Очистка брошенных медиа: удалено %s, ошибок %s", removed, failed)
+        removed_urls, backup = await asyncio.to_thread(prune_old_event_urls)
+        if removed_urls:
+            logger.info(
+                "Старые URL аналитики удалены: %s; проверенная копия: %s",
+                removed_urls,
+                backup,
+            )
     except Exception as e:
         logger.error(f"Ошибка при автоматической очистке кэша: {e}")
 
@@ -150,7 +168,7 @@ async def scheduled_cache_vacuum(context: ContextTypes.DEFAULT_TYPE):
     try:
         db_path = telegram_cache.db_path
         before = db_path.stat().st_size if db_path.exists() else 0
-        telegram_cache.vacuum()
+        await asyncio.to_thread(telegram_cache.vacuum)
         after = db_path.stat().st_size if db_path.exists() else 0
         logger.info(
             "🧽 VACUUM кэша завершён: размер %.2f МБ → %.2f МБ",
@@ -171,9 +189,9 @@ async def scheduled_csi_dispatch(context: ContextTypes.DEFAULT_TYPE):
     try:
         from utils.telegram_utils import send_csi_request
 
-        interval_days = get_csi_interval_days()
-        user_ids = get_users_for_csi(
-            days_since_last=interval_days, min_active_days=1
+        interval_days = await asyncio.to_thread(get_csi_interval_days)
+        user_ids = await asyncio.to_thread(
+            get_users_for_csi, days_since_last=interval_days, min_active_days=1
         )
         for user_id in user_ids:
             try:
@@ -319,9 +337,9 @@ async def _shutdown_application(application: Application) -> None:
 
 
 def _prepare_runtime_storage() -> None:
-    """Удаляет медиа, оставшиеся после некорректной остановки."""
-    cleanup_temp_files()
-    logger.info("🧹 Остаточные временные файлы очищены")
+    """Удаляет только давно брошенные медиа, сохраняя файлы живого процесса."""
+    removed, failed = cleanup_stale_temp_files()
+    logger.info("Остаточные медиа: удалено %s, ошибок %s", removed, failed)
 
 
 async def run_bot() -> None:
@@ -335,15 +353,10 @@ async def run_bot() -> None:
         return
 
     logger.info("Запуск бота...")
-    update_result = ensure_latest_yt_dlp(reason="startup")
-    if not update_result.succeeded:
-        logger.warning(
-            "Автообновление yt-dlp не подтвердилось. Продолжаем с локальной версией %s",
-            update_result.version_after or update_result.version_before or "unknown",
-        )
     logger.info(
         "Текущая версия yt-dlp: %s", get_installed_yt_dlp_version() or "unknown"
     )
+    logger.info("Локальная диагностика загрузчика: %s", runtime_components())
     application = _build_application()
     try:
         await application.initialize()
@@ -376,8 +389,7 @@ async def run_bot() -> None:
         await stop_event.wait()
     finally:
         await _shutdown_application(application)
-        cleanup_temp_files()
-        logger.info("🧹 Временные файлы очищены")
+        logger.info("Фоновые задачи завершат очистку своих временных файлов")
 
 
 def main() -> None:
@@ -394,7 +406,7 @@ def main() -> None:
         exc.add_note("main.py: глобальный обработчик ошибок")
         logger.error(f"Неожиданная ошибка: {exc}", exc_info=True)
     finally:
-        cleanup_temp_files()
+        logger.info("Завершение процесса бота")
 
 
 if __name__ == "__main__":

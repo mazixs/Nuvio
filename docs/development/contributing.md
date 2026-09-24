@@ -45,7 +45,7 @@ pytest -k "test_name"
 
 # Полный набор с покрытием, как в CI
 coverage run --branch -m pytest tests/
-coverage report --fail-under=40
+coverage report --fail-under=70
 ```
 
 ### Маркеры pytest

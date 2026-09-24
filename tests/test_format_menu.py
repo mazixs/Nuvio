@@ -50,6 +50,12 @@ def _callbacks(markup):
     return [button.callback_data for row in markup.inline_keyboard for button in row]
 
 
+def test_plain_fallback_keeps_literal_title_symbols():
+    original = "*Название \\*звезда\\* и \\_черта\\_*"
+
+    assert telegram_utils._markdown_to_plain_text(original) == "Название *звезда* и _черта_"
+
+
 def test_more_menu_offers_three_sections():
     markup = telegram_utils._build_more_menu(FORMATS, TOKEN)
 

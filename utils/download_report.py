@@ -82,14 +82,13 @@ def record_output(session_id: str | None, line: str) -> None:
 def output_tail(session_id: str | None) -> list[str]:
     """Возвращает последние строки вывода yt-dlp по сессии.
 
-    Строки вне сессии добавляются в начало: разбор ссылки идёт раньше загрузки,
-    и его предупреждения объясняют, каким клиентом получен список форматов.
+    Строки без сессии доступны только при явном запросе без идентификатора.
+    Иначе предупреждение чужого запроса попадёт в отчёт пользователя.
     """
     with _LOCK:
-        shared = list(_OUTPUT.get(_NO_SESSION, ()))
         if session_id is None:
-            return shared
-        return shared + list(_OUTPUT.get(_key(session_id), ()))
+            return list(_OUTPUT.get(_NO_SESSION, ()))
+        return list(_OUTPUT.get(_key(session_id), ()))
 
 
 def record_delivered_format(session_id: str | None, format_id: str | None) -> None:

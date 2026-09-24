@@ -107,10 +107,9 @@ def test_youtube_runbook_names_the_pinned_ytdlp_version():
     assert pinned_version in runbook, (
         f"docs/technical/youtube-download-runbook.md не знает про yt-dlp {pinned_version}"
     )
-    # Файлы, которые дублируют версию текстом, перечислены в §4.2 — без них
-    # обновление пина ломает контрактные тесты на середине процедуры.
-    for duplicate in ("tests/test_environment_template.py", "AGENTS.md", "docs/PRD.md"):
-        assert duplicate in runbook, f"§4.2 не упоминает {duplicate}"
+    assert "scripts/update_ytdlp.py" in runbook
+    for duplicate in ("AGENTS.md", "docs/PRD.md"):
+        assert pinned_version in (ROOT / duplicate).read_text(encoding="utf-8")
 
 
 @pytest.mark.unit

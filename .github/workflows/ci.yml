@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -68,7 +69,7 @@ jobs:
       - name: Полный набор тестов с покрытием
         run: |
           coverage run --branch -m pytest tests/
-          coverage report --fail-under=40
+          coverage report --fail-under=70
 
   docker-build:
     name: Проверка Docker-сборки
@@ -122,6 +123,16 @@ jobs:
               --severity HIGH,CRITICAL \
               "$image"
           done
+
+      - name: Проверка медиа-компонентов образа
+        run: docker run --rm nuvio:test python -m scripts.check_media_runtime
+
+      - name: Проверка создания бота из образа
+        run: |
+          docker run --rm \
+            --env TELEGRAM_TOKEN=123456:abcdefghijklmnopqrstuvwxyz123456 \
+            --env ADMIN_IDS=1 \
+            nuvio:test python -m scripts.check_bot_startup
 
       - name: Запуск WebUI из собранного образа
         run: |

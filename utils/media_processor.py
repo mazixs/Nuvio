@@ -155,8 +155,8 @@ def get_audio_codec(file_path: Path) -> str | None:
     return _probe_codec(file_path, "a:0")
 
 
-def _probe_video_stream(file_path: Path) -> tuple[dict, dict] | None:
-    """Возвращает первый видеопоток и раздел ``format`` из ffprobe.
+def _probe_video_stream(file_path: Path) -> tuple[dict, dict | None, dict] | None:
+    """Возвращает видео, звук и раздел ``format`` из одного вызова ffprobe.
 
     Одна проба на все вопросы о видео: и геометрия, и кодек с битностью берутся
     из неё, чтобы не платить запуском процесса дважды.
@@ -168,8 +168,6 @@ def _probe_video_stream(file_path: Path) -> tuple[dict, dict] | None:
         "ffprobe",
         "-v",
         "error",
-        "-select_streams",
-        "v:0",
         "-show_streams",
         "-show_format",
         "-print_format",
@@ -194,9 +192,21 @@ def _probe_video_stream(file_path: Path) -> tuple[dict, dict] | None:
 
         data = json.loads(stdout)
         streams = data.get("streams") or []
-        if not streams:
+        video = next(
+            (
+                stream for stream in streams
+                if stream.get("codec_type") == "video"
+                or (stream.get("width") and stream.get("height"))
+            ),
+            None,
+        )
+        if not video:
             return None
-        return streams[0], data.get("format") or {}
+        audio = next(
+            (stream for stream in streams if stream.get("codec_type") == "audio"),
+            None,
+        )
+        return video, audio, data.get("format") or {}
     except Exception as e:
         logger.error(
             f"Не удалось разобрать видеопоток файла {file_path}: {e}", exc_info=True
@@ -252,7 +262,7 @@ def get_video_geometry(file_path: Path) -> dict | None:
     probed = _probe_video_stream(file_path)
     if not probed:
         return None
-    stream, container = probed
+    stream, _, container = probed
 
     width, height = stream.get("width"), stream.get("height")
     if not isinstance(width, int) or not isinstance(height, int):
@@ -277,13 +287,13 @@ def get_video_geometry(file_path: Path) -> dict | None:
 
 
 def needs_ios_reencode(file_path: Path) -> bool:
-    """Нужно ли перекодировать файл, чтобы он проигрался на iOS.
+    """Нужно ли перекодировать видео или звук для воспроизведения на iOS.
 
     Замерено на iPhone: VP9 и AV1 дают чёрный экран при играющем звуке,
-    H.264 играет — и 8-битный, и 10-битный. Проверяется пара «кодек + битность»
-    у **готового файла**: расширению верить нельзя, потому что
-    `merge_output_format: "mp4"` кладёт VP9 в MP4. Битность включена в проверку
-    консервативно, наблюдаемого дефекта за ней не стоит.
+    H.264 играет - и 8-битный, и 10-битный. Проверяются видеокодек, битность
+    и аудиокодек **готового файла**: расширению верить нельзя, потому что
+    `merge_output_format: "mp4"` кладёт VP9 или Opus в MP4. Битность включена
+    в проверку консервативно, наблюдаемого дефекта за ней не стоит.
 
     Неизвестный результат пробы трактуется как «перекодировать не нужно»:
     отправка файла важнее догадки, а лишнее перекодирование стоит секунд.
@@ -291,13 +301,19 @@ def needs_ios_reencode(file_path: Path) -> bool:
     probed = _probe_video_stream(file_path)
     if not probed:
         return False
-    stream, _ = probed
+    stream, audio, _ = probed
 
     codec = str(stream.get("codec_name") or "").lower()
     pix_fmt = str(stream.get("pix_fmt") or "").lower()
     if not codec:
         return False
     if codec not in TELEGRAM_READY_VIDEO_CODECS:
+        return True
+    if (
+        audio
+        and audio.get("codec_name")
+        and str(audio["codec_name"]).lower() not in TELEGRAM_READY_AUDIO_CODECS
+    ):
         return True
     # Битность известна не всегда; неизвестную считаем пригодной по той же
     # причине, что и неизвестный кодек.
@@ -426,6 +442,12 @@ def convert_to_format(
             output_filename = f"{input_path.stem}.{output_format}"
 
         output_path = get_temp_file_path(session_id, output_filename)
+        if output_path.resolve() == input_path.resolve():
+            # FFmpeg не может читать и записывать один файл одновременно.
+            # После yt-dlp несовместимое видео часто уже называется .mp4.
+            output_path = get_temp_file_path(
+                session_id, f"{input_path.stem}.converted.{output_format}"
+            )
 
         if output_format == "mp4":
             cmd = _build_mp4_command(
@@ -560,7 +582,7 @@ def extract_audio_copy(
 def ensure_ios_compatible_video(
     video_path: Path, session_id: str, source: str
 ) -> Path:
-    """Приводит видео к H.264 8 бит, если оно пришло в другом виде.
+    """Приводит видео к H.264 и звук к AAC только при необходимости.
 
     Одна реализация на все платформы намеренно: расходиться им нельзя. Раньше
     проверка кодека жила только в пути TikTok и Instagram и ловила один лишь
@@ -576,15 +598,15 @@ def ensure_ios_compatible_video(
             return video_path
 
         logger.info(
-            "Видео (%s) не проигрывается плеером Telegram на iOS, "
-            "перекодируем в H.264 8 бит: %s",
+            "Поток (%s) может не проиграться в Telegram на iOS, "
+            "конвертируем несовместимый кодек: %s",
             source,
             video_path,
         )
         converted = convert_to_format(video_path, "mp4", session_id)
         if video_path.exists() and video_path != converted:
             video_path.unlink()
-        logger.info("Перекодирование в H.264 завершено: %s", converted)
+        logger.info("Конвертация для iOS завершена: %s", converted)
         return converted
     except Exception as e:
         logger.warning(

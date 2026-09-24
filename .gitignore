@@ -93,6 +93,8 @@ venv.bak/
 .env.production
 .env.development
 .secrets/
+cookie-work/
+youtube_canary_status.json
 
 # Claude Code (agent files, memory, settings)
 .claude/
