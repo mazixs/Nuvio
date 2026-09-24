@@ -80,6 +80,62 @@ def test_download_video_smoke_returns_local_file(monkeypatch, tmp_path):
     assert result.read_text() == "stub video content"
 
 
+def test_download_video_uses_final_path_after_merge(monkeypatch, tmp_path):
+    """После merge путь в info указывает на готовый mp4, а шаблон - на webm."""
+
+    class MergedYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            info = self._info.copy()
+            info["ext"] = "webm"
+            final_path = tmp_path / "smoke_video.mp4"
+            final_path.write_text("merged video")
+            info["filepath"] = str(final_path)
+            return info
+
+    monkeypatch.setattr(youtube_utils.yt_dlp, "YoutubeDL", MergedYDL)
+    monkeypatch.setattr(youtube_utils, "_ensure_ios_compatible", lambda path, _: path)
+
+    result = youtube_utils.download_video(
+        "https://youtu.be/abc123def45",
+        "bestvideo+bestaudio",
+        session_id="merged",
+        output_dir=tmp_path,
+        force_local=True,
+    )
+
+    assert result == tmp_path / "smoke_video.mp4"
+
+
+def test_download_video_missing_final_file_uses_cli_fallback(monkeypatch, tmp_path):
+    """Отсутствующий файл передает управление запасной загрузке."""
+
+    class MissingFileYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            return {**self._info, "filepath": str(tmp_path / "missing.mp4")}
+
+    cli_calls = []
+    fallback_path = tmp_path / "fallback.mp4"
+    fallback_path.write_text("fallback video")
+    monkeypatch.setattr(youtube_utils.yt_dlp, "YoutubeDL", MissingFileYDL)
+    monkeypatch.setattr(youtube_utils, "YTDLP_CLI_FALLBACK", True)
+    monkeypatch.setattr(
+        youtube_utils,
+        "_download_with_cli_fallback",
+        lambda **kwargs: cli_calls.append(kwargs) or fallback_path,
+    )
+
+    result = youtube_utils.download_video(
+        "https://youtu.be/abc123def45",
+        "best",
+        session_id="missing",
+        output_dir=tmp_path,
+        force_local=True,
+    )
+
+    assert result == fallback_path
+    assert len(cli_calls) == 1
+
+
 def _capture_options(monkeypatch, ydl_class):
     """Включает cookie-файл и подменяет YoutubeDL на перехватывающий вариант."""
     monkeypatch.setattr(youtube_utils.yt_dlp, "YoutubeDL", ydl_class)
