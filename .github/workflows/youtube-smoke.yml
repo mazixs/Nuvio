@@ -6,6 +6,8 @@ on:
       - "requirements.in"
       - "requirements.txt"
       - "Dockerfile"
+      - ".github/workflows/youtube-smoke.yml"
+      - "scripts/check_media_runtime.py"
       - "utils/youtube_utils.py"
       - "utils/ytdlp_common.py"
       - "utils/canary.py"
