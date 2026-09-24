@@ -30,7 +30,10 @@ COPY --from=denoland/deno:bin-2.9.7@sha256:bc5aa4466e21b6d3021226a85ba2e1911f7c3
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip нужен только при сборке. Его vendored-библиотеки не должны оставаться
+# в рабочем образе и создавать лишние уязвимости.
+RUN python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip uninstall --yes pip
 
 COPY . .
 
