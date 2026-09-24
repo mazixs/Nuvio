@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -41,7 +42,9 @@ jobs:
           fi
           branch="mzx/update-ytdlp-${VERSION}"
           if [[ $(gh pr list --head "$branch" --state open --json number --jq 'length') -gt 0 ]]; then
-            echo "PR для версии уже открыт"
+            echo "PR для версии уже открыт, повторно запускаю проверки ветки"
+            gh workflow run ci.yml --ref "$branch"
+            gh workflow run youtube-smoke.yml --ref "$branch"
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -52,4 +55,6 @@ jobs:
           git push --set-upstream origin "$branch"
           gh pr create --base main --head "$branch" \
             --title "Обновить yt-dlp до ${VERSION}" \
-            --body "Точная nightly-версия, lock-файлы с хешами и локальные проверки. CI собирает образ; сетевой YouTube smoke запускается отдельно."
+            --body "Точная nightly-версия и lock-файлы с хешами. CI и сетевой YouTube smoke запускаются отдельно через workflow_dispatch: GitHub требует ручного одобрения проверок, созданных событием pull_request от GITHUB_TOKEN."
+          gh workflow run ci.yml --ref "$branch"
+          gh workflow run youtube-smoke.yml --ref "$branch"

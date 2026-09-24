@@ -267,7 +267,8 @@ ruff check --output-format=github .
 
 ### CI (`.github/workflows/ci.yml`)
 
-Запускается на push/PR в `main` и `develop`:
+Запускается на push/PR в `main` и `develop`, а также через `workflow_dispatch`
+для PR обновления yt-dlp, созданных `GITHUB_TOKEN`:
 1. **Линтинг** — actionlint и `ruff check --output-format=github .`
 2. **Тесты** - полный `pytest tests/` на Python 3.14 с покрытием не ниже 70%.
 3. **Docker build** — Buildx-сборка с GHA-кэшем, Trivy-проверка исправимых

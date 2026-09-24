@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from utils.cookie_workfile import working_cookie_file
+from utils.cookie_workfile import cleanup_old_workfiles, working_cookie_file
 
 
 pytestmark = pytest.mark.unit
@@ -97,3 +97,27 @@ def test_copy_is_readable_only_by_owner(original, work_dir):
     copy = working_cookie_file(original, work_dir=work_dir)
 
     assert copy.stat().st_mode & 0o077 == 0
+
+
+def test_cleanup_preserves_current_copy_and_removes_replaced_copy(original, tmp_path, monkeypatch):
+    import config
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(config, "YOUTUBE_COOKIES_PATH", original)
+    monkeypatch.setattr(config, "INSTAGRAM_COOKIES_PATH", tmp_path / "missing-ig")
+    monkeypatch.setattr(config, "TIKTOK_COOKIES_PATH", tmp_path / "missing-tt")
+
+    current = working_cookie_file(original)
+    current.write_text("# обновленная рабочая сессия\n", encoding="utf-8")
+    old_time = current.stat().st_mtime - 2 * 24 * 60 * 60
+    os.utime(current, (old_time, old_time))
+
+    assert cleanup_old_workfiles() == (0, 0)
+    assert current.read_text(encoding="utf-8") == "# обновленная рабочая сессия\n"
+
+    original.write_text("# новый набор\n", encoding="utf-8")
+    replacement = working_cookie_file(original)
+    assert replacement != current
+    assert cleanup_old_workfiles() == (1, 0)
+    assert not current.exists()
+    assert replacement.exists()

@@ -116,7 +116,8 @@ docker compose --env-file .secrets/.env up -d
 
 - **CI** - полный набор тестов, покрытие не ниже 70%, линтинг и Docker
   smoke-проверки и Trivy-сканирование исправимых HIGH/CRITICAL уязвимостей
-  на каждый push/PR в `main` и `develop`
+  на каждый push/PR в `main` и `develop`, а также вручную или из задачи
+  обновления yt-dlp через `workflow_dispatch`
 - **Релиз** — при пуше тега `v*` автоматически:
   - Прогоняются тесты
   - Собирается canonical digest с SBOM и provenance

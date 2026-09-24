@@ -2097,6 +2097,7 @@ async def _handle_main_callback(
                 resolve_tiktok_video_handoff,
                 url,
                 description="resolve_tiktok_video_handoff",
+                session_id=session_id,
             )
             if await _deliver_plan(
                 query, context, session_token, session_data, plan, cache_key
@@ -2112,6 +2113,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_tiktok_video",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2165,6 +2167,7 @@ async def _handle_main_callback(
                 resolve_tiktok_audio_handoff,
                 url,
                 description="resolve_tiktok_audio_handoff",
+                session_id=session_id,
             )
             if await _deliver_plan(
                 query, context, session_token, session_data, plan, cache_key
@@ -2180,6 +2183,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_tiktok_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2264,6 +2268,7 @@ async def _handle_main_callback(
                 resolve_instagram_video_handoff,
                 url,
                 description="resolve_instagram_video_handoff",
+                session_id=session_id,
             )
             if await _deliver_plan(
                 query, context, session_token, session_data, plan, cache_key
@@ -2279,6 +2284,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_instagram_video",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2341,6 +2347,7 @@ async def _handle_main_callback(
                     False,
                     session_data.get("video_info"),
                     description="download_instagram_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2408,6 +2415,7 @@ async def _handle_main_callback(
                     url,
                     session_id,
                     description="download_rutube_video",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2458,6 +2466,7 @@ async def _handle_main_callback(
                     url,
                     session_id,
                     description="download_rutube_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2579,6 +2588,7 @@ async def _handle_main_callback(
                     url,
                     session_id,
                     description="download_vk_audio",
+                    session_id=session_id,
                 )
                 if not file_path:
                     await query.edit_message_text(ERROR_MESSAGE)
@@ -2657,6 +2667,7 @@ async def _handle_main_callback(
                     ranked_audio[0]["format_id"],
                     session_id,
                     description="download_audio_bestaudio",
+                    session_id=session_id,
                 )
             elif native_audio:
                 await safe_edit_message_text(
@@ -2668,6 +2679,7 @@ async def _handle_main_callback(
                     native_audio["format_id"],
                     session_id,
                     description="download_audio_native",
+                    session_id=session_id,
                 )
             else:
                 await query.edit_message_text(ERROR_MESSAGE)
@@ -2954,6 +2966,7 @@ async def _download_and_send_subtitles(
             language,
             subtitle_format,
             description="download_subtitles",
+            session_id=session_data["session_id"],
         )
     except Exception as e:
         logger.error(f"Ошибка скачивания субтитров: {e}", exc_info=True)
@@ -3428,6 +3441,7 @@ async def _send_photo_post_assets(
             video_info.get(audio_key),
             referer,
             description=f"resolve_{platform}_photo_post_handoff",
+            session_id=session_id,
         )
         if photo_plan and await _deliver_photo_post_by_url(query, photo_plan):
             await _record_delivery(query.from_user.id, session_data)
@@ -3441,6 +3455,7 @@ async def _send_photo_post_assets(
             session_id,
             session_data.get("video_info"),
             description=f"download_{platform}_photo_post_assets",
+            session_id=session_id,
         )
         image_paths = list(assets.get("images") or [])
         audio_path = assets.get("audio")

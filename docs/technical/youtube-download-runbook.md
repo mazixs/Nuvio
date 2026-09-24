@@ -204,8 +204,10 @@ docker compose exec bot python -c "import httpx; print(httpx.get('https://api.ip
    ```
    Команда меняет pin, оба lock-файла с хешами, запускает линтер и тесты,
    показывает diff. При ошибке возвращает три файла в исходное состояние.
-2. Проверить PR и CI, включая smoke готового образа. Слить в `main`, создать
-   тег `v*`, дождаться публикации canonical digest в GHCR.
+2. Проверить PR и CI, включая smoke готового образа. Для PR, созданного
+   `GITHUB_TOKEN`, проверки ветки запускаются отдельно через `workflow_dispatch`;
+   проверки самого события `pull_request` могут ждать одобрения в GitHub.
+   Слить в `main`, создать тег `v*`, дождаться публикации canonical digest в GHCR.
 3. Записать текущий digest на сервере для возврата. Загрузить новый образ и
    пересоздать сервис: `docker compose --env-file .secrets/.env pull bot` и
    `docker compose --env-file .secrets/.env up -d bot`.

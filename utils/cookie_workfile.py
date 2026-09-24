@@ -73,6 +73,9 @@ def working_cookie_file(
             # оригинала.
             target.chmod(0o600)
             logger.info("Рабочая копия cookies обновлена из оригинала: %s", target)
+        # Время изменения рабочей копии также отмечает ее последнее использование.
+        # Старую копию после замены исходного набора нельзя удалять посреди загрузки.
+        target.touch()
     except OSError as e:
         # Без копии лучше работать по оригиналу, чем не работать вовсе:
         # деградация cookies неприятна, а отказ в скачивании — заметнее.
@@ -88,15 +91,39 @@ def working_cookie_file(
 
 
 def cleanup_old_workfiles(max_age_seconds: int = 24 * 60 * 60) -> tuple[int, int]:
-    """Удаляет копии старше суток, не трогая свежие рабочие файлы."""
+    """Удаляет старые копии замененных наборов, сохраняя действующие cookies."""
+    from config import (
+        INSTAGRAM_COOKIES_PATH,
+        TIKTOK_COOKIES_PATH,
+        YOUTUBE_COOKIES_PATH,
+    )
+
     root = _default_work_dir()
     if not root.exists():
         return 0, 0
+    current_names: set[str] = set()
+    unreadable_prefixes: set[str] = set()
+    for source in (YOUTUBE_COOKIES_PATH, INSTAGRAM_COOKIES_PATH, TIKTOK_COOKIES_PATH):
+        if not source.is_file():
+            continue
+        try:
+            with source.open("rb") as handle:
+                fingerprint = hashlib.file_digest(handle, "sha256").hexdigest()[:16]
+            current_names.add(f"{source.stem}-{fingerprint}{source.suffix}")
+        except OSError as exc:
+            logger.warning("Не удалось проверить исходные cookies %s: %s", source, exc)
+            unreadable_prefixes.add(f"{source.stem}-")
+
     removed = failed = 0
     cutoff = time.time() - max_age_seconds
     for path in root.iterdir():
         try:
-            if not path.is_file() or path.stat().st_mtime >= cutoff:
+            if (
+                not path.is_file()
+                or path.name in current_names
+                or any(path.name.startswith(prefix) for prefix in unreadable_prefixes)
+                or path.stat().st_mtime >= cutoff
+            ):
                 continue
             path.unlink()
             removed += 1

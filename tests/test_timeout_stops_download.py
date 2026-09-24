@@ -11,7 +11,9 @@
 """
 
 import asyncio
+import ast
 import inspect
+import textwrap
 
 import pytest
 
@@ -67,6 +69,26 @@ def test_downloads_pass_their_session_to_the_timeout():
     source = inspect.getsource(telegram_utils.download_content)
 
     assert source.count("session_id=session_id") == source.count("await run_blocking(")
+
+
+def test_session_callbacks_track_every_blocking_operation():
+    """Все фоновые операции кнопок входят в учет отмены и отложенной очистки."""
+    for handler in (
+        telegram_utils._handle_main_callback,
+        telegram_utils._download_and_send_subtitles,
+        telegram_utils._send_photo_post_assets,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(handler)))
+        calls = (
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "run_blocking"
+        )
+        for call in calls:
+            assert any(keyword.arg == "session_id" for keyword in call.keywords), (
+                f"{handler.__name__}: вызов run_blocking без session_id"
+            )
 
 
 def test_cleanup_waits_for_timed_out_worker(monkeypatch):

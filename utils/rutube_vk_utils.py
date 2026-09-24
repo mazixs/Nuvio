@@ -103,12 +103,44 @@ def get_vk_info(url: str, session_id: str | None = None) -> dict[str, Any]:
     return info
 
 
-def _select_vk_direct_format(info: dict[str, Any]) -> tuple[str, int, int] | None:
-    """Выбирает наиболее четкий прямой MP4 с известным безопасным размером.
+def _vk_direct_size(client: httpx.Client, fmt: dict[str, Any]) -> int | None:
+    """Читает размер из HEAD или заголовка короткого Range-запроса."""
+    headers = fmt.get("http_headers") or {}
+    try:
+        response = client.head(fmt["url"], headers=headers)
+        if response.status_code == 200:
+            size = int(response.headers.get("content-length") or 0)
+            if size > 0:
+                return size
+    except httpx.TimeoutException:
+        return None
+    except (httpx.HTTPError, ValueError):
+        pass
 
-    VK публикует прямые `url360` и `url480` без поля filesize. HEAD дает
-    фактический Content-Length без загрузки записи; запас оставлен для отличий
-    между длиной на этапе меню и размером файла при отправке.
+    # stream закрывается после заголовков: тело файла не скачивается, даже если
+    # сервер проигнорировал Range и ответил обычным 200.
+    try:
+        with client.stream(
+            "GET", fmt["url"], headers={**headers, "Range": "bytes=0-0"}
+        ) as response:
+            if response.status_code == 206:
+                match = re.search(
+                    r"/(\d+)$", response.headers.get("content-range") or ""
+                )
+                return int(match.group(1)) if match else None
+            if response.status_code == 200:
+                size = int(response.headers.get("content-length") or 0)
+                return size or None
+    except (httpx.HTTPError, ValueError):
+        pass
+    return None
+
+
+def _select_vk_direct_format(info: dict[str, Any]) -> tuple[str, int | None, int] | None:
+    """Выбирает наиболее четкий прямой MP4, пригодный для проверки лимита.
+
+    Если CDN не сообщает размер, выбирается самый маленький прямой формат.
+    Его загрузка останавливается при превышении лимита Telegram.
     """
     candidates = sorted(
         (
@@ -126,21 +158,18 @@ def _select_vk_direct_format(info: dict[str, Any]) -> tuple[str, int, int] | Non
         return None
 
     limit = int(MAX_FILE_SIZE * 0.95)
+    unknown: dict[str, Any] | None = None
     with httpx.Client(follow_redirects=True, timeout=8) as client:
         for fmt in candidates:
             size = fmt.get("filesize")
             if not size:
-                try:
-                    response = client.head(
-                        fmt["url"], headers=fmt.get("http_headers") or {}
-                    )
-                    if response.status_code != 200:
-                        continue
-                    size = int(response.headers.get("content-length") or 0)
-                except (httpx.HTTPError, ValueError):
-                    continue
+                size = _vk_direct_size(client, fmt)
             if size and int(size) <= limit:
                 return str(fmt["format_id"]), int(size), int(fmt["height"])
+            if not size:
+                unknown = fmt
+    if unknown:
+        return str(unknown["format_id"]), None, int(unknown["height"])
     return None
 
 
@@ -267,6 +296,13 @@ def _download_video(
             # У прямого MP4 есть Range: повтор после сетевого сбоя продолжит
             # .part вместо повторной загрузки гигабайтного файла с нуля.
             ydl_opts["continuedl"] = True
+            ydl_opts["max_filesize"] = MAX_FILE_SIZE
+
+            def _stop_oversize(progress: dict[str, Any]) -> None:
+                if (progress.get("downloaded_bytes") or 0) > MAX_FILE_SIZE:
+                    raise FileSizeLimitError("Прямой файл VK превышает лимит Telegram")
+
+            ydl_opts["progress_hooks"].append(_stop_oversize)
         logger.info(
             f"Скачивание {url} через yt-dlp без cookies, формат: {format_selector}"
         )
